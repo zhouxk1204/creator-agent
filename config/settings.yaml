@@ -1,0 +1,19 @@
+browser:
+  headless: true
+  user_data_dir: \"./storage/.browser_profile\"
+collector:
+  max_videos_per_sync: 50
+  out_of_window_page_threshold: 2
+  scroll_delay_sec:
+  - 1
+  - 3
+db_path: \"./storage/creator_agent.db\"
+downloader:
+  retry: 3
+  timeout_sec: 120
+log:
+  file: \"./logs/creator-agent.log\"
+  level: \"INFO\"
+  retention: \"7 days\"
+  rotation: \"10 MB\"
+storage_dir: \"./storage\"
