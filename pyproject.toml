@@ -40,6 +40,7 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["-m", "not e2e"]
 markers = [
     "e2e: marks tests as end-to-end (requires real Douyin access)",
 ]

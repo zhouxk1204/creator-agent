@@ -40,7 +40,7 @@ class DouyinCollector(Collector):
     ) -> list[CollectedVideo]:
         page = browser.new_page()
         logger.info("Navigating to creator homepage: %s", creator.homepage_url)
-        page.goto(str(creator.homepage_url), wait_until="networkidle", timeout=30000)
+        page.goto(str(creator.homepage_url), wait_until="load", timeout=30000)
         page.wait_for_selector('[class*="video-card"], [class*="ECMy_MlT"]', timeout=15000)
 
         results: list[CollectedVideo] = []
