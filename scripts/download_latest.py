@@ -1,13 +1,17 @@
 """Download the latest video from a Douyin creator homepage.
 
-Uses the logged-in browser profile + the fixed Downloader (intercept CDN URL,
-then httpx full download). The creator's homepage is scraped only for the first
-``/video/`` link (the collector's card selector is still broken, so this bypasses
-collection and exercises the download path directly).
+Uses the logged-in browser profile + the Downloader. The creator's homepage is
+scraped only for the first ``/video/`` link (the collector's card selector is
+still broken, so this bypasses collection). For the chosen video it then:
+  1. fetches metadata (title/description/tags/likes/...) + resolves the CDN URL
+     in a single browser navigation,
+  2. saves a rich ``metadata.json``,
+  3. downloads the complete mp4 using the resolved CDN URL (no re-navigation).
 
 Usage:
     uv run python scripts/download_latest.py <creator_homepage_url>
 """
+
 from __future__ import annotations
 
 import re
@@ -16,11 +20,17 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Make Chinese title/tags print correctly on the Windows console.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from creator_agent.browser.manager import BrowserConfig, BrowserManager
 from creator_agent.config import load_settings
 from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.creator import Creator
-from creator_agent.models.video import Video, VideoStatus
+from creator_agent.models.video import Video, VideoStats, VideoStatus
 from creator_agent.storage.file_storage import FileStorage
 
 _UID_RE = re.compile(r"/user/([^/?]+)")
@@ -44,9 +54,7 @@ def _extract_video_links(page) -> list[dict]:
 def main(url: str) -> None:
     settings = load_settings()
     storage = FileStorage(settings.storage_dir)
-    browser = BrowserManager(
-        BrowserConfig(user_data_dir=settings.browser.user_data_dir, headless=True)
-    )
+    browser = BrowserManager(BrowserConfig(user_data_dir=settings.browser.user_data_dir, headless=True))
     downloader = Downloader(storage=storage, browser=browser, timeout_sec=90, retries=2)
 
     uid_match = _UID_RE.search(url)
@@ -84,22 +92,49 @@ def main(url: str) -> None:
         latest = links[0]
         print(f"Found {len(links)} video(s). Picking the first (top of page):")
         print(f"  vid   : {latest['vid']}")
-        print(f"  title : {latest['title']!r}")
         print(f"  url   : {latest['href']}")
 
+        # 1) Fetch metadata + resolve CDN URL in one navigation.
+        meta = downloader.fetch_video_meta(latest["href"])
+        print("\nFetched metadata:")
+        print(f"  title    : {meta.title!r}")
+        print(f"  desc     : {meta.description[:120]!r}")
+        print(f"  tags     : {meta.tags}")
+        print(f"  likes    : {meta.likes}")
+        print(f"  comments : {meta.comments}  shares: {meta.shares}  favorites: {meta.favorites}")
+        print(f"  duration : {meta.duration_sec}s   published: {meta.published_at}")
+        print(f"  cover    : {meta.cover_url}")
+        print(f"  cdn_url  : {'resolved' if meta.cdn_url else 'NOT resolved'}")
+
+        # 2) Build the Video with the rich metadata (keep the stable page URL).
         video = Video(
             id=f"douyin_{latest['vid']}",
             creator_id=creator.id,
             platform="douyin",
-            platform_vid=latest['vid'],
-            title=latest['title'] or "untitled",
-            video_url=latest['href'],
-            published_at=datetime.now(UTC),
+            platform_vid=latest["vid"],
+            title=meta.title or latest["title"] or "untitled",
+            description=meta.description,
+            cover_url=meta.cover_url,
+            video_url=latest["href"],
+            published_at=meta.published_at or datetime.now(UTC),
+            duration_sec=meta.duration_sec,
+            stats=VideoStats(
+                likes=meta.likes,
+                comments=meta.comments,
+                favorites=meta.favorites,
+                shares=meta.shares,
+                views=meta.views,
+            ),
+            tags=meta.tags,
             collected_at=datetime.now(UTC),
             status=VideoStatus.NEW,
         )
 
-        path = downloader.download_video(creator, video)
+        meta_path = downloader.save_metadata(creator, video)
+        print(f"\nMetadata saved: {Path(meta_path).resolve()}")
+
+        # 3) Download the complete mp4 using the pre-resolved CDN URL.
+        path = downloader.download_video(creator, video, direct_url=meta.cdn_url)
         data = path.read_bytes()
         print(f"\nVideo saved: {Path(path).resolve()}")
         print(f"  size      : {len(data):,} bytes ({len(data) / 1024 / 1024:.1f} MB)")
@@ -108,10 +143,19 @@ def main(url: str) -> None:
         print("\nffprobe:")
         try:
             r = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries",
-                 "format=duration,size:stream=codec_name,codec_type,width,height",
-                 "-of", "default=noprint_wrappers=1", str(path)],
-                capture_output=True, text=True, timeout=30,
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration,size:stream=codec_name,codec_type,width,height",
+                    "-of",
+                    "default=noprint_wrappers=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             print(r.stdout.strip() or "(no output)")
             if r.stderr.strip():

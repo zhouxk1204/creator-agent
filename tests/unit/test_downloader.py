@@ -1,17 +1,37 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 
 from creator_agent.downloader import downloader as downloader_module
-from creator_agent.downloader.downloader import Downloader
+from creator_agent.downloader.downloader import Downloader, VideoMeta
 from creator_agent.models.creator import Creator
 from creator_agent.models.video import Video, VideoStatus
 from creator_agent.storage.file_storage import FileStorage
 
 CDN_URL = "https://v26-web.douyinvod.com/sign/video/tos/cn/abc.mp4?a=1"
 PAGE_URL = "https://www.douyin.com/video/999"
+DETAIL_URL = "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=999"
+
+DETAIL_PAYLOAD = {
+    "aweme_detail": {
+        "aweme_id": "999",
+        "desc": "A股收盘点评 #股票 #基金",
+        "statistics": {
+            "digg_count": 100653,
+            "comment_count": 2233,
+            "share_count": 4232,
+            "collect_count": 30692,
+            "play_count": 0,
+        },
+        "text_extra": [{"hashtag_name": "股票"}, {"hashtag_name": "基金"}, {"hashtag_name": ""}],
+        "duration": 190822,
+        "create_time": 1749544200,
+        "video": {"cover": {"url_list": ["https://p.douyinpic.com/cover.jpg"]}},
+    }
+}
 
 
 # --- Fakes -----------------------------------------------------------------
@@ -19,7 +39,7 @@ PAGE_URL = "https://www.douyin.com/video/999"
 
 class FakeResponse:
     """Shared by the httpx path (``.content``/``raise_for_status``) and the
-    Playwright response handler (``.headers``/``.url``)."""
+    Playwright response handler (``.headers``/``.url``/``.body``)."""
 
     def __init__(self, content: bytes = b"", status: int = 200, ctype: str = "text/html", url: str = "") -> None:
         self.content = content
@@ -30,6 +50,9 @@ class FakeResponse:
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+    def body(self) -> bytes:
+        return self.content
 
 
 class FakeClient:
@@ -63,11 +86,15 @@ class FakeClient:
 
 class FakePage:
     """Playwright ``Page`` stand-in. On ``goto`` it fires the registered
-    ``response`` handler once with a video/mp4 response carrying ``capture_url``
-    (so the resolver can capture the CDN URL)."""
+    ``response`` handler once per response in ``responses``.
 
-    def __init__(self, capture_url: str | None = None) -> None:
-        self._capture_url = capture_url
+    ``capture_url`` is a convenience to fire a single video/mp4 response carrying
+    that CDN URL (used by the resolve-only tests)."""
+
+    def __init__(self, responses: list[FakeResponse] | None = None, capture_url: str | None = None) -> None:
+        self._responses = list(responses) if responses else []
+        if capture_url is not None:
+            self._responses.append(FakeResponse(b"", ctype="video/mp4", url=capture_url))
         self._handlers: dict[str, object] = {}
         self.goto_calls: list[str] = []
         self.evaluated: list[str] = []
@@ -78,8 +105,8 @@ class FakePage:
 
     def goto(self, url: str, **kwargs) -> None:
         self.goto_calls.append(url)
-        if self._capture_url is not None:
-            self._handlers["response"](FakeResponse(b"", ctype="video/mp4", url=self._capture_url))
+        for resp in self._responses:
+            self._handlers["response"](resp)
 
     def wait_for_timeout(self, _ms: int) -> None:
         pass
@@ -155,6 +182,60 @@ def _new_downloader(storage, page: FakePage | None = None, retries: int = 3) -> 
     return Downloader(storage=storage, browser=browser, timeout_sec=10, retries=retries), browser
 
 
+def _detail_response() -> FakeResponse:
+    return FakeResponse(json.dumps(DETAIL_PAYLOAD).encode(), ctype="application/json", url=DETAIL_URL)
+
+
+# --- fetch_video_meta ------------------------------------------------------
+
+
+def test_fetch_video_meta_returns_title_tags_stats(storage):
+    page = FakePage(responses=[FakeResponse(b"", ctype="video/mp4", url=CDN_URL), _detail_response()])
+    dl, _ = _new_downloader(storage, page=page)
+
+    meta = dl.fetch_video_meta(PAGE_URL)
+
+    assert meta.cdn_url == CDN_URL
+    assert meta.title == "A股收盘点评 #股票 #基金"
+    assert meta.description == "A股收盘点评 #股票 #基金"
+    assert meta.tags == ["股票", "基金"]  # empty hashtag_name filtered out
+    assert meta.likes == 100653
+    assert meta.comments == 2233
+    assert meta.shares == 4232
+    assert meta.favorites == 30692
+    assert meta.views is None  # play_count == 0 -> None
+    assert meta.duration_sec == 190
+    assert meta.published_at == datetime.fromtimestamp(1749544200, tz=UTC)
+    assert meta.cover_url == "https://p.douyinpic.com/cover.jpg"
+    assert page.closed is True
+
+
+def test_fetch_video_meta_without_detail_has_empty_fields(storage):
+    # Only the CDN URL is captured; no detail XHR -> empty metadata, but cdn_url set.
+    page = FakePage(responses=[FakeResponse(b"", ctype="video/mp4", url=CDN_URL)])
+    dl, _ = _new_downloader(storage, page=page)
+
+    meta = dl.fetch_video_meta(PAGE_URL)
+
+    assert meta.cdn_url == CDN_URL
+    assert meta.title == ""
+    assert meta.tags == []
+    assert meta.likes == 0
+    assert meta.duration_sec is None
+    assert meta.published_at is None
+
+
+def test_fetch_video_meta_with_nothing_captured(storage):
+    page = FakePage(responses=[])
+    dl, _ = _new_downloader(storage, page=page)
+
+    meta = dl.fetch_video_meta(PAGE_URL)
+
+    assert meta.cdn_url is None
+    assert meta.title == ""
+    assert isinstance(meta, VideoMeta)
+
+
 # --- download_video: page URL -> resolve -> httpx -------------------------
 
 
@@ -166,28 +247,48 @@ def test_page_url_resolves_cdn_then_downloads(storage, creator):
     path = dl.download_video(creator, _make_video(video_url=PAGE_URL))
 
     assert path.read_bytes() == b"MP4BYTES"
-    # The browser was used to resolve the URL, then httpx fetched the CDN URL.
     assert browser.new_page_calls == 1
     assert page.goto_calls == [PAGE_URL]
     assert page.closed is True
     assert FakeClient.instances[0].calls == [CDN_URL]
 
 
-def test_direct_media_url_skips_browser_resolve(storage, creator):
+def test_direct_url_skips_browser_resolve(storage, creator):
     FakeClient.behavior = {"content": b"MP4BYTES"}
     dl, browser = _new_downloader(storage)
 
     path = dl.download_video(creator, _make_video(video_url=CDN_URL))
 
     assert path.read_bytes() == b"MP4BYTES"
-    # Already a direct media URL -> no browser page opened.
     assert browser.new_page_calls == 0
     assert FakeClient.instances[0].calls == [CDN_URL]
 
 
+def test_direct_url_param_skips_resolve_and_ignores_page_video_url(storage, creator):
+    # Caller already resolved the CDN URL via fetch_video_meta; pass it directly
+    # so download does not re-navigate, even though video.video_url is a page URL.
+    FakeClient.behavior = {"content": b"MP4BYTES"}
+    dl, browser = _new_downloader(storage)
+
+    path = dl.download_video(creator, _make_video(video_url=PAGE_URL), direct_url=CDN_URL)
+
+    assert path.read_bytes() == b"MP4BYTES"
+    assert browser.new_page_calls == 0
+    assert FakeClient.instances[0].calls == [CDN_URL]
+
+
+def test_direct_url_param_works_without_video_url(storage, creator):
+    FakeClient.behavior = {"content": b"MP4BYTES"}
+    dl, _ = _new_downloader(storage)
+
+    path = dl.download_video(creator, _make_video(video_url=None), direct_url=CDN_URL)
+
+    assert path.read_bytes() == b"MP4BYTES"
+
+
 def test_resolve_finds_no_media_url_raises(storage, creator):
     FakeClient.behavior = {"content": b"MP4BYTES"}
-    page = FakePage(capture_url=None)  # no media response fires
+    page = FakePage(capture_url=None)
     dl, _ = _new_downloader(storage, page=page)
 
     with pytest.raises(RuntimeError, match="Could not resolve a direct video URL"):
@@ -196,7 +297,6 @@ def test_resolve_finds_no_media_url_raises(storage, creator):
 
 
 def test_httpx_retries_then_succeeds(storage, creator):
-    # Direct URL so the browser is not involved; first 2 attempts fail, 3rd ok.
     FakeClient.behavior = {"fail_first_n": 2, "content": b"OK"}
     dl, browser = _new_downloader(storage)
 
@@ -215,14 +315,13 @@ def test_httpx_all_attempts_fail_raises(storage, creator):
         dl.download_video(creator, _make_video(video_url=CDN_URL))
 
 
-def test_no_video_url_raises_value_error(storage, creator):
+def test_no_video_url_and_no_direct_url_raises_value_error(storage, creator):
     dl, _ = _new_downloader(storage)
     with pytest.raises(ValueError, match="no video_url"):
         dl.download_video(creator, _make_video(video_url=None))
 
 
 def test_effect_cdn_urls_are_ignored_during_resolve(storage, creator):
-    # An effect-overlay mp4 must not be picked as the video URL.
     effect_url = "https://lf3-effectcdn-tos.byteeffecttos.com/obj/ies.fe.effect/abc.mp4"
     page = FakePage(capture_url=effect_url)
     dl, _ = _new_downloader(storage, page=page)
