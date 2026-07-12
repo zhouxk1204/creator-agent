@@ -19,6 +19,7 @@ WINDOW_END = datetime(2024, 6, 16, tzinfo=UTC)
 IN_WINDOW = datetime(2024, 6, 15, 12, 0, tzinfo=UTC)
 FUTURE = datetime(2024, 6, 16, 12, 0, tzinfo=UTC)  # >= end -> skip
 TOO_OLD = datetime(2024, 6, 14, 12, 0, tzinfo=UTC)  # < start -> out-of-window
+STALE = datetime(2024, 5, 1, 12, 0, tzinfo=UTC)  # 45 days before start -> pinned/stale
 
 
 def _filter(max_videos: int | None = None) -> CollectFilter:
@@ -144,6 +145,27 @@ def test_skips_future_videos_and_keeps_searching(patched_fetch):
     result, _ = _run(links)
 
     assert [cv.platform_vid for cv in result] == ["2"]
+
+
+def test_skips_pinned_stale_videos_without_early_stop(patched_fetch):
+    # Top of page has pinned videos from months ago (stale), then today's video,
+    # then the feed scrolls past the window. Stale videos must NOT trigger the
+    # out-of-window stop, else today's video is never reached (the real-world
+    # bug: Douyin pins old "selected works" above the chronological feed).
+    patched_fetch.update(
+        {
+            "1": _meta("1", STALE),  # pinned (stale) -> skip, no count
+            "2": _meta("2", STALE),  # pinned (stale) -> skip, no count
+            "3": _meta("3", IN_WINDOW),  # today -> collect
+            "4": _meta("4", TOO_OLD),  # recent-past -> count=1
+            "5": _meta("5", TOO_OLD),  # recent-past -> count=2 -> stop
+        }
+    )
+    links = [_link("1"), _link("2"), _link("3"), _link("4"), _link("5")]
+
+    result, _ = _run(links)
+
+    assert [cv.platform_vid for cv in result] == ["3"]
 
 
 def test_respects_max_videos(patched_fetch):

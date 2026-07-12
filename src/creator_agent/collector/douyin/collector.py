@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from creator_agent.collector.base import CollectFilter, Collector
@@ -17,6 +18,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 OUT_OF_WINDOW_PAGE_THRESHOLD = 2
+# A too-old video much older than the window start (likely a pinned/featured
+# video at the top of the page) is "stale" and does NOT count toward the
+# out-of-window stop threshold - otherwise pinned videos trigger an early stop
+# before the chronological feed is reached. Only "recently past-window" videos
+# (within this margin of the start) count, i.e. the feed scrolling past the
+# window boundary. Pinned videos are typically months/years old; the feed just
+# past the window is within days, so a 30-day margin separates them cleanly.
+STALE_MARGIN_DAYS = 30
 # Per-video metadata navigation timeout. The aweme-detail XHR + CDN URL are
 # captured in this one navigation.
 _META_TIMEOUT_SEC = 90
@@ -30,10 +39,12 @@ class DouyinCollector(Collector):
         scroll_delay: tuple[float, float] = (1.0, 3.0),
         out_of_window_threshold: int = OUT_OF_WINDOW_PAGE_THRESHOLD,
         meta_timeout_sec: int = _META_TIMEOUT_SEC,
+        stale_margin_days: int = STALE_MARGIN_DAYS,
     ) -> None:
         self._scroll_delay = scroll_delay
         self._out_of_window_threshold = out_of_window_threshold
         self._meta_timeout_sec = meta_timeout_sec
+        self._stale_margin = timedelta(days=stale_margin_days)
 
     def collect(
         self,
@@ -76,8 +87,20 @@ class DouyinCollector(Collector):
                     # Future video (newer than the window end) - keep scrolling.
                     if published is not None and published >= filter.end:
                         continue
-                    # Too old - count toward the out-of-window stop threshold.
+                    # Too old. Distinguish "stale" (far older than the window
+                    # start - likely a pinned/featured video) from "recently
+                    # past-window" (the chronological feed scrolling past the
+                    # window). Stale videos don't count toward the stop
+                    # threshold, so a block of pinned videos at the top doesn't
+                    # abort collection before the real feed is reached.
                     if published is not None and published < filter.start:
+                        if published < filter.start - self._stale_margin:
+                            logger.debug(
+                                "Skipping stale (likely pinned) video %s (published %s).",
+                                link["vid"],
+                                published.isoformat(),
+                            )
+                            continue
                         consecutive_out_of_window += 1
                         if consecutive_out_of_window >= self._out_of_window_threshold:
                             logger.info(

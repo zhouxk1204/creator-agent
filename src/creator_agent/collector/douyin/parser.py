@@ -17,9 +17,13 @@ def collect_video_links(page: Page) -> list[dict]:
     """Scrape visible ``/video/{vid}`` links from the creator homepage.
 
     Returns links in DOM order (newest first on Douyin), deduplicated by vid:
-    ``[{"vid": str, "href": str, "title": str}, ...]``. The grid card carries
-    no publish time, so only the link is collected here; ``published_at`` and
-    rich metadata are resolved per-video via :func:`fetch_video_meta`.
+    ``[{"vid": str, "href": str, "title": str}, ...]``. ``href`` is the canonical
+    ``https://www.douyin.com/video/{vid}`` URL - the scraped ``a.href`` often
+    carries tracking/spider query params (e.g. ``?source=Baiduspider``) that make
+    Douyin serve a variant page which does not fire the aweme/detail XHR, so
+    metadata capture fails. The grid card carries no publish time, so
+    ``published_at`` and rich metadata are resolved per-video via
+    :func:`fetch_video_meta`.
     """
     js_code = r"""() => {
         const seen = new Set();
@@ -28,7 +32,11 @@ def collect_video_links(page: Page) -> list[dict]:
             const m = a.href.match(/\/video\/(\d+)/);
             if (!m || seen.has(m[1])) continue;
             seen.add(m[1]);
-            out.push({vid: m[1], href: a.href, title: (a.textContent || '').trim().slice(0, 200)});
+            out.push({
+                vid: m[1],
+                href: 'https://www.douyin.com/video/' + m[1],
+                title: (a.textContent || '').trim().slice(0, 200),
+            });
         }
         return out;
     }
