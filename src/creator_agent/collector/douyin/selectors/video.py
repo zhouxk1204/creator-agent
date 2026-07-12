@@ -1,4 +1,9 @@
-"""Video card DOM selectors."""
+"""Video card DOM selectors.
+
+Note: the collector now scrapes ``a[href*="/video/"]`` links directly (the grid
+card carries no publish time), so these class-based selectors are currently
+unused. Kept for reference in case card-level fields are needed again.
+"""
 
 VIDEO_CARD = 'div[class*="video-card"]'
 TITLE = 'a[class*="title"]'
