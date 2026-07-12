@@ -67,7 +67,7 @@ class Downloader:
         for attempt in range(self._retries):
             try:
                 data = self._httpx_get(url, referer=DOUYIN_REFERER)
-                path = self._storage.save_video_file(creator.id, video.id, data)
+                path = self._storage.save_video_file(creator, video, data)
                 logger.info("Video saved (%d bytes): %s", len(data), path)
                 return path
             except Exception as e:
@@ -87,7 +87,7 @@ class Downloader:
         for attempt in range(self._retries):
             try:
                 data = self._httpx_get(url, referer=DOUYIN_REFERER)
-                path = self._storage.save_cover(creator.id, video.id, data)
+                path = self._storage.save_cover(creator, video, data)
                 logger.info("Cover saved: %s", path)
                 return path
             except Exception as e:
@@ -98,7 +98,7 @@ class Downloader:
         return None
 
     def save_metadata(self, creator: Creator, video: Video) -> Path:
-        path = self._storage.save_metadata(creator.id, video)
+        path = self._storage.save_metadata(creator, video)
         logger.info("Metadata saved: %s", path)
         return path
 

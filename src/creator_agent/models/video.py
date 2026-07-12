@@ -48,6 +48,11 @@ class Video(BaseModel):
     tags: list[str] = []
     collected_at: datetime
     status: VideoStatus = VideoStatus.NEW
+    # Per-video storage folder name (e.g. ``2026-07-11_张三``), relative to the
+    # creator's ``videos/`` dir. Assigned by the repository at first upsert so
+    # every save (metadata/video/cover) lands in the same folder, and so the
+    # folder is stable across re-syncs. Empty for rows created before this field.
+    storage_path: str = ""
 
 
 class VideoAsset(BaseModel):

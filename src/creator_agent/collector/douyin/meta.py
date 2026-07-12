@@ -141,10 +141,20 @@ def aweme_to_meta(cdn_url: str | None, aw: dict | None) -> VideoMeta:
     tags = [t.get("hashtag_name") for t in (aw.get("text_extra") or []) if t.get("hashtag_name")]
     duration_ms = aw.get("duration")
     create_time = aw.get("create_time")
-    cover_url_list = ((aw.get("video") or {}).get("cover") or {}).get("url_list") or []
+    video = aw.get("video") or {}
+    cover_url_list = (video.get("cover") or {}).get("url_list") or []
     desc = aw.get("desc") or ""
+    # Prefer the play_addr from the aweme detail as the download URL: it is a
+    # muxed mp4 (audio + video). The intercepted network URL is unreliable --
+    # Douyin's web player fetches separate DASH video/audio streams, so the
+    # intercept grabs whichever media response arrives first (sometimes a
+    # video-only stream, sometimes an audio fragment), yielding a silent file.
+    # Decode any literal ampersand-escape survivors: Douyin JSON-escapes ``&``
+    # (json.loads handles the standard form, but Douyin sometimes double-encodes).
+    play_addr_list = (video.get("play_addr") or {}).get("url_list") or []
+    resolved_url = play_addr_list[0].replace("\\u0026", "&") if play_addr_list else cdn_url
     return VideoMeta(
-        cdn_url=cdn_url,
+        cdn_url=resolved_url,
         title=desc,
         description=desc,
         tags=tags,

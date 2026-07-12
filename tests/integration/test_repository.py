@@ -75,9 +75,38 @@ def test_upsert_collected_new(repo, sample_creator):
     assert video.id == "douyin_abc123"
     assert video.status == VideoStatus.NEW
     assert video.stats.likes == 100
+    assert video.storage_path == "2024-06-15_Test_Creator"
 
 
-def test_upsert_collected_duplicate(repo, sample_creator):
+def test_upsert_collected_same_day_collision_suffix(repo, sample_creator):
+    repo.add_creator(sample_creator)
+    cv1 = CollectedVideo(
+        platform="douyin",
+        platform_vid="vid1",
+        title="First same-day",
+        published_at=datetime(2024, 6, 15, 10, 0, tzinfo=UTC),
+    )
+    cv2 = CollectedVideo(
+        platform="douyin",
+        platform_vid="vid2",
+        title="Second same-day",
+        published_at=datetime(2024, 6, 15, 15, 0, tzinfo=UTC),
+    )
+    cv3 = CollectedVideo(
+        platform="douyin",
+        platform_vid="vid3",
+        title="Different day",
+        published_at=datetime(2024, 6, 16, tzinfo=UTC),
+    )
+    v1 = repo.upsert_collected(sample_creator, cv1)
+    v2 = repo.upsert_collected(sample_creator, cv2)
+    v3 = repo.upsert_collected(sample_creator, cv3)
+    assert v1.storage_path == "2024-06-15_Test_Creator"
+    assert v2.storage_path == "2024-06-15_Test_Creator_2"
+    assert v3.storage_path == "2024-06-16_Test_Creator"
+
+
+def test_upsert_collected_duplicate_keeps_storage_path(repo, sample_creator):
     repo.add_creator(sample_creator)
     cv = CollectedVideo(
         platform="douyin",
@@ -85,16 +114,19 @@ def test_upsert_collected_duplicate(repo, sample_creator):
         title="Original",
         published_at=datetime(2024, 6, 15, tzinfo=UTC),
     )
-    repo.upsert_collected(sample_creator, cv)
+    v1 = repo.upsert_collected(sample_creator, cv)
+    assert v1.storage_path == "2024-06-15_Test_Creator"
 
+    # Re-sync: same video collected again -> UPDATE, storage_path must be stable.
     cv2 = CollectedVideo(
         platform="douyin",
         platform_vid="abc123",
         title="Updated Title",
         published_at=datetime(2024, 6, 15, tzinfo=UTC),
     )
-    video = repo.upsert_collected(sample_creator, cv2)
-    assert video.title == "Updated Title"
+    v2 = repo.upsert_collected(sample_creator, cv2)
+    assert v2.title == "Updated Title"
+    assert v2.storage_path == "2024-06-15_Test_Creator"
 
 
 def test_advance_status(repo, sample_creator):

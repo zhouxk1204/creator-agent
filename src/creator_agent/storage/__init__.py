@@ -1,0 +1,1 @@
+"""File read/write operations, no Playwright dependency."""

@@ -365,4 +365,4 @@ def test_save_metadata_writes_json(storage, creator):
 
     assert path.exists()
     assert path.name == "metadata.json"
-    assert storage.load_metadata(creator.id, video.id) is not None
+    assert storage.load_metadata(creator, video) is not None
