@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -25,6 +25,33 @@ def yesterday_filter(now: datetime | None = None) -> CollectFilter:
     now_cn = now.astimezone(tz_cn)
     start_cn = now_cn.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     end_cn = now_cn.replace(hour=0, minute=0, second=0, microsecond=0)
+    return CollectFilter(
+        start=start_cn.astimezone(timezone.utc),
+        end=end_cn.astimezone(timezone.utc),
+    )
+
+
+def today_filter(now: datetime | None = None) -> CollectFilter:
+    """Window covering the current calendar day in CN time (today 00:00 -> tomorrow 00:00)."""
+    now = now or datetime.now(timezone.utc)
+    tz_cn = timezone(timedelta(hours=8))
+    now_cn = now.astimezone(tz_cn)
+    start_cn = now_cn.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_cn = start_cn + timedelta(days=1)
+    return CollectFilter(
+        start=start_cn.astimezone(timezone.utc),
+        end=end_cn.astimezone(timezone.utc),
+    )
+
+
+def day_filter(day: date) -> CollectFilter:
+    """Window covering a single calendar day in CN time (day 00:00 -> next day 00:00).
+
+    Use this to collect a specific day's videos, e.g. ``day_filter(date(2026, 7, 11))``.
+    """
+    tz_cn = timezone(timedelta(hours=8))
+    start_cn = datetime(day.year, day.month, day.day, tzinfo=tz_cn)
+    end_cn = start_cn + timedelta(days=1)
     return CollectFilter(
         start=start_cn.astimezone(timezone.utc),
         end=end_cn.astimezone(timezone.utc),

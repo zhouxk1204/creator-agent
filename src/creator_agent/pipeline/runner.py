@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from creator_agent.collector.base import CollectFilter, yesterday_filter
+from creator_agent.collector.base import CollectFilter, today_filter
 from creator_agent.collector.douyin.collector import DouyinCollector
 from creator_agent.models.creator import Creator
 from creator_agent.models.video import VideoStatus
@@ -44,7 +44,7 @@ class PipelineRunner:
         creator: Creator,
         filter: CollectFilter | None = None,
     ) -> SyncResult:
-        filter = filter or yesterday_filter()
+        filter = filter or today_filter()
         logger.info(
             "Syncing creator %s (%s) - filter: %s ~ %s",
             creator.id,

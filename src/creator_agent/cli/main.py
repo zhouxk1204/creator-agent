@@ -7,13 +7,17 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import typer
 from loguru import logger as loguru_logger
 
 from creator_agent.browser.manager import BrowserConfig, BrowserManager
-from creator_agent.collector.base import last_n_days_filter, yesterday_filter
+from creator_agent.collector.base import (
+    CollectFilter,
+    day_filter,
+    last_n_days_filter,
+    today_filter,
+)
 from creator_agent.config import load_settings
 from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.creator import Creator
@@ -89,6 +93,7 @@ def doctor():
 
     try:
         from playwright.sync_api import sync_playwright
+
         with sync_playwright() as p:
             _ = p.chromium
         typer.echo("  OK Playwright Chromium available")
@@ -128,7 +133,7 @@ def doctor():
 
     try:
         usage = shutil.disk_usage(storage_dir.anchor if storage_dir.anchor else "/")
-        free_gb = usage.free / (1024 ** 3)
+        free_gb = usage.free / (1024**3)
         disk_ok = free_gb > 1
         status = "OK" if disk_ok else "FAIL"
         typer.echo(f"  {status} Disk space: {free_gb:.1f} GB free")
@@ -189,7 +194,7 @@ def auth_login(
 @creator_app.command("add")
 def creator_add(
     homepage_url: str = typer.Argument(..., help="Creator homepage URL"),
-    nickname: Optional[str] = typer.Option(None, "--nickname", "-n", help="Creator nickname"),
+    nickname: str | None = typer.Option(None, "--nickname", "-n", help="Creator nickname"),
 ):
     settings = load_settings()
     repo = Repository(settings.db_path)
@@ -285,12 +290,17 @@ def creator_list():
 
 @app.command()
 def sync(
-    creator_id: Optional[str] = typer.Option(None, "--creator", "-c", help="Sync specific creator by ID"),
-    days: int = typer.Option(1, "--days", "-d", help="Number of days to look back"),
+    creator_id: str | None = typer.Option(None, "--creator", "-c", help="Sync specific creator by ID"),
+    date: str | None = typer.Option(
+        None,
+        "--date",
+        help="Sync a specific calendar day (YYYY-MM-DD), e.g. 2026-07-11. Defaults to today.",
+    ),
+    days: int = typer.Option(1, "--days", "-d", help="Backfill: look back N past days"),
 ):
     settings, repo, browser, runner = _init_components()
 
-    filter_obj = last_n_days_filter(days) if days > 1 else yesterday_filter()
+    window_label, filter_obj = _resolve_sync_filter(date, days)
 
     try:
         browser.start()
@@ -300,23 +310,44 @@ def sync(
             if not creator:
                 typer.echo(f"Creator not found: {creator_id}")
                 raise typer.Exit(code=1)
-            typer.echo(f"Syncing {creator.nickname} ({creator.id})...")
+            typer.echo(f"Syncing {creator.nickname} ({creator.id}) for {window_label}...")
             result = runner.sync_creator(creator, filter_obj)
             typer.echo(
-                f"  Collected: {result.collected}, "
-                f"Downloaded: {result.downloaded}, "
-                f"Failed: {len(result.failed)}"
+                f"  Collected: {result.collected}, Downloaded: {result.downloaded}, Failed: {len(result.failed)}"
             )
+            if result.collected == 0:
+                typer.echo(f"  No videos found for {window_label}.")
         else:
             from creator_agent.scheduler.scheduler import Scheduler
+
             scheduler = Scheduler(runner=runner, repo=repo)
-            count = scheduler.run_once(filter_obj)
-            typer.echo(f"Synced {count} creators.")
+            round_result = scheduler.run_once(filter_obj)
+            typer.echo(
+                f"Synced {round_result.creators_processed}/{round_result.creators_total} creators "
+                f"({round_result.collected} collected, {round_result.downloaded} downloaded)."
+            )
+            if round_result.collected == 0:
+                typer.echo(f"No videos found for {window_label}.")
 
         typer.echo("Sync complete!")
     finally:
         browser.close()
         repo.close()
+
+
+def _resolve_sync_filter(date_str: str | None, days: int) -> tuple[str, CollectFilter]:
+    """Pick the collect window from --date / --days / default(today). Returns (label, filter)."""
+    if date_str:
+        try:
+            target_day = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            raise typer.BadParameter(f"Invalid date '{date_str}', expected YYYY-MM-DD (e.g. 2026-07-11)")
+        return target_day.isoformat(), day_filter(target_day)
+
+    if days > 1:
+        return f"last {days} days", last_n_days_filter(days)
+
+    return "today", today_filter()
 
 
 def _detect_platform(url: str) -> str:
