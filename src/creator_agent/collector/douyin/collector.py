@@ -115,7 +115,7 @@ class DouyinCollector(Collector):
                     # as out-of-window; meta_to_collected warns + falls back to now).
                     consecutive_out_of_window = 0
                     any_in_window = True
-                    cv = meta_to_collected(meta, link["vid"], link["href"])
+                    cv = meta_to_collected(meta, link["vid"], link["href"], cover=link.get("cover"))
                     results.append(cv)
                     logger.info(
                         "Collected video %s (published: %s)",

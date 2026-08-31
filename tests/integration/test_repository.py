@@ -75,7 +75,7 @@ def test_upsert_collected_new(repo, sample_creator):
     assert video.id == "douyin_abc123"
     assert video.status == VideoStatus.NEW
     assert video.stats.likes == 100
-    assert video.storage_path == "2024-06-15_Test_Creator"
+    assert video.storage_path == "2024-06-15"
 
 
 def test_upsert_collected_same_day_collision_suffix(repo, sample_creator):
@@ -101,9 +101,9 @@ def test_upsert_collected_same_day_collision_suffix(repo, sample_creator):
     v1 = repo.upsert_collected(sample_creator, cv1)
     v2 = repo.upsert_collected(sample_creator, cv2)
     v3 = repo.upsert_collected(sample_creator, cv3)
-    assert v1.storage_path == "2024-06-15_Test_Creator"
-    assert v2.storage_path == "2024-06-15_Test_Creator_2"
-    assert v3.storage_path == "2024-06-16_Test_Creator"
+    assert v1.storage_path == "2024-06-15"
+    assert v2.storage_path == "2024-06-15_2"
+    assert v3.storage_path == "2024-06-16"
 
 
 def test_upsert_collected_duplicate_keeps_storage_path(repo, sample_creator):
@@ -115,7 +115,7 @@ def test_upsert_collected_duplicate_keeps_storage_path(repo, sample_creator):
         published_at=datetime(2024, 6, 15, tzinfo=UTC),
     )
     v1 = repo.upsert_collected(sample_creator, cv)
-    assert v1.storage_path == "2024-06-15_Test_Creator"
+    assert v1.storage_path == "2024-06-15"
 
     # Re-sync: same video collected again -> UPDATE, storage_path must be stable.
     cv2 = CollectedVideo(
@@ -126,7 +126,7 @@ def test_upsert_collected_duplicate_keeps_storage_path(repo, sample_creator):
     )
     v2 = repo.upsert_collected(sample_creator, cv2)
     assert v2.title == "Updated Title"
-    assert v2.storage_path == "2024-06-15_Test_Creator"
+    assert v2.storage_path == "2024-06-15"
 
 
 def test_advance_status(repo, sample_creator):

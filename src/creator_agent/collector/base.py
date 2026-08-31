@@ -62,7 +62,9 @@ def last_n_days_filter(n: int, now: datetime | None = None) -> CollectFilter:
     now = now or datetime.now(timezone.utc)
     tz_cn = timezone(timedelta(hours=8))
     now_cn = now.astimezone(tz_cn)
-    end_cn = now_cn.replace(hour=0, minute=0, second=0, microsecond=0)
+    # End = end of current day in CN (tomorrow midnight). Start = N full days back.
+    # This ensures videos published anywhere in today's CN calendar day are in-window.
+    end_cn = now_cn.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     start_cn = end_cn - timedelta(days=n)
     return CollectFilter(
         start=start_cn.astimezone(timezone.utc),

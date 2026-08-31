@@ -17,17 +17,35 @@ def collect_video_links(page: Page) -> list[dict]:
     """Scrape visible ``/video/{vid}`` links from the creator homepage.
 
     Returns links in DOM order (newest first on Douyin), deduplicated by vid:
-    ``[{"vid": str, "href": str, "title": str}, ...]``. ``href`` is the canonical
-    ``https://www.douyin.com/video/{vid}`` URL - the scraped ``a.href`` often
-    carries tracking/spider query params (e.g. ``?source=Baiduspider``) that make
-    Douyin serve a variant page which does not fire the aweme/detail XHR, so
-    metadata capture fails. The grid card carries no publish time, so
-    ``published_at`` and rich metadata are resolved per-video via
-    :func:`fetch_video_meta`.
+    ``[{"vid": str, "href": str, "title": str, "cover": str}, ...]``. ``href`` is
+    the canonical ``https://www.douyin.com/video/{vid}`` URL - the scraped
+    ``a.href`` often carries tracking/spider query params (e.g.
+    ``?source=Baiduspider``) that make Douyin serve a variant page which does
+    not fire the aweme/detail XHR, so metadata capture fails. The grid card
+    carries no publish time, so ``published_at`` and rich metadata are resolved
+    per-video via :func:`fetch_video_meta`.
+
+    ``cover`` is the card's ``<img>`` thumbnail src - this is the cover users
+    actually see on Douyin and is preferred over the aweme-detail ``video.cover``
+    field (which can resolve to a different, processed image variant).
     """
     js_code = r"""() => {
         const seen = new Set();
         const out = [];
+        const pickCover = (a) => {
+            const imgs = a.querySelectorAll('img');
+            // Prefer a douyinpic CDN image (the real cover); the like icon is
+            // an inline <svg>, not an <img>, so the card's only <img> is the cover.
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+                if (src && (src.indexOf('douyinpic') !== -1 || src.indexOf('tplv-dy') !== -1)) return src;
+            }
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+                if (src) return src;
+            }
+            return '';
+        };
         for (const a of document.querySelectorAll('a[href*="/video/"]')) {
             const m = a.href.match(/\/video\/(\d+)/);
             if (!m || seen.has(m[1])) continue;
@@ -36,6 +54,7 @@ def collect_video_links(page: Page) -> list[dict]:
                 vid: m[1],
                 href: 'https://www.douyin.com/video/' + m[1],
                 title: (a.textContent || '').trim().slice(0, 200),
+                cover: pickCover(a),
             });
         }
         return out;
@@ -50,13 +69,17 @@ def extract_vid(href: str) -> str:
     return ""
 
 
-def meta_to_collected(meta: VideoMeta, vid: str, page_url: str) -> CollectedVideo:
+def meta_to_collected(meta: VideoMeta, vid: str, page_url: str, cover: str | None = None) -> CollectedVideo:
     """Map a resolved :class:`VideoMeta` to a :class:`CollectedVideo`.
 
     ``published_at`` falls back to ``now`` when the aweme detail was not
     captured - the video is still collectable, but it cannot be time-window
     filtered, so callers should treat ``None``-detail videos as in-window and
     log a warning.
+
+    ``cover`` is the list-page card thumbnail (the cover users see on Douyin);
+    it takes priority over ``meta.cover_url`` (the aweme-detail
+    ``video.cover`` field, which can resolve to a different processed image).
     """
     if meta.published_at is None:
         logger.warning("Video %s has no published_at (detail XHR not captured); using now.", vid)
@@ -65,8 +88,8 @@ def meta_to_collected(meta: VideoMeta, vid: str, page_url: str) -> CollectedVide
         platform_vid=vid,
         title=meta.title or "",
         description=meta.description,
-        video_url=page_url,
-        cover_url=meta.cover_url,
+        video_url=str(meta.cdn_url) if meta.cdn_url else page_url,
+        cover_url=cover or meta.cover_url,
         published_at=meta.published_at or datetime.now(UTC),
         stats=VideoStats(
             likes=meta.likes,

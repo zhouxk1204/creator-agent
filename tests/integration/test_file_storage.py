@@ -37,7 +37,7 @@ def sample_video():
         published_at=datetime(2024, 6, 15, tzinfo=UTC),
         collected_at=datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC),
         status=VideoStatus.NEW,
-        storage_path="2024-06-15_Test_Creator",
+        storage_path="2024-06-15",
     )
 
 
@@ -78,13 +78,13 @@ def test_save_video_and_cover_land_in_storage_path_folder(storage, sample_creato
     assert cover_path.read_bytes() == b"fake_cover_data"
     # Both assets share the storage_path folder, alongside metadata.
     assert video_path.parent == cover_path.parent
-    assert video_path.parent.name == "2024-06-15_Test_Creator"
+    assert video_path.parent.name == "2024-06-15"
 
 
 def test_list_videos(storage, sample_creator, sample_video):
     storage.save_metadata(sample_creator, sample_video)
     videos = storage.list_videos(sample_creator)
-    assert "2024-06-15_Test_Creator" in videos
+    assert "2024-06-15" in videos
 
 
 def test_video_exists(storage, sample_creator, sample_video):

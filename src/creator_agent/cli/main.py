@@ -11,6 +11,7 @@ from pathlib import Path
 import typer
 from loguru import logger as loguru_logger
 
+from creator_agent.asr.transcriber import Transcriber
 from creator_agent.browser.manager import BrowserConfig, BrowserManager
 from creator_agent.collector.base import (
     CollectFilter,
@@ -21,6 +22,7 @@ from creator_agent.collector.base import (
 from creator_agent.config import load_settings
 from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.creator import Creator
+from creator_agent.models.video import VideoStatus
 from creator_agent.pipeline.runner import PipelineRunner
 from creator_agent.repository.sqlite_repo import Repository
 from creator_agent.storage.file_storage import FileStorage
@@ -69,7 +71,16 @@ def _init_components(storage_dir=None, db_path=None):
         timeout_sec=settings.downloader.timeout_sec,
         retries=settings.downloader.retry,
     )
-    runner = PipelineRunner(repo=repo, storage=storage, browser=browser, downloader=downloader)
+    transcriber: Transcriber | None = None
+    if settings.asr.env_python and Path(settings.asr.env_python).exists():
+        transcriber = Transcriber(storage=storage, settings=settings.asr, repo=repo)
+    runner = PipelineRunner(
+        repo=repo,
+        storage=storage,
+        browser=browser,
+        downloader=downloader,
+        transcriber=transcriber,
+    )
     return settings, repo, browser, runner
 
 
@@ -297,8 +308,15 @@ def sync(
         help="Sync a specific calendar day (YYYY-MM-DD), e.g. 2026-07-11. Defaults to today.",
     ),
     days: int = typer.Option(1, "--days", "-d", help="Backfill: look back N past days"),
+    do_asr: bool = typer.Option(False, "--asr", help="Transcribe downloaded videos after sync (Phase 2)."),
 ):
     settings, repo, browser, runner = _init_components()
+
+    if do_asr and runner._transcriber is None:  # noqa: SLF001
+        typer.echo(
+            "WARNING: --asr requested but ASR is not configured "
+            "(asr.env_python missing in config/settings.yaml). Running sync without ASR."
+        )
 
     window_label, filter_obj = _resolve_sync_filter(date, days)
 
@@ -311,9 +329,10 @@ def sync(
                 typer.echo(f"Creator not found: {creator_id}")
                 raise typer.Exit(code=1)
             typer.echo(f"Syncing {creator.nickname} ({creator.id}) for {window_label}...")
-            result = runner.sync_creator(creator, filter_obj)
+            result = runner.sync_creator(creator, filter_obj, do_asr=do_asr)
             typer.echo(
-                f"  Collected: {result.collected}, Downloaded: {result.downloaded}, Failed: {len(result.failed)}"
+                f"  Collected: {result.collected}, Downloaded: {result.downloaded}, "
+                f"Transcribed: {result.transcribed}, Failed: {len(result.failed)}"
             )
             if result.collected == 0:
                 typer.echo(f"  No videos found for {window_label}.")
@@ -332,6 +351,90 @@ def sync(
         typer.echo("Sync complete!")
     finally:
         browser.close()
+        repo.close()
+
+
+@app.command(help="Transcribe downloaded videos to text (Phase 2 ASR). Needs the dedicated creator-asr env.")
+def asr(
+    creator_id: str | None = typer.Option(None, "--creator", "-c", help="Transcribe one creator's pending videos."),
+    video_id: str | None = typer.Option(None, "--video", "-v", help="Transcribe a single video by ID."),
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Max videos to transcribe."),
+):
+    settings, repo, _browser, runner = _init_components()  # noqa: F841
+    try:
+        if runner._transcriber is None:  # noqa: SLF001
+            typer.echo(
+                "ASR is not configured. Set asr.env_python in config/settings.yaml "
+                "to the dedicated creator-asr env's python.exe."
+            )
+            raise typer.Exit(code=1)
+
+        if video_id:
+            video = repo.get_video(video_id)
+            if not video:
+                typer.echo(f"Video not found: {video_id}")
+                raise typer.Exit(code=1)
+            creator = repo.get_creator(video.creator_id)
+            if not creator:
+                typer.echo(f"Creator not found for video: {video.creator_id}")
+                raise typer.Exit(code=1)
+            if video.status != VideoStatus.VIDEO_DOWNLOADED:
+                typer.echo(
+                    f"Video {video_id} status is {video.status.value}; "
+                    "only VIDEO_DOWNLOADED videos can be transcribed."
+                )
+                raise typer.Exit(code=1)
+            typer.echo(f"Transcribing video {video_id} ({creator.nickname})...")
+            transcribed, failed = runner._transcriber.transcribe_batch(creator, [video])  # noqa: SLF001
+            typer.echo(f"  Transcribed: {transcribed}, Failed: {len(failed)}")
+            for vid, err in failed:
+                typer.echo(f"    {vid}: {err}")
+            typer.echo("ASR complete!")
+            return
+
+        creators = []
+        if creator_id:
+            c = repo.get_creator(creator_id)
+            if not c:
+                typer.echo(f"Creator not found: {creator_id}")
+                raise typer.Exit(code=1)
+            creators = [c]
+        else:
+            creators = repo.list_creators()
+            if not creators:
+                typer.echo("No creators registered.")
+                return
+
+        total_transcribed = 0
+        total_failed: list[tuple[str, str]] = []
+        for c in creators:
+            typer.echo(f"ASR for {c.nickname} ({c.id})...")
+            result = runner.run_asr(c, limit=limit)
+            total_transcribed += result.transcribed
+            total_failed.extend(result.failed)
+            typer.echo(f"  Transcribed: {result.transcribed}, Failed: {len(result.failed)}")
+
+        typer.echo(f"ASR complete! Total transcribed: {total_transcribed}, failed: {len(total_failed)}.")
+        for vid, err in total_failed:
+            typer.echo(f"  {vid}: {err}")
+    finally:
+        repo.close()
+
+
+@app.command(help="Launch a local web UI to browse collected videos (covers, player, metadata, transcript).")
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (default 127.0.0.1, your machine only)."),
+    port: int = typer.Option(8000, "--port", "-p", help="Bind port (default 8000)."),
+):
+    settings = load_settings()
+    repo = Repository(settings.db_path)
+    storage = FileStorage(settings.storage_dir)
+    typer.echo(f"Web UI ready: http://{host}:{port}  (press Ctrl+C to stop)")
+    try:
+        from creator_agent.web.server import run_server
+
+        run_server(host, port, repo, storage)
+    finally:
         repo.close()
 
 

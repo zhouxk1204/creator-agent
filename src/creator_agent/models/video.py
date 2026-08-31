@@ -31,6 +31,8 @@ class VideoStatus(StrEnum):
     NEW = "NEW"
     METADATA_SAVED = "METADATA_SAVED"
     VIDEO_DOWNLOADED = "VIDEO_DOWNLOADED"
+    # Phase 2: ASR transcript written.
+    ASR_DONE = "ASR_DONE"
 
 
 class Video(BaseModel):

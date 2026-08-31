@@ -200,10 +200,32 @@ def test_collected_video_carries_rich_metadata(patched_fetch):
     assert cv.title == "video 1"
     assert cv.description == "desc 1"
     assert str(cv.cover_url) == "https://p.douyinpic.com/1.jpg"
-    assert str(cv.video_url) == "https://www.douyin.com/video/1"
+    assert str(cv.video_url) == "https://v26-web.douyinvod.com/1.mp4"
     assert cv.published_at == IN_WINDOW
     assert cv.stats.likes == 1
     assert cv.hashtags == []
+
+
+def test_list_page_cover_preferred_over_detail_cover(patched_fetch):
+    # The card <img> cover (what users see on Douyin) must win over the
+    # aweme-detail video.cover field, which resolves to a different image.
+    patched_fetch.update({"1": _meta("1", IN_WINDOW)})  # meta.cover_url = p.douyinpic.com/1.jpg
+    links = [{"vid": "1", "href": "https://www.douyin.com/video/1", "title": "video 1",
+              "cover": "https://p.douyinpic.com/list-cover-1.jpeg"}]
+
+    result, _ = _run(links)
+
+    assert str(result[0].cover_url) == "https://p.douyinpic.com/list-cover-1.jpeg"
+
+
+def test_falls_back_to_detail_cover_when_list_cover_missing(patched_fetch):
+    # Card img not captured (lazy-loaded / off-screen) -> use aweme-detail cover.
+    patched_fetch.update({"1": _meta("1", IN_WINDOW)})
+    links = [_link("1")]  # no cover key
+
+    result, _ = _run(links)
+
+    assert str(result[0].cover_url) == "https://p.douyinpic.com/1.jpg"
 
 
 def test_skips_video_when_meta_fetch_raises(patched_fetch, monkeypatch):

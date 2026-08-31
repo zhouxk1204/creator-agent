@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 from creator_agent.models.creator import Creator
+from creator_agent.models.transcript import Transcript
 from creator_agent.models.video import Video
-from creator_agent.storage.naming import sanitize_name
+from creator_agent.storage.naming import sanitize_name, video_filename
 
 
 class FileStorage:
@@ -17,7 +18,7 @@ class FileStorage:
             profile.json
             avatar.jpg
             videos/{video.storage_path}/
-                video.mp4
+                {title}_{date}.mp4
                 cover.jpg
                 metadata.json
 
@@ -47,7 +48,7 @@ class FileStorage:
         return video.storage_path or video.id
 
     def _video_path(self, creator: Creator, video: Video) -> Path:
-        return self._creator_path(creator) / 'videos' / self._video_folder(video)
+        return self._creator_path(creator) / self._video_folder(video)
 
     def _video_dir(self, creator: Creator, video: Video) -> Path:
         d = self._video_path(creator, video)
@@ -77,7 +78,7 @@ class FileStorage:
     # -- video-level --------------------------------------------------------
 
     def save_video_file(self, creator: Creator, video: Video, data: bytes) -> Path:
-        path = self._video_dir(creator, video) / 'video.mp4'
+        path = self._video_dir(creator, video) / video_filename(video.title, video.published_at)
         path.write_bytes(data)
         return path
 
@@ -100,10 +101,40 @@ class FileStorage:
         return Video(**data)
 
     def list_videos(self, creator: Creator) -> list[str]:
-        d = self._creator_path(creator) / 'videos'
+        d = self._creator_path(creator)
         if not d.exists():
             return []
         return sorted(p.name for p in d.iterdir() if p.is_dir())
 
     def video_exists(self, creator: Creator, video: Video) -> bool:
         return (self._video_path(creator, video) / 'metadata.json').exists()
+
+    # -- ASR transcript + audio ------------------------------------------------
+
+    def video_file_path(self, creator: Creator, video: Video) -> Path:
+        """Path to the downloaded video file (does not create dirs)."""
+        return self._video_path(creator, video) / video_filename(video.title, video.published_at)
+
+    def audio_path(self, creator: Creator, video: Video) -> Path:
+        """Path to the 16kHz mono WAV file (same base name as video, .wav)."""
+        from creator_agent.storage.naming import video_filename
+        mp4_name = video_filename(video.title, video.published_at)
+        wav_name = mp4_name.replace('.mp4', '.wav')
+        return self._video_path(creator, video) / wav_name
+
+    def save_transcript(self, creator: Creator, video: Video, transcript: Transcript) -> Path:
+        path = self._video_dir(creator, video) / 'transcript.json'
+        path.write_text(transcript.model_dump_json(indent=2), encoding='utf-8')
+        return path
+
+    def load_transcript(self, creator: Creator, video: Video) -> Transcript | None:
+        path = self._video_path(creator, video) / 'transcript.json'
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return Transcript(**data)
+
+    def save_txt(self, creator: Creator, video: Video, text: str) -> Path:
+        path = self._video_dir(creator, video) / 'transcript.txt'
+        path.write_text(text, encoding='utf-8')
+        return path

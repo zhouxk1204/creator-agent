@@ -36,12 +36,12 @@ def test_cn_date_str_converts_utc_to_china_day():
 
 
 def test_video_folder_base_combines_date_and_sanitized_nickname():
-    base = video_folder_base("Test Creator", datetime(2024, 6, 15, 0, 0, tzinfo=UTC))
-    assert base == "2024-06-15_Test_Creator"
+    base = video_folder_base(datetime(2024, 6, 15, 0, 0, tzinfo=UTC))
+    assert base == "2024-06-15"
 
 
 def test_video_folder_name_suffix_logic():
     dt = datetime(2024, 6, 15, 0, 0, tzinfo=UTC)
-    assert video_folder_name("Test Creator", dt, 0) == "2024-06-15_Test_Creator"
-    assert video_folder_name("Test Creator", dt, 1) == "2024-06-15_Test_Creator_2"
-    assert video_folder_name("Test Creator", dt, 2) == "2024-06-15_Test_Creator_3"
+    assert video_folder_name(dt, 0) == "2024-06-15"
+    assert video_folder_name(dt, 1) == "2024-06-15_2"
+    assert video_folder_name(dt, 2) == "2024-06-15_3"

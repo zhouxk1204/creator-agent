@@ -23,6 +23,19 @@ class DownloaderSettings(BaseModel):
     retry: int = 3
 
 
+class AsrSettings(BaseModel):
+    # FunASR runs in a DEDICATED conda env (not the main uv env), invoked via
+    # subprocess. enabled=False by default so sync stays collect+download only.
+    enabled: bool = False
+    env_python: str = ""  # path to the dedicated env's python.exe
+    worker_script: str = ""  # path to asr/worker.py (blank -> resolve from package)
+    model: str = "paraformer-zh"
+    vad_model: str = "fsmn-vad"
+    punc_model: str = "ct-punc"
+    device: str = "cuda:0"
+    ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
+
+
 class LogSettings(BaseModel):
     level: str = "INFO"
     file: str = "./logs/creator-agent.log"
@@ -36,6 +49,7 @@ class Settings(BaseSettings):
     browser: BrowserSettings = BrowserSettings()
     collector: CollectorSettings = CollectorSettings()
     downloader: DownloaderSettings = DownloaderSettings()
+    asr: AsrSettings = AsrSettings()
     log: LogSettings = LogSettings()
 
     model_config = {"env_prefix": "CREATOR_AGENT_", "env_nested_delimiter": "__"}

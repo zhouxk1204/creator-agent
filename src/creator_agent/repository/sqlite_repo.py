@@ -137,9 +137,9 @@ class Repository:
         # (e.g. ``2026-07-11_张三`` or ``2026-07-11_张三_2``). Existing videos
         # keep their assigned folder (UPDATE branch below), so the path is
         # stable across re-syncs.
-        base = video_folder_base(creator.nickname, cv.published_at)
+        base = video_folder_base(cv.published_at)
         same_day = self._count_same_day_videos(creator.id, base)
-        storage_path = video_folder_name(creator.nickname, cv.published_at, same_day)
+        storage_path = video_folder_name(cv.published_at, same_day)
 
         existing = self._conn.execute(
             "SELECT * FROM video WHERE platform = ? AND platform_vid = ?",
@@ -236,6 +236,15 @@ class Repository:
         self._conn.execute(
             "UPDATE video SET status = ? WHERE id = ?",
             (new_status.value, video_id),
+        )
+        self._conn.commit()
+
+    def update_video_cover_url(self, video_id: str, cover_url: str) -> None:
+        """Overwrite a video's stored ``cover_url`` (e.g. after re-scraping the
+        correct list-page cover thumbnail for already-downloaded videos)."""
+        self._conn.execute(
+            "UPDATE video SET cover_url = ? WHERE id = ?",
+            (cover_url, video_id),
         )
         self._conn.commit()
 
