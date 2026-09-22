@@ -2,93 +2,101 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from playwright.sync_api import Page
 
-from creator_agent.collector.douyin.time_parser import parse_douyin_time
+from creator_agent.collector.douyin.meta import VideoMeta
 from creator_agent.models.video import CollectedVideo, VideoStats
 
 logger = logging.getLogger(__name__)
-_RE_VID = re.compile(r"(?:/video/|/share/video/)(\d+)")
+_RE_VID = re.compile(r"/video/(\d+)")
 
 
-@dataclass
-class ParsedCard:
-    vid: str
-    title: str
-    cover_url: str | None
-    video_url: str | None
-    published_at: datetime
-    likes: int
-    comments: int
-    views: int | None
+def collect_video_links(page: Page) -> list[dict]:
+    """Scrape visible ``/video/{vid}`` links from the creator homepage.
 
+    Returns links in DOM order (newest first on Douyin), deduplicated by vid:
+    ``[{"vid": str, "href": str, "title": str, "cover": str}, ...]``. ``href`` is
+    the canonical ``https://www.douyin.com/video/{vid}`` URL - the scraped
+    ``a.href`` often carries tracking/spider query params (e.g.
+    ``?source=Baiduspider``) that make Douyin serve a variant page which does
+    not fire the aweme/detail XHR, so metadata capture fails. The grid card
+    carries no publish time, so ``published_at`` and rich metadata are resolved
+    per-video via :func:`fetch_video_meta`.
 
-def parse_visible_cards(page: Page) -> list[ParsedCard]:
-    js_code = """
-    () => {
-        const cards = document.querySelectorAll('[class*="video-card"], [class*="ECMy_MlT"]');
-        return Array.from(cards).map(card => {
-            const link = card.querySelector("a");
-            const vidMatch = link ? link.href.match(/\\/video\\/(\\d+)/) : null;
-            return {
-                vid: vidMatch ? vidMatch[1] : (card.getAttribute("data-vid") || ""),
-                title: (card.querySelector('[class*="title"]')?.textContent || "").trim(),
-                coverUrl: card.querySelector("img")?.src || "",
-                videoUrl: "",
-                publishTime: (card.querySelector('[class*="publish-time"]')?.textContent || "").trim(),
-                likes: parseInt(card.querySelector('[class*="digg-count"]')?.textContent || "0", 10),
-                comments: parseInt(card.querySelector('[class*="comment-count"]')?.textContent || "0", 10),
-                views: (() => {
-                    const v = card.querySelector('[class*="play-count"]')?.textContent;
-                    return v ? parseInt(v, 10) : null;
-                })(),
-                linkHref: link ? link.href : "",
-            };
-        });
+    ``cover`` is the card's ``<img>`` thumbnail src - this is the cover users
+    actually see on Douyin and is preferred over the aweme-detail ``video.cover``
+    field (which can resolve to a different, processed image variant).
+    """
+    js_code = r"""() => {
+        const seen = new Set();
+        const out = [];
+        const pickCover = (a) => {
+            const imgs = a.querySelectorAll('img');
+            // Prefer a douyinpic CDN image (the real cover); the like icon is
+            // an inline <svg>, not an <img>, so the card's only <img> is the cover.
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+                if (src && (src.indexOf('douyinpic') !== -1 || src.indexOf('tplv-dy') !== -1)) return src;
+            }
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('src') || img.getAttribute('data-src') || '';
+                if (src) return src;
+            }
+            return '';
+        };
+        for (const a of document.querySelectorAll('a[href*="/video/"]')) {
+            const m = a.href.match(/\/video\/(\d+)/);
+            if (!m || seen.has(m[1])) continue;
+            seen.add(m[1]);
+            out.push({
+                vid: m[1],
+                href: 'https://www.douyin.com/video/' + m[1],
+                title: (a.textContent || '').trim().slice(0, 200),
+                cover: pickCover(a),
+            });
+        }
+        return out;
     }
     """
-
-    raw_cards: list[dict] = page.evaluate(js_code)
-    results: list[ParsedCard] = []
-    now = datetime.now()
-
-    for raw in raw_cards:
-        vid = raw.get("vid", "") or _extract_vid(raw.get("linkHref", ""))
-        if not vid:
-            logger.warning("Skipping card without vid")
-            continue
-        published = parse_douyin_time(raw.get("publishTime", "\u521a\u521a"), now)
-        results.append(
-            ParsedCard(
-                vid=vid,
-                title=raw.get("title", ""),
-                cover_url=raw.get("coverUrl") or None,
-                video_url=raw.get("videoUrl") or raw.get("linkHref") or None,
-                published_at=published,
-                likes=raw.get("likes", 0),
-                comments=raw.get("comments", 0),
-                views=raw.get("views"),
-            )
-        )
-    return results
+    return list(page.evaluate(js_code))
 
 
-def _extract_vid(href: str) -> str:
+def extract_vid(href: str) -> str:
     if m := _RE_VID.search(href):
         return m.group(1)
     return ""
 
 
-def card_to_collected(card: ParsedCard) -> CollectedVideo:
+def meta_to_collected(meta: VideoMeta, vid: str, page_url: str, cover: str | None = None) -> CollectedVideo:
+    """Map a resolved :class:`VideoMeta` to a :class:`CollectedVideo`.
+
+    ``published_at`` falls back to ``now`` when the aweme detail was not
+    captured - the video is still collectable, but it cannot be time-window
+    filtered, so callers should treat ``None``-detail videos as in-window and
+    log a warning.
+
+    ``cover`` is the list-page card thumbnail (the cover users see on Douyin);
+    it takes priority over ``meta.cover_url`` (the aweme-detail
+    ``video.cover`` field, which can resolve to a different processed image).
+    """
+    if meta.published_at is None:
+        logger.warning("Video %s has no published_at (detail XHR not captured); using now.", vid)
     return CollectedVideo(
         platform="douyin",
-        platform_vid=card.vid,
-        title=card.title,
-        video_url=card.video_url,
-        cover_url=card.cover_url,
-        published_at=card.published_at,
-        stats=VideoStats(likes=card.likes, comments=card.comments, views=card.views),
+        platform_vid=vid,
+        title=meta.title or "",
+        description=meta.description,
+        video_url=str(meta.cdn_url) if meta.cdn_url else page_url,
+        cover_url=cover or meta.cover_url,
+        published_at=meta.published_at or datetime.now(UTC),
+        stats=VideoStats(
+            likes=meta.likes,
+            comments=meta.comments,
+            favorites=meta.favorites,
+            shares=meta.shares,
+            views=meta.views,
+        ),
+        hashtags=list(meta.tags),
     )

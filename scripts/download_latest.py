@@ -1,23 +1,31 @@
-"""Download the latest video from a Douyin creator homepage.
+"""Download the latest video from a Douyin creator homepage for a given day.
+
+Defaults to **today**; pass ``--date YYYY-MM-DD`` for a specific calendar day.
+If the creator posted nothing that day, prints a notice and exits 0.
 
 Uses the logged-in browser profile + the Downloader. The creator's homepage is
-scraped only for the first ``/video/`` link (the collector's card selector is
-still broken, so this bypasses collection). For the chosen video it then:
-  1. fetches metadata (title/description/tags/likes/...) + resolves the CDN URL
-     in a single browser navigation,
-  2. saves a rich ``metadata.json``,
-  3. downloads the complete mp4 using the resolved CDN URL (no re-navigation).
+scraped for ``/video/`` links (newest first); for each candidate it fetches
+metadata (title/description/tags/likes/... + published_at) + resolves the CDN
+URL in a single browser navigation, picks the first video whose ``published_at``
+falls in the target day, then:
+  1. saves a rich ``metadata.json``,
+  2. downloads the complete mp4 using the resolved CDN URL (no re-navigation).
+
+Stops searching after ``OUT_OF_WINDOW_PAGE_THRESHOLD`` consecutive videos older
+than the target day, so it won't walk the entire backlog.
 
 Usage:
-    uv run python scripts/download_latest.py <creator_homepage_url>
+    uv run python scripts/download_latest.py <creator_homepage_url>              # today
+    uv run python scripts/download_latest.py <url> --date 2026-07-11
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Make Chinese title/tags print correctly on the Windows console.
@@ -27,6 +35,9 @@ except Exception:
     pass
 
 from creator_agent.browser.manager import BrowserConfig, BrowserManager
+from creator_agent.collector.base import day_filter, today_filter
+from creator_agent.collector.douyin.collector import OUT_OF_WINDOW_PAGE_THRESHOLD
+from creator_agent.collector.douyin.parser import collect_video_links
 from creator_agent.config import load_settings
 from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.creator import Creator
@@ -36,22 +47,24 @@ from creator_agent.storage.file_storage import FileStorage
 _UID_RE = re.compile(r"/user/([^/?]+)")
 
 
-def _extract_video_links(page) -> list[dict]:
-    js = r"""() => {
-        const seen = new Set();
-        const out = [];
-        for (const a of document.querySelectorAll('a[href*="/video/"]')) {
-            const m = a.href.match(/\/video\/(\d+)/);
-            if (!m || seen.has(m[1])) continue;
-            seen.add(m[1]);
-            out.push({href: a.href, vid: m[1], title: (a.textContent || '').trim().slice(0, 100)});
-        }
-        return out;
-    }"""
-    return page.evaluate(js)
+def _resolve_window(date_str: str | None) -> tuple[str, object]:
+    if date_str:
+        try:
+            target_day = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Invalid date '{date_str}', expected YYYY-MM-DD (e.g. 2026-07-11)")
+            sys.exit(2)
+        return target_day.isoformat(), day_filter(target_day)
+    return "today", today_filter()
 
 
-def main(url: str) -> None:
+def main(url: str, date_str: str | None) -> None:
+    if not url:
+        print("Usage: download_latest.py <creator_homepage_url> [--date YYYY-MM-DD]")
+        sys.exit(2)
+
+    window_label, filter_obj = _resolve_window(date_str)
+
     settings = load_settings()
     storage = FileStorage(settings.storage_dir)
     browser = BrowserManager(BrowserConfig(user_data_dir=settings.browser.user_data_dir, headless=True))
@@ -68,7 +81,7 @@ def main(url: str) -> None:
         platform_uid=uid,
         nickname="download-target",
         homepage_url=url,
-        added_at=datetime.now(UTC),
+        added_at=datetime.now(timezone.utc),
     )
 
     browser.start()
@@ -77,64 +90,81 @@ def main(url: str) -> None:
         print(f"Opening creator homepage: {url}")
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(7000)
-        links = _extract_video_links(page)
+
+        # Scroll a bit to load the video grid, then collect links (newest first).
+        links = collect_video_links(page)
         if not links:
             for _ in range(5):
                 page.evaluate("window.scrollBy(0, window.innerHeight)")
                 page.wait_for_timeout(1500)
-            links = _extract_video_links(page)
+            links = collect_video_links(page)
         page.close()
 
         if not links:
             print("No video links found on creator homepage (page may require login or changed layout).")
             return
 
-        latest = links[0]
-        print(f"Found {len(links)} video(s). Picking the first (top of page):")
-        print(f"  vid   : {latest['vid']}")
-        print(f"  url   : {latest['href']}")
+        print(f"Found {len(links)} video link(s). Searching for {window_label}...")
 
-        # 1) Fetch metadata + resolve CDN URL in one navigation.
-        meta = downloader.fetch_video_meta(latest["href"])
-        print("\nFetched metadata:")
-        print(f"  title    : {meta.title!r}")
-        print(f"  desc     : {meta.description[:120]!r}")
-        print(f"  tags     : {meta.tags}")
-        print(f"  likes    : {meta.likes}")
-        print(f"  comments : {meta.comments}  shares: {meta.shares}  favorites: {meta.favorites}")
-        print(f"  duration : {meta.duration_sec}s   published: {meta.published_at}")
-        print(f"  cover    : {meta.cover_url}")
-        print(f"  cdn_url  : {'resolved' if meta.cdn_url else 'NOT resolved'}")
+        chosen_meta = None
+        chosen_link = None
+        consecutive_out_of_window = 0
+        for link in links:
+            meta = downloader.fetch_video_meta(link["href"])
+            published = meta.published_at
+            if published is not None and published >= filter_obj.end:
+                continue  # newer than the target day; keep looking
+            if published is not None and published < filter_obj.start:
+                consecutive_out_of_window += 1
+                if consecutive_out_of_window >= OUT_OF_WINDOW_PAGE_THRESHOLD:
+                    print(f"Stopped after {consecutive_out_of_window} consecutive videos older than {window_label}.")
+                    break
+                continue
+            # In window (or published_at unknown) - newest in-window video found.
+            chosen_meta = meta
+            chosen_link = link
+            break
 
-        # 2) Build the Video with the rich metadata (keep the stable page URL).
+        if chosen_meta is None or chosen_link is None:
+            print(f"No video found for {window_label}.")
+            return
+
+        print(f"Selected video {chosen_link['vid']} (published: {chosen_meta.published_at}):")
+        print(f"  title    : {chosen_meta.title!r}")
+        print(f"  desc     : {chosen_meta.description[:120]!r}")
+        print(f"  tags     : {chosen_meta.tags}")
+        print(f"  likes    : {chosen_meta.likes}")
+        print(f"  comments : {chosen_meta.comments}  shares: {chosen_meta.shares}  favorites: {chosen_meta.favorites}")
+        print(f"  duration : {chosen_meta.duration_sec}s   cover: {chosen_meta.cover_url}")
+        print(f"  cdn_url  : {'resolved' if chosen_meta.cdn_url else 'NOT resolved'}")
+
         video = Video(
-            id=f"douyin_{latest['vid']}",
+            id=f"douyin_{chosen_link['vid']}",
             creator_id=creator.id,
             platform="douyin",
-            platform_vid=latest["vid"],
-            title=meta.title or latest["title"] or "untitled",
-            description=meta.description,
-            cover_url=meta.cover_url,
-            video_url=latest["href"],
-            published_at=meta.published_at or datetime.now(UTC),
-            duration_sec=meta.duration_sec,
+            platform_vid=chosen_link["vid"],
+            title=chosen_meta.title or chosen_link.get("title", "") or "untitled",
+            description=chosen_meta.description,
+            cover_url=chosen_meta.cover_url,
+            video_url=chosen_link["href"],
+            published_at=chosen_meta.published_at or datetime.now(timezone.utc),
+            duration_sec=chosen_meta.duration_sec,
             stats=VideoStats(
-                likes=meta.likes,
-                comments=meta.comments,
-                favorites=meta.favorites,
-                shares=meta.shares,
-                views=meta.views,
+                likes=chosen_meta.likes,
+                comments=chosen_meta.comments,
+                favorites=chosen_meta.favorites,
+                shares=chosen_meta.shares,
+                views=chosen_meta.views,
             ),
-            tags=meta.tags,
-            collected_at=datetime.now(UTC),
+            tags=chosen_meta.tags,
+            collected_at=datetime.now(timezone.utc),
             status=VideoStatus.NEW,
         )
 
         meta_path = downloader.save_metadata(creator, video)
         print(f"\nMetadata saved: {Path(meta_path).resolve()}")
 
-        # 3) Download the complete mp4 using the pre-resolved CDN URL.
-        path = downloader.download_video(creator, video, direct_url=meta.cdn_url)
+        path = downloader.download_video(creator, video, direct_url=chosen_meta.cdn_url)
         data = path.read_bytes()
         print(f"\nVideo saved: {Path(path).resolve()}")
         print(f"  size      : {len(data):,} bytes ({len(data) / 1024 / 1024:.1f} MB)")
@@ -150,7 +180,7 @@ def main(url: str) -> None:
                     "-show_entries",
                     "format=duration,size:stream=codec_name,codec_type,width,height",
                     "-of",
-                    "default=noprint_wrappers=1",
+                    "default=noprintwrappers=1",
                     str(path),
                 ],
                 capture_output=True,
@@ -167,4 +197,8 @@ def main(url: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "")
+    parser = argparse.ArgumentParser(description="Download the latest Douyin video for a given day.")
+    parser.add_argument("url", help="Creator homepage URL")
+    parser.add_argument("--date", help="Target calendar day (YYYY-MM-DD). Defaults to today.")
+    args = parser.parse_args()
+    main(args.url, args.date)

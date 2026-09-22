@@ -8,8 +8,10 @@ build/
 *.egg
 
 # Project runtime
-storage/
-logs/
+# Leading slash anchors these to the repo root so they only ignore the runtime
+# data dirs, NOT source packages like src/creator_agent/storage/.
+/storage/
+/logs/
 .env
 
 # IDE

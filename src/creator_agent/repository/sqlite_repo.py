@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 from creator_agent.models.creator import Creator
 from creator_agent.models.video import CollectedVideo, Video, VideoStats, VideoStatus
+from creator_agent.storage.naming import video_folder_base, video_folder_name
 
 
 class Repository:
@@ -131,7 +133,13 @@ class Repository:
         now = datetime.now(UTC)
         stats_json = cv.stats.model_dump_json()
         tags_json = json.dumps(cv.hashtags, ensure_ascii=False)
-        storage_path = f"{creator.id}/videos/{video_id}"
+        # Assign a human-readable, collision-suffixed folder for NEW videos
+        # (e.g. ``2026-07-11_张三`` or ``2026-07-11_张三_2``). Existing videos
+        # keep their assigned folder (UPDATE branch below), so the path is
+        # stable across re-syncs.
+        base = video_folder_base(cv.published_at)
+        same_day = self._count_same_day_videos(creator.id, base)
+        storage_path = video_folder_name(cv.published_at, same_day)
 
         existing = self._conn.execute(
             "SELECT * FROM video WHERE platform = ? AND platform_vid = ?",
@@ -185,6 +193,16 @@ class Repository:
         self._conn.commit()
         return self.get_video(video_id)
 
+    def _count_same_day_videos(self, creator_id: str, base: str) -> int:
+        """Count this creator's videos already sharing the same day+nickname base.
+
+        Matches ``base`` exactly or ``base_2``/``base_3``/... so a nickname that
+        is a prefix of another's does not inflate the count.
+        """
+        rows = self._conn.execute("SELECT storage_path FROM video WHERE creator_id = ?", (creator_id,)).fetchall()
+        pat = re.compile(r"^" + re.escape(base) + r"(_\d+)?$")
+        return sum(1 for r in rows if pat.match(r["storage_path"] or ""))
+
     def get_video(self, video_id: str) -> Video | None:
         row = self._conn.execute("SELECT * FROM video WHERE id = ?", (video_id,)).fetchone()
         return self._row_to_video(row) if row else None
@@ -218,6 +236,15 @@ class Repository:
         self._conn.execute(
             "UPDATE video SET status = ? WHERE id = ?",
             (new_status.value, video_id),
+        )
+        self._conn.commit()
+
+    def update_video_cover_url(self, video_id: str, cover_url: str) -> None:
+        """Overwrite a video's stored ``cover_url`` (e.g. after re-scraping the
+        correct list-page cover thumbnail for already-downloaded videos)."""
+        self._conn.execute(
+            "UPDATE video SET cover_url = ? WHERE id = ?",
+            (cover_url, video_id),
         )
         self._conn.commit()
 
@@ -284,4 +311,5 @@ class Repository:
             tags=tags,
             collected_at=datetime.fromisoformat(row["collected_at"]),
             status=VideoStatus(row["status"]),
+            storage_path=row["storage_path"] or "",
         )

@@ -10,6 +10,17 @@ collector:
 downloader:
   timeout_sec: 120
   retry: 3
+asr:
+  enabled: false
+  # Dedicated conda env (creator-asr) - do NOT use the main uv env.
+  env_python: C:/Users/34696/miniconda3/envs/creator-asr/python.exe
+  worker_script: ""   # blank -> resolve src/creator_agent/asr/worker.py from the package
+  model: paraformer-zh
+  vad_model: fsmn-vad
+  punc_model: ct-punc
+  device: cpu          # cuda:0 once cu128 torch is installed in creator-asr; cpu works now
+  # Full gyan.dev build (system PATH has no ffmpeg).
+  ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
 log:
   level: INFO
   file: ./logs/creator-agent.log
