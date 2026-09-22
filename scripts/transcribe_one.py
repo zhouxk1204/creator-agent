@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -33,6 +32,7 @@ from creator_agent.asr.audio_extractor import extract_audio
 from creator_agent.asr.worker import _RESULT_BEGIN, _RESULT_END  # type: ignore
 from creator_agent.browser.manager import BrowserConfig, BrowserManager
 from creator_agent.collector.douyin.meta import fetch_video_meta
+from creator_agent.collector.douyin.url import DouyinUrlError, parse_video_target
 from creator_agent.config import load_settings
 from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.transcript import Transcript, TranscriptSegment
@@ -41,17 +41,13 @@ DEFAULT_VIDEO_ID = "7677189247543135514"
 
 
 def parse_target(raw: str | None) -> tuple[str, str]:
-    """Return ``(video_id, page_url)`` for a Douyin URL, modal URL, or bare id."""
+    """Return ``(video_id, page_url)`` for a Douyin URL, share text, or bare id."""
     if not raw:
         return DEFAULT_VIDEO_ID, f"https://www.douyin.com/video/{DEFAULT_VIDEO_ID}"
-    raw = raw.strip()
-    if raw.isdigit():
-        return raw, f"https://www.douyin.com/video/{raw}"
-    match = re.search(r"/video/(\d+)", raw) or re.search(r"modal_id=(\d+)", raw) or re.search(r"(\d{10,})", raw)
-    if not match:
-        raise SystemExit(f"Could not find a Douyin video id in: {raw!r}")
-    video_id = match.group(1)
-    return video_id, f"https://www.douyin.com/video/{video_id}"
+    try:
+        return parse_video_target(raw)
+    except DouyinUrlError as e:
+        raise SystemExit(str(e)) from e
 
 
 def main(target: str | None = None) -> int:

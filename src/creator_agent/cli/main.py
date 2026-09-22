@@ -421,6 +421,61 @@ def asr(
         repo.close()
 
 
+@app.command(help="Run the full pipeline for one pasted Douyin URL (download + ASR). No arg = read clipboard.")
+def run(
+    url: str | None = typer.Argument(None, help="Douyin video URL / share text / video id. Omit to use the clipboard."),
+    no_asr: bool = typer.Option(False, "--no-asr", help="Download only, skip transcription."),
+):
+    if not url:
+        url = _read_clipboard()
+        if not url:
+            typer.echo("Clipboard is empty. Copy a Douyin link first, or pass it as an argument.")
+            raise typer.Exit(code=1)
+        typer.echo(f"From clipboard: {url[:120]}")
+
+    settings, repo, browser, runner = _init_components()
+    try:
+        browser.start()
+        result = runner.sync_video_url(
+            url,
+            do_asr=not no_asr,
+            timeout_sec=settings.downloader.timeout_sec,
+            progress=lambda msg: typer.echo(f"  → {msg}"),
+        )
+    finally:
+        browser.close()
+        repo.close()
+
+    if result.error:
+        typer.echo(f"FAILED: {result.error}")
+        raise typer.Exit(code=1)
+    typer.echo()
+    typer.echo(f"Done: {result.title[:60]}")
+    typer.echo(f"  creator    : {result.creator_nickname} ({result.creator_id})")
+    typer.echo(f"  video      : {result.video_id}")
+    typer.echo(f"  downloaded : {'yes' if result.downloaded else 'no'}")
+    typer.echo(f"  transcribed: {'yes' if result.transcribed else 'no'}")
+
+
+def _read_clipboard() -> str:
+    """Best-effort clipboard read (macOS pbpaste / Windows PowerShell)."""
+    try:
+        if shutil.which("pbpaste"):
+            out = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=5)
+            return out.stdout.strip()
+        if sys.platform.startswith("win"):
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 @app.command(help="Launch a local web UI to browse collected videos (covers, player, metadata, transcript).")
 def web(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host (default 127.0.0.1, your machine only)."),
@@ -430,10 +485,13 @@ def web(
     repo = Repository(settings.db_path)
     storage = FileStorage(settings.storage_dir)
     typer.echo(f"Web UI ready: http://{host}:{port}  (press Ctrl+C to stop)")
+    typer.echo("Paste a Douyin link into the box at the top of the page to run the full pipeline.")
     try:
+        from creator_agent.web.jobs import RunJobManager
         from creator_agent.web.server import run_server
 
-        run_server(host, port, repo, storage)
+        jobs = RunJobManager(settings)
+        run_server(host, port, repo, storage, jobs=jobs)
     finally:
         repo.close()
 

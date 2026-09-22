@@ -88,6 +88,11 @@ header .spacer { flex: 1; }
 header select, header input { background: #0f1115; border: 1px solid #2c323d; color: #e6e6e6;
                               border-radius: 8px; padding: 7px 10px; font-size: 13px; }
 header input { width: 220px; }
+header form.paste { display: flex; gap: 8px; align-items: center; }
+header form.paste input { width: 320px; }
+header form.paste button { background: #2563eb; border: none; color: #fff; border-radius: 8px;
+                           padding: 7px 14px; font-size: 13px; cursor: pointer; }
+header form.paste button:hover { background: #1d4ed8; }
 main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
 .card { background: #181c24; border: 1px solid #262b35; border-radius: 12px; overflow: hidden;
@@ -135,6 +140,20 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 .seg .ts:hover { text-decoration: underline; }
 .seg .txt { color: #d8dce4; }
 .placeholder { color: #8a93a3; padding: 24px 0; text-align: center; }
+
+/* run status */
+.runbox { max-width: 720px; margin: 40px auto; background: #181c24; border: 1px solid #262b35;
+          border-radius: 12px; padding: 24px; }
+.runbox h1 { font-size: 18px; margin: 0 0 12px; }
+.runbox .url { color: #8a93a3; font-size: 13px; word-break: break-all; margin-bottom: 16px; }
+.runbox ul.stages { list-style: none; padding: 0; margin: 0 0 16px; }
+.runbox ul.stages li { padding: 6px 0; border-bottom: 1px solid #232833; font-size: 14px; }
+.runbox ul.stages li::before { content: "✓ "; color: #4ade80; }
+.runbox .running::before { content: "… "; color: #fbbf24; }
+.runbox .error { color: #f87171; font-size: 14px; margin: 12px 0; white-space: pre-wrap; }
+.runbox .actions { display: flex; gap: 12px; margin-top: 16px; }
+.runbox .actions a { color: #7aa2ff; font-size: 14px; text-decoration: none; }
+.runbox .actions a:hover { text-decoration: underline; }
 """
 
 
@@ -174,10 +193,15 @@ def render_list(items: list[dict], creators: list[Creator]) -> str:
             f"  </div>"
             f"</a>"
         )
-    grid = "".join(cards) if cards else '<div class="empty">暂无已采集的视频。先运行 sync 采集一些吧。</div>'
+    grid = "".join(cards) if cards else '<div class="empty">暂无已采集的视频。粘贴上方链接运行，或先运行 sync 采集。</div>'
     body = (
         "<header><h1>创作者视频库</h1>"
         f'<span class="count">{len(items)} 个视频</span>'
+        '<form class="paste" method="post" action="/run">'
+        '<input name="url" placeholder="粘贴抖音链接 / 分享口令，回车运行完整 pipeline" '
+        'autocomplete="off" required>'
+        "<button type=\"submit\">运行</button>"
+        "</form>"
         '<div class="spacer"></div>'
         f'<select id="creatorFilter">{options}</select>'
         '<input id="search" placeholder="搜索标题 / 标签…" autocomplete="off">'
@@ -266,3 +290,65 @@ def render_detail(video: Video, creator: Creator | None, transcript: Transcript 
         f'<div id="fulltext" style="display:none">{full_text}</div>'
     )
     return _page(video.title, body)
+
+
+def render_run(job: dict | None, submit_error: str | None = None) -> str:
+    """Status page for a pasted-URL pipeline run. Auto-refreshes while running."""
+    if submit_error:
+        body = (
+            '<header><a class="back" href="/">← 返回列表</a></header>'
+            '<main><div class="runbox"><h1>无法提交任务</h1>'
+            f'<div class="error">{_esc(submit_error)}</div>'
+            '<div class="actions"><a href="/">返回列表</a></div>'
+            "</div></main>"
+        )
+        return _page("运行失败", body)
+
+    if not job:
+        body = (
+            '<header><a class="back" href="/">← 返回列表</a></header>'
+            '<main><div class="runbox"><h1>暂无任务</h1>'
+            '<div class="url">还没有提交过链接。回到首页，在顶部输入框粘贴抖音链接。</div>'
+            '<div class="actions"><a href="/">返回列表</a></div>'
+            "</div></main>"
+        )
+        return _page("运行状态", body)
+
+    running = not job.get("done")
+    error = job.get("error")
+    stages = job.get("stages") or []
+    stages_html = "".join(f"<li>{_esc(s)}</li>" for s in stages)
+    if running:
+        stages_html += '<li class="running">正在处理…</li>'
+
+    if running:
+        heading = "运行中…"
+    elif error:
+        heading = "运行失败"
+    else:
+        heading = "运行完成 ✓"
+
+    result_html = ""
+    if not running and not error:
+        title = _esc(job.get("title") or "")
+        marks = []
+        if job.get("transcribed"):
+            marks.append('<span class="badge ok">已转写</span>')
+        result_html = (
+            f'<div class="meta-row">{title} {" ".join(marks)}</div>'
+            f'<div class="actions"><a href="/video/{_esc(job.get("video_id") or "")}">查看视频与文案 →</a>'
+            '<a href="/">返回列表</a></div>'
+        )
+    elif error:
+        result_html = f'<div class="error">{_esc(error)}</div><div class="actions"><a href="/">返回列表</a></div>'
+
+    refresh = '<meta http-equiv="refresh" content="3">' if running else ""
+    body = (
+        '<header><a class="back" href="/">← 返回列表</a></header>'
+        f'<main><div class="runbox"><h1>{heading}</h1>'
+        f'<div class="url">{_esc(job.get("url") or "")}</div>'
+        f'<ul class="stages">{stages_html}</ul>'
+        f"{result_html}"
+        "</div></main>"
+    )
+    return _page(f"运行状态 - {heading}", body).replace("<head>", f"<head>{refresh}", 1)

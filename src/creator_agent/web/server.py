@@ -22,16 +22,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from creator_agent.models.video import VideoStatus
 from creator_agent.storage.file_storage import FileStorage
-from creator_agent.web.templates import render_detail, render_list
+from creator_agent.web.templates import render_detail, render_list, render_run
 
 if TYPE_CHECKING:
     from creator_agent.models.creator import Creator
     from creator_agent.models.video import Video
     from creator_agent.repository.sqlite_repo import Repository
+    from creator_agent.web.jobs import RunJobManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ _ROUTE_DETAIL = re.compile(r"^/video/([^/]+)$")
 _ROUTE_COVER = re.compile(r"^/cover/([^/]+)$")
 _ROUTE_STREAM = re.compile(r"^/stream/([^/]+)$")
 _ROUTE_AVATAR = re.compile(r"^/avatar/([^/]+)$")
+_ROUTE_RUN = re.compile(r"^/run$")
 
 _CHUNK = 1 << 16  # 64 KB streaming chunk
 
@@ -66,10 +68,18 @@ class WebServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, server_address, handler, repo: Repository, storage: FileStorage) -> None:
+    def __init__(
+        self,
+        server_address,
+        handler,
+        repo: Repository,
+        storage: FileStorage,
+        jobs: RunJobManager | None = None,
+    ) -> None:
         super().__init__(server_address, handler)
         self.repo = repo
         self.storage = storage
+        self.jobs = jobs
 
 
 class WebHandler(BaseHTTPRequestHandler):
@@ -85,6 +95,10 @@ class WebHandler(BaseHTTPRequestHandler):
     def storage(self) -> FileStorage:
         return self.server.storage  # type: ignore[attr-defined]
 
+    @property
+    def jobs(self) -> RunJobManager | None:
+        return self.server.jobs  # type: ignore[attr-defined]
+
     # -- routing ------------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib API
@@ -92,6 +106,8 @@ class WebHandler(BaseHTTPRequestHandler):
         try:
             if _ROUTE_LIST.match(path):
                 self._serve_list()
+            elif _ROUTE_RUN.match(path):
+                self._serve_run()
             elif m := _ROUTE_DETAIL.match(path):
                 self._serve_detail(_is_safe_id(m.group(1)))
             elif m := _ROUTE_COVER.match(path):
@@ -115,7 +131,43 @@ class WebHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
+    def do_POST(self) -> None:  # noqa: N802 - stdlib API
+        path = urlparse(self.path).path
+        try:
+            if _ROUTE_RUN.match(path):
+                self._handle_run_post()
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+        except Exception:
+            logger.exception("web POST error for %s", path)
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
+
     # -- pages --------------------------------------------------------------
+
+    def _handle_run_post(self) -> None:
+        """Form submit from the list page: queue the pasted URL, redirect to /run."""
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(min(length, 1 << 16)).decode("utf-8", "replace")
+        url = (parse_qs(body).get("url") or [""])[0]
+
+        if not self.jobs:
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Run jobs not enabled")
+            return
+        accepted, message = self.jobs.submit(url)
+        if not accepted:
+            self._send_html(render_run(None, submit_error=message))
+            return
+        # 303 so the follow-up GET renders the status page.
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", "/run")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _serve_run(self) -> None:
+        if not self.jobs:
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Run jobs not enabled")
+            return
+        self._send_html(render_run(self.jobs.snapshot()))
 
     def _serve_list(self) -> None:
         creators = self.repo.list_creators()
@@ -282,9 +334,15 @@ class WebHandler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
-def run_server(host: str, port: int, repo: Repository, storage: FileStorage) -> None:
+def run_server(
+    host: str,
+    port: int,
+    repo: Repository,
+    storage: FileStorage,
+    jobs: RunJobManager | None = None,
+) -> None:
     """Block serving the web UI until interrupted (Ctrl+C)."""
-    server = WebServer((host, port), WebHandler, repo, storage)
+    server = WebServer((host, port), WebHandler, repo, storage, jobs=jobs)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
