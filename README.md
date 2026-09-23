@@ -38,6 +38,20 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 0 2 * * * cd /path/to/creator-agent && uv run creator-agent sync >> logs/cron.log 2>&1
 ```
 
+## Windows 快捷方式（bat/ 目录）
+
+- **`bat/download.bat`** —— 只下载单个抖音视频，不转录：
+  - 双击运行 → 自动从剪贴板读取抖音链接下载
+  - 或命令行带参数：`bat\download.bat "https://v.douyin.com/xxxx"`（URL 含 `&` 时必须加双引号）
+- **`bat/transcribe.bat`** —— 下载 + ASR 转文字，用法同 `download.bat`（需要 creator-asr 环境，见 `asr` 命令说明）
+- **`bat/sync.bat`** —— 同步所有已注册博主的昨天视频，参数透传（如 `bat\sync.bat --days 3`）
+- **`bat/creator-agent.bat`** —— 交互菜单（doctor / sync / creator list）
+- **`bat/doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）：
+  - 双击运行 → 输入集数（如 `934`）
+  - 或命令行带参数：`bat\doraemon.bat 934`
+  - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，结果存到 `storage/doraemon/0934/`（`metadata.json` + `story.md` + 图片）
+  - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
+
 ## 架构要点
 
 1. **插件化 Collector** —— `collector/base.py` 是抽象基类，抖音是首个实现。后续加 B 站 / YouTube 只需新增子包。

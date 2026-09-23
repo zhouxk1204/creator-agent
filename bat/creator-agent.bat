@@ -1,14 +1,14 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
 echo   Creator Agent
 echo ========================================
 echo.
-echo  1. doctor     (»·¾³¼ì²é)
-echo  2. sync       (Í¬²½½ñÈÕÊÓÆµ)
-echo  3. sync -d 3  (»ØËÝ3Ìì)
-echo  4. creator list (´´×÷ÕßÁÐ±í)
+echo  1. doctor     (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½)
+echo  2. sync       (Í¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµ)
+echo  3. sync -d 3  (ï¿½ï¿½ï¿½ï¿½3ï¿½ï¿½)
+echo  4. creator list (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½)
 echo  5. exit
 echo.
 echo ========================================
