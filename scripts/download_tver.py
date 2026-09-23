@@ -9,7 +9,7 @@ instead of scraping it we call TVer's internal API directly with the series id:
 
 The video itself is downloaded with yt-dlp (TVer serves unencrypted HLS).
 
-Output: storage/tver/{series_id}/<title> [<episode_id>].mp4 (+ thumbnail/info-json)
+Output: storage/tver/{series_id}/<title> [<episode_id>].mp4 (+ .jpg thumbnail/info-json)
 
 Usage:
     uv run python scripts/download_tver.py                 # latest Doraemon episode
@@ -83,7 +83,11 @@ def download(episode_id: str, out_dir: Path) -> None:
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--write-thumbnail",
+        "--convert-thumbnails", "jpg",
         "--write-info-json",
+        # TVer serves H.264/AAC HLS, so a remux is enough — no re-encode.
+        "--merge-output-format", "mp4",
+        "--remux-video", "mp4",
         "-o", "%(title)s [%(id)s].%(ext)s",
         "--paths", str(out_dir),
     ]
