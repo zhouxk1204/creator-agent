@@ -51,6 +51,12 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 或命令行带参数：`bat\doraemon.bat 934`
   - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，结果存到 `storage/doraemon/0934/`（`metadata.json` + `story.md` + 图片）
   - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
+- **`bat/tver.bat`** —— 下载 TVer 视频（默认最新一集哆啦A梦）：
+  - 双击运行 → 下载最新一集到 `storage/tver/srtsxzl3si/`（含封面和 info-json）
+  - `--list` 只列出在播剧集；`--all` 下载全部在播；`--episode epenb4xglc` 指定一集；`--series <id或URL>` 换其他节目
+  - 原理：`service-api.tver.jp` 内部 API 列剧集 + yt-dlp 下载（无加密 HLS，最高 1080p）
+  - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
+  - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
 
 ## 架构要点
 
