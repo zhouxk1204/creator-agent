@@ -12,6 +12,9 @@ dependencies = [
     "httpx>=0.27,<1",
     "pyyaml>=6.0,<7",
     "yt-dlp>=2026.1",
+    # Lets yt-dlp decrypt TVer's AES-128 HLS in-process (instead of delegating
+    # to ffmpeg), which enables parallel fragment downloads (-N).
+    "pycryptodomex>=3.20",
 ]
 
 [project.scripts]

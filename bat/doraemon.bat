@@ -1,6 +1,12 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0.."
+call "%~dp0_bootstrap.bat"
+if errorlevel 1 (
+    echo.
+    echo Setup failed - see the message above.
+    pause >nul
+    exit /b 1
+)
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
 echo   Doraemon Episode Fetch (TV Asahi)
@@ -10,13 +16,15 @@ set ep=%~1
 if "%ep%"=="" set /p ep="Episode number (e.g. 934): "
 if "%ep%"=="" (
     echo No episode number given.
-    pause
-    goto end
+    pause >nul
+    exit /b 1
 )
-.venv\Scripts\python.exe scripts\fetch_doraemon.py %ep%
+"%PY%" scripts\fetch_doraemon.py %ep%
+set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
-echo  Done! Press any key to close.
+if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
+if "%RC%"=="0" echo  Done! Press any key to close.
 echo ========================================
 pause >nul
-:end
+exit /b %RC%

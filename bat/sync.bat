@@ -1,13 +1,23 @@
 @echo off
-cd /d "%~dp0.."
+chcp 65001 >nul
+call "%~dp0_bootstrap.bat"
+if errorlevel 1 (
+    echo.
+    echo Setup failed - see the message above.
+    pause >nul
+    exit /b 1
+)
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
 echo   Creator Agent - Sync
 echo ========================================
 echo.
-.venv\Scripts\python.exe -m creator_agent.cli.main sync %*
+"%PY%" -m creator_agent.cli.main sync %*
+set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
-echo  Done! Press any key to close.
+if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
+if "%RC%"=="0" echo  Done! Press any key to close.
 echo ========================================
 pause >nul
+exit /b %RC%

@@ -36,10 +36,11 @@ DEFAULT_SERIES = "srtsxzl3si"  # ドラえもん — the TVer link on tv-asahi.c
 OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "tver"
 
 # Make non-ASCII print correctly on the Windows console.
-try:
-    sys.stdout.reconfigure(encoding="utf-8")
-except Exception:
-    pass
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _series_id(arg: str) -> str:
@@ -88,6 +89,12 @@ def download(episode_id: str, out_dir: Path) -> None:
         # TVer serves H.264/AAC HLS, so a remux is enough — no re-encode.
         "--merge-output-format", "mp4",
         "--remux-video", "mp4",
+        # Parallel HLS fragments — needs pycryptodomex (decrypts AES-128 in
+        # process; without it yt-dlp delegates to ffmpeg, which is sequential).
+        "-N", "8",
+        # TVer connection is flaky; retry metadata + fragments harder.
+        "--retries", "10",
+        "--fragment-retries", "10",
         "-o", "%(title)s [%(id)s].%(ext)s",
         "--paths", str(out_dir),
     ]
@@ -96,7 +103,15 @@ def download(episode_id: str, out_dir: Path) -> None:
         cmd += ["--ffmpeg-location", ffmpeg]
     cmd.append(f"https://tver.jp/episodes/{episode_id}")
     print(f"  $ {' '.join(cmd[2:])}")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"yt-dlp failed for episode {episode_id} (exit code {e.returncode}). "
+            "Usually a transient network reset to tver.jp — just retry. If it keeps "
+            "failing, route through a Japanese proxy, e.g. set HTTPS_PROXY=http://host:port "
+            "before running (yt-dlp honors it)."
+        ) from e
 
 
 def main() -> None:
