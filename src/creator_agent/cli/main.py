@@ -434,6 +434,77 @@ def asr(
 
 
 @app.command(
+    name="ja-asr",
+    help="Vocal-separated Japanese ASR for local video files (Qwen3-ASR). Writes <name>.txt / .srt / .transcript.json.",
+)
+def ja_asr(
+    videos: list[str] | None = typer.Argument(
+        None, help="Video paths / globs. Omit to process everything in ja_asr.input_dir."
+    ),
+    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: next to each video)."),
+    language: str | None = typer.Option(None, "--language", "-l", help="ASR language (default: config, Japanese)."),
+    device: str | None = typer.Option(None, "--device", help="Override device (cuda:0 / mps / cpu)."),
+    model: str | None = typer.Option(None, "--model", help="Override ASR model (e.g. Qwen/Qwen3-ASR-0.6B-hf)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Reprocess videos that already have a .srt."),
+):
+    import glob as globmod
+
+    from creator_agent.asr.ja_transcriber import JaTranscriber, scan_videos, split_pending
+
+    settings = load_settings()
+    ja = settings.ja_asr
+    overrides = {k: v for k, v in {"language": language, "device": device, "model": model}.items() if v}
+    if overrides:
+        ja = ja.model_copy(update=overrides)
+
+    out = Path(out_dir) if out_dir else None
+    if videos:
+        # Expand globs ourselves (Windows cmd does no glob expansion).
+        paths: list[Path] = []
+        for arg in videos:
+            matches = [Path(m) for m in sorted(globmod.glob(arg, recursive=True)) if Path(m).is_file()]
+            if matches:
+                paths.extend(matches)
+            else:
+                typer.echo(f"  ! not found: {arg}")
+    else:
+        input_dir = Path(ja.input_dir)
+        input_dir.mkdir(parents=True, exist_ok=True)
+        paths = scan_videos(input_dir)
+        typer.echo(f"Scanning {input_dir} ...")
+        if not paths:
+            typer.echo(f"No videos found. Drop video files into {input_dir} and re-run.")
+            return
+
+    if force:
+        pending, skipped = paths, []
+    else:
+        pending, skipped = split_pending(paths, out)
+    for p in skipped:
+        typer.echo(f"  - skip (has .srt): {p.name}")
+    if not pending:
+        typer.echo(f"Nothing to do ({len(skipped)} already transcribed; --force to redo).")
+        return
+
+    # Only require the worker env once there is actual work to do.
+    if not ja.env_python or not Path(ja.env_python).exists():
+        typer.echo(
+            "JA ASR is not configured. Set ja_asr.env_python in config/settings.yaml "
+            "to the dedicated creator-asr-ja env's python (see README)."
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Transcribing {len(pending)} video(s) with vocal separation + {ja.model} ...")
+    transcriber = JaTranscriber(settings=ja)
+    done, failed = transcriber.transcribe_files(pending, out)
+    typer.echo(f"Done: {done} transcribed, {len(failed)} failed.")
+    for name, err in failed:
+        typer.echo(f"  {name}: {err}")
+    if failed and done == 0:
+        raise typer.Exit(code=1)
+
+
+@app.command(
     help="Run the full pipeline for one pasted video URL (Douyin / Xiaohongshu). "
     "Download + ASR. No arg = read the clipboard."
 )

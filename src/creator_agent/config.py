@@ -36,6 +36,20 @@ class AsrSettings(BaseModel):
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
 
 
+class JaAsrSettings(BaseModel):
+    # Japanese ASR (vocal separation + Qwen3-ASR) runs in a DEDICATED conda env
+    # (creator-asr-ja), invoked via subprocess — transformers>=5.13 may conflict
+    # with the FunASR env, so keep them separate. File-based tool, offline.
+    env_python: str = ""  # path to the creator-asr-ja env's python
+    input_dir: str = "./storage/ja_inbox"  # drop videos here; `ja-asr` with no args scans it
+    model: str = "Qwen/Qwen3-ASR-1.7B-hf"  # or Qwen/Qwen3-ASR-0.6B-hf for speed
+    sep_model: str = ""  # audio-separator model filename; blank = default BS-RoFormer
+    device: str = "cuda:0"  # "mps" / "cpu" for Mac debugging
+    language: str = "Japanese"
+    keep_vocals: bool = False  # keep isolated vocals.wav (only with --out-dir)
+    ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
+
+
 class LogSettings(BaseModel):
     level: str = "INFO"
     file: str = "./logs/creator-agent.log"
@@ -50,6 +64,7 @@ class Settings(BaseSettings):
     collector: CollectorSettings = CollectorSettings()
     downloader: DownloaderSettings = DownloaderSettings()
     asr: AsrSettings = AsrSettings()
+    ja_asr: JaAsrSettings = JaAsrSettings()
     log: LogSettings = LogSettings()
 
     model_config = {"env_prefix": "CREATOR_AGENT_", "env_nested_delimiter": "__"}

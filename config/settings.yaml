@@ -26,3 +26,14 @@ log:
   file: ./logs/creator-agent.log
   rotation: 10 MB
   retention: 7 days
+ja_asr:
+  # Dedicated conda env (creator-asr-ja) - separate from creator-asr (FunASR)
+  # because Qwen3-ASR needs transformers>=5.13. See README "日语 ASR" section.
+  env_python: C:/Users/34696/miniconda3/envs/creator-asr-ja/python.exe
+  input_dir: ./storage/ja_inbox   # 把视频放进这个目录，ja-asr 不带参数时全量处理
+  model: Qwen/Qwen3-ASR-1.7B-hf   # Qwen/Qwen3-ASR-0.6B-hf for a faster first run
+  sep_model: ""                   # blank -> audio-separator default BS-RoFormer
+  device: cuda:0                  # cpu works too (slow); mps on Mac
+  language: Japanese
+  keep_vocals: false
+  ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
