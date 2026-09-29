@@ -10,7 +10,7 @@ class Creator(BaseModel):
     """Creator domain model."""
 
     id: str
-    platform: Literal["douyin", "bilibili", "youtube"]
+    platform: Literal["douyin", "xiaohongshu", "bilibili", "youtube"]
     platform_uid: str
     nickname: str
     homepage_url: HttpUrl

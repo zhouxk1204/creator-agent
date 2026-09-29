@@ -15,6 +15,8 @@ dependencies = [
     # Lets yt-dlp decrypt TVer's AES-128 HLS in-process (instead of delegating
     # to ffmpeg), which enables parallel fragment downloads (-N).
     "pycryptodomex>=3.20",
+    # Lets scripts/comfyui_run.py listen to ComfyUI progress events in real time.
+    "websocket-client>=1.8,<2",
 ]
 
 [project.scripts]

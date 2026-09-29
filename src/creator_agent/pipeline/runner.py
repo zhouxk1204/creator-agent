@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 
 from creator_agent.collector.base import CollectFilter, today_filter
 from creator_agent.collector.douyin.collector import DouyinCollector
-from creator_agent.collector.douyin.meta import aweme_to_meta, navigate_and_capture
+from creator_agent.collector.douyin.meta import DOUYIN_REFERER, aweme_to_meta, navigate_and_capture
 from creator_agent.collector.douyin.url import parse_video_target
+from creator_agent.collector.xhs.meta import XHS_REFERER, XhsNoteMeta, diagnose_empty_state, fetch_note_meta
+from creator_agent.collector.xhs.url import is_xhs_url, parse_note_target
 from creator_agent.models.creator import Creator
 from creator_agent.models.video import CollectedVideo, VideoStats, VideoStatus
 
@@ -42,6 +44,17 @@ class SingleVideoResult:
     downloaded: bool = False
     transcribed: bool = False
     error: str | None = None
+
+
+def _make_stage(progress: Callable[[str], None] | None) -> Callable[[str], None]:
+    """A stage reporter that always logs and optionally forwards to the caller."""
+
+    def stage(msg: str) -> None:
+        logger.info("%s", msg)
+        if progress:
+            progress(msg)
+
+    return stage
 
 
 class PipelineRunner:
@@ -163,23 +176,33 @@ class PipelineRunner:
         timeout_sec: int = 120,
         progress: Callable[[str], None] | None = None,
     ) -> SingleVideoResult:
-        """Run the full pipeline for one pasted Douyin URL / share text / id.
+        """Run the full pipeline for one pasted video URL (Douyin or Xiaohongshu).
 
-        Same state machine as :meth:`sync_creator` (NEW -> METADATA_SAVED ->
-        VIDEO_DOWNLOADED -> ASR_DONE), just entered with a single video instead
-        of a creator window. The creator is auto-registered from the aweme
-        detail's author if not already known, so the result shows up in the
-        web UI and is resumable like any synced video.
+        Dispatches on the link itself, so the CLI's ``run`` command and the web
+        UI's paste box stay platform-agnostic: ``sync_video_url`` is the only
+        entry point either of them needs.
+
+        Both branches enter the same state machine as :meth:`sync_creator`
+        (NEW -> METADATA_SAVED -> VIDEO_DOWNLOADED -> ASR_DONE), just with one
+        video instead of a creator window, so a run is resumable and shows up in
+        the web UI like any synced video.
 
         ``progress`` (if given) is called with a short human-readable message
         at each stage boundary - the CLI prints them, the web UI lists them.
         """
+        if is_xhs_url(raw):
+            return self._sync_xhs_video_url(raw, do_asr=do_asr, timeout_sec=timeout_sec, progress=progress)
+        return self._sync_douyin_video_url(raw, do_asr=do_asr, timeout_sec=timeout_sec, progress=progress)
 
-        def stage(msg: str) -> None:
-            logger.info("%s", msg)
-            if progress:
-                progress(msg)
-
+    def _sync_douyin_video_url(
+        self,
+        raw: str,
+        do_asr: bool = True,
+        timeout_sec: int = 120,
+        progress: Callable[[str], None] | None = None,
+    ) -> SingleVideoResult:
+        """The Douyin branch of :meth:`sync_video_url` (URL / share text / id)."""
+        stage = _make_stage(progress)
         result = SingleVideoResult()
         try:
             platform_vid, page_url = parse_video_target(raw, timeout_sec=min(timeout_sec, 30))
@@ -217,43 +240,114 @@ class PipelineRunner:
                 ),
                 hashtags=meta.tags,
             )
-            video = self._repo.upsert_collected(creator, cv)
-
-            if video.status == VideoStatus.NEW:
-                self._downloader.save_metadata(creator, video)
-                self._repo.advance_status(video.id, VideoStatus.METADATA_SAVED)
-                video = self._repo.get_video(video.id) or video
-
-            if video.status == VideoStatus.METADATA_SAVED:
-                stage("下载视频与封面…")
-                self._downloader.download_video(creator, video, direct_url=meta.cdn_url)
-                self._downloader.download_cover(creator, video)
-                self._repo.advance_status(video.id, VideoStatus.VIDEO_DOWNLOADED)
-                video = self._repo.get_video(video.id) or video
-                result.downloaded = True
-                stage("下载完成")
-            elif video.status in (VideoStatus.VIDEO_DOWNLOADED, VideoStatus.ASR_DONE):
-                # Already downloaded by an earlier run - nothing to redo.
-                result.downloaded = True
-                stage("视频已下载（跳过）")
-
-            if do_asr and video.status == VideoStatus.VIDEO_DOWNLOADED:
-                if self._transcriber is None:
-                    stage("ASR 未配置，跳过转写")
-                elif self._storage.load_transcript(creator, video):
-                    result.transcribed = True
-                    stage("已有转写（跳过）")
-                else:
-                    stage("提取音频并转写（ASR，首次加载模型较慢）…")
-                    count, failed = self._transcriber.transcribe_batch(creator, [video])
-                    result.transcribed = count > 0
-                    if failed:
-                        raise RuntimeError(f"ASR 失败: {failed[0][1]}")
-                    stage("转写完成")
+            self._store_and_process(creator, cv, meta.cdn_url, DOUYIN_REFERER, do_asr, stage, result)
         except Exception as e:
             logger.exception("sync_video_url failed for %r", raw)
             result.error = str(e)
         return result
+
+    def _sync_xhs_video_url(
+        self,
+        raw: str,
+        do_asr: bool = True,
+        timeout_sec: int = 120,
+        progress: Callable[[str], None] | None = None,
+    ) -> SingleVideoResult:
+        """The Xiaohongshu branch of :meth:`sync_video_url` (share link / note id)."""
+        stage = _make_stage(progress)
+        result = SingleVideoResult()
+        try:
+            note_id, page_url = parse_note_target(raw, timeout_sec=min(timeout_sec, 30))
+            result.video_id = f"xiaohongshu_{note_id}"
+            stage(f"解析链接 -> 笔记 {note_id}")
+
+            stage("打开笔记页，解析元数据与视频地址…")
+            meta = fetch_note_meta(page_url, self._browser, timeout_sec, note_id=note_id)
+            if meta.note_type and meta.note_type != "video":
+                raise RuntimeError(f"这条笔记是图文（type={meta.note_type}），没有视频可下载。")
+            if not meta.cdn_url:
+                raise RuntimeError(diagnose_empty_state(page_url))
+            result.title = meta.title
+
+            creator = self._ensure_xhs_author_creator(meta, note_id)
+            result.creator_id = creator.id
+            result.creator_nickname = creator.nickname
+            stage(f"创作者: {creator.nickname} ({creator.id})")
+
+            cv = CollectedVideo(
+                platform="xiaohongshu",
+                platform_vid=note_id,
+                title=meta.title or note_id,
+                description=meta.description,
+                # The note URL (with its xsec_token) is stable for the shared
+                # link; the expiring CDN URL is passed to the downloader below.
+                video_url=page_url,  # type: ignore[arg-type]
+                cover_url=meta.cover_url,  # type: ignore[arg-type]
+                published_at=meta.published_at or datetime.now(UTC),
+                stats=VideoStats(
+                    likes=meta.likes,
+                    comments=meta.comments,
+                    favorites=meta.favorites,
+                    shares=meta.shares,
+                    views=meta.views,
+                ),
+                hashtags=meta.tags,
+            )
+            self._store_and_process(creator, cv, meta.cdn_url, XHS_REFERER, do_asr, stage, result)
+        except Exception as e:
+            logger.exception("sync_video_url failed for %r", raw)
+            result.error = str(e)
+        return result
+
+    def _store_and_process(
+        self,
+        creator: Creator,
+        cv: CollectedVideo,
+        cdn_url: str,
+        referer: str,
+        do_asr: bool,
+        stage: Callable[[str], None],
+        result: SingleVideoResult,
+    ) -> None:
+        """Upsert -> metadata -> download -> ASR for one resolved video.
+
+        Shared by both platform branches (they differ only in how the video and
+        its download URL are resolved) so the state machine has exactly one
+        implementation. Raises on failure; the caller records it on ``result``.
+        """
+        video = self._repo.upsert_collected(creator, cv)
+
+        if video.status == VideoStatus.NEW:
+            self._downloader.save_metadata(creator, video)
+            self._repo.advance_status(video.id, VideoStatus.METADATA_SAVED)
+            video = self._repo.get_video(video.id) or video
+
+        if video.status == VideoStatus.METADATA_SAVED:
+            stage("下载视频与封面…")
+            self._downloader.download_video(creator, video, direct_url=cdn_url, referer=referer)
+            self._downloader.download_cover(creator, video, referer=referer)
+            self._repo.advance_status(video.id, VideoStatus.VIDEO_DOWNLOADED)
+            video = self._repo.get_video(video.id) or video
+            result.downloaded = True
+            stage("下载完成")
+        elif video.status in (VideoStatus.VIDEO_DOWNLOADED, VideoStatus.ASR_DONE):
+            # Already downloaded by an earlier run - nothing to redo.
+            result.downloaded = True
+            stage("视频已下载（跳过）")
+
+        if do_asr and video.status == VideoStatus.VIDEO_DOWNLOADED:
+            if self._transcriber is None:
+                stage("ASR 未配置，跳过转写")
+            elif self._storage.load_transcript(creator, video):
+                result.transcribed = True
+                stage("已有转写（跳过）")
+            else:
+                stage("提取音频并转写（ASR，首次加载模型较慢）…")
+                count, failed = self._transcriber.transcribe_batch(creator, [video])
+                result.transcribed = count > 0
+                if failed:
+                    raise RuntimeError(f"ASR 失败: {failed[0][1]}")
+                stage("转写完成")
 
     def _ensure_author_creator(self, detail: dict | None, platform_vid: str) -> Creator:
         """Return the creator row for the aweme's author, registering it if new.
@@ -285,6 +379,37 @@ class PipelineRunner:
         )
         self._repo.add_creator(creator)
         logger.info("Auto-registered creator %s (%s) from pasted URL", creator.id, creator.nickname)
+        return creator
+
+    def _ensure_xhs_author_creator(self, meta: XhsNoteMeta, note_id: str) -> Creator:
+        """Return the creator row for a note's author, registering it if new.
+
+        ``userId`` is the stable per-account id Xiaohongshu puts on every note
+        (unlike the ``xsec_token``, which is minted per share), so it is the
+        natural ``platform_uid``.
+        """
+        platform_uid = meta.author_uid or f"adhoc_{note_id}"
+        creator_id = f"xiaohongshu_{platform_uid}"
+        existing = self._repo.get_creator(creator_id)
+        if existing:
+            return existing
+
+        creator = Creator(
+            id=creator_id,
+            platform="xiaohongshu",
+            platform_uid=platform_uid,
+            nickname=meta.author_nickname or platform_uid,
+            homepage_url=(
+                f"https://www.xiaohongshu.com/user/profile/{platform_uid}"
+                if meta.author_uid
+                else "https://www.xiaohongshu.com/"
+            ),  # type: ignore[arg-type]
+            avatar_url=meta.author_avatar,  # type: ignore[arg-type]
+            added_at=datetime.now(UTC),
+            sync_status="idle",
+        )
+        self._repo.add_creator(creator)
+        logger.info("Auto-registered creator %s (%s) from pasted note", creator.id, creator.nickname)
         return creator
 
     def run_asr(self, creator: Creator, limit: int | None = None) -> SyncResult:

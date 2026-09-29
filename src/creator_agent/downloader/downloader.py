@@ -4,6 +4,7 @@ import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import httpx
 
@@ -42,7 +43,13 @@ class Downloader:
         self._timeout = timeout_sec
         self._retries = retries
 
-    def download_video(self, creator: Creator, video: Video, direct_url: str | None = None) -> Path:
+    def download_video(
+        self,
+        creator: Creator,
+        video: Video,
+        direct_url: str | None = None,
+        referer: str = DOUYIN_REFERER,
+    ) -> Path:
         if not video.video_url and not direct_url:
             raise ValueError(f"Video {video.id} has no video_url")
 
@@ -66,7 +73,7 @@ class Downloader:
         last_exc: Exception | None = None
         for attempt in range(self._retries):
             try:
-                data = self._httpx_get(url, referer=DOUYIN_REFERER)
+                data = self._httpx_get(url, referer=referer)
                 path = self._storage.save_video_file(creator, video, data)
                 logger.info("Video saved (%d bytes): %s", len(data), path)
                 return path
@@ -78,7 +85,7 @@ class Downloader:
 
         raise RuntimeError(f"Video download failed after {self._retries} attempts: {last_exc}")
 
-    def download_cover(self, creator: Creator, video: Video) -> Path | None:
+    def download_cover(self, creator: Creator, video: Video, referer: str = DOUYIN_REFERER) -> Path | None:
         if not video.cover_url:
             logger.info("No cover_url for video %s, skipping.", video.id)
             return None
@@ -86,7 +93,7 @@ class Downloader:
         logger.info("Downloading cover: %s", url)
         for attempt in range(self._retries):
             try:
-                data = self._httpx_get(url, referer=DOUYIN_REFERER)
+                data = self._httpx_get(url, referer=referer)
                 path = self._storage.save_cover(creator, video, data)
                 logger.info("Cover saved: %s", path)
                 return path
@@ -113,7 +120,12 @@ class Downloader:
     # -- internals ----------------------------------------------------------
 
     def _httpx_get(self, url: str, referer: str) -> bytes:
-        cookies = self._browser.get_cookies("www.douyin.com")
+        # The CDN rejects a request whose Referer/UA do not match the site that
+        # embedded the media, and the signed URL is validated against the
+        # session cookies of that site - so both are derived from the referer
+        # (douyin.com or xiaohongshu.com) rather than hardcoded per platform.
+        cookie_domain = urlparse(referer).netloc or "www.douyin.com"
+        cookies = self._browser.get_cookies(cookie_domain)
         cookie_dict = {c["name"]: c["value"] for c in cookies}
         headers = {"Referer": referer, "User-Agent": USER_AGENT}
         with httpx.Client(

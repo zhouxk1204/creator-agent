@@ -58,6 +58,7 @@ src/creator_agent/
 ├── repository/     # SQLite Repository: creator, video, sync_history
 ├── browser/        # BrowserManager (Playwright sync API, persistent context)
 ├── collector/      # base.py (ABC) + douyin/{collector,parser,time_parser,selectors/}
+│                   #             + xhs/{meta,url} (single-note entry, see below)
 ├── downloader/     # httpx+cookies first, Playwright intercept as fallback
 ├── pipeline/       # PipelineRunner — the state machine driver
 ├── scheduler/      # run_once only; crontab for daily
@@ -73,6 +74,7 @@ src/creator_agent/
 ## Things to watch out for
 
 - **Selectors are split across files** (`collector/douyin/selectors/{profile,video,common}.py`) so DOM changes don't require touching parser logic. Parser unit tests use HTML fixtures, not live pages.
+- **Xiaohongshu is a different shape of collector** — `collector/xhs/` has no `Collector` subclass yet: it resolves one *note* from a share link (`meta.py`) instead of walking a creator homepage, and `PipelineRunner.sync_video_url` dispatches to it by URL (`xhs/url.py:is_xhs_url`). The note is server-side rendered into the `/explore` document as `window.__INITIAL_STATE__` — parse it from the **captured document body**, never `page.evaluate` (under IP risk control 300012 the SPA's JS never boots, and the SPA also navigates to `website-login/error`, which the collector aborts via `page.route`). Plain httpx cannot fetch note pages (server 302s to /login on fingerprint) — Playwright is required for the document; the CDN download afterwards is plain httpx. `xsec_token` is minted per share — carry it over verbatim. `note.noteDetailMap` accumulates every note the profile has opened — always key it by the id from the link.
 - **`time_parser.py`** handles Douyin's relative time strings ("2小时前" / "昨天" / "3天前" / "2024-01-01") → UTC datetime. Test it thoroughly — bad time parsing breaks the Filter window logic.
 - **`OUT_OF_WINDOW_PAGE_THRESHOLD = 2`** — scroll stops after 2 consecutive pages with no in-window videos. Don't lower this; it guards against transient empty pages.
 - **Scroll delays are randomized 1–3s** to avoid rate limiting. Don't make them deterministic.

@@ -51,7 +51,12 @@ def extract_audio(video_path: Path, out_path: Path, ffmpeg_path: str = "") -> Pa
         str(out_path),
     ]
     logger.info("Extracting audio: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # text=True without an encoding uses the ANSI codepage (GBK on zh-CN
+    # Windows); ffmpeg echoes the video path in its banner, so a Chinese
+    # filename crashes the stderr reader thread with UnicodeDecodeError (the
+    # extraction itself still succeeds - the traceback is just noise on
+    # stderr). Decode as UTF-8 with replacement instead.
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         tail = (result.stderr or "")[-500:]
         raise RuntimeError(f"ffmpeg failed (exit {result.returncode}): {tail}")

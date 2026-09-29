@@ -193,14 +193,15 @@ def render_list(items: list[dict], creators: list[Creator]) -> str:
             f"  </div>"
             f"</a>"
         )
-    grid = "".join(cards) if cards else '<div class="empty">暂无已采集的视频。粘贴上方链接运行，或先运行 sync 采集。</div>'
+    grid = (
+        "".join(cards) if cards else '<div class="empty">暂无已采集的视频。粘贴上方链接运行，或先运行 sync 采集。</div>'
+    )
     body = (
         "<header><h1>创作者视频库</h1>"
         f'<span class="count">{len(items)} 个视频</span>'
         '<form class="paste" method="post" action="/run">'
-        '<input name="url" placeholder="粘贴抖音链接 / 分享口令，回车运行完整 pipeline" '
-        'autocomplete="off" required>'
-        "<button type=\"submit\">运行</button>"
+        '<input name="url" placeholder="粘贴抖音 / 小红书链接，回车运行完整 pipeline" autocomplete="off" required>'
+        '<button type="submit">运行</button>'
         "</form>"
         '<div class="spacer"></div>'
         f'<select id="creatorFilter">{options}</select>'
@@ -308,7 +309,7 @@ def render_run(job: dict | None, submit_error: str | None = None) -> str:
         body = (
             '<header><a class="back" href="/">← 返回列表</a></header>'
             '<main><div class="runbox"><h1>暂无任务</h1>'
-            '<div class="url">还没有提交过链接。回到首页，在顶部输入框粘贴抖音链接。</div>'
+            '<div class="url">还没有提交过链接。回到首页，在顶部输入框粘贴抖音 / 小红书链接。</div>'
             '<div class="actions"><a href="/">返回列表</a></div>'
             "</div></main>"
         )

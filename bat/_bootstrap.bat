@@ -22,7 +22,7 @@ set "NEED_SYNC=0"
 if not exist "%PY%" (
     set "NEED_SYNC=1"
 ) else (
-    "%PY%" -c "import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('httpx','typer','yt_dlp','creator_agent')) else 1)" >nul 2>&1
+    "%PY%" -c "import importlib.util as u,sys;sys.exit(0 if all(u.find_spec(m) for m in ('httpx','typer','yt_dlp','websocket','creator_agent')) else 1)" >nul 2>&1
     if errorlevel 1 set "NEED_SYNC=1"
 )
 

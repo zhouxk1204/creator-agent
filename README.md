@@ -44,6 +44,11 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 双击运行 → 自动从剪贴板读取抖音链接下载
   - 或命令行带参数：`bat\download.bat "https://v.douyin.com/xxxx"`（URL 含 `&` 时必须加双引号）
 - **`bat/transcribe.bat`** —— 下载 + ASR 转文字，用法同 `download.bat`（需要 creator-asr 环境，见 `asr` 命令说明）
+- **`bat/run.bat`** —— 交互式一键下载 + 转写（抖音 / 小红书自动识别）：
+  - 双击运行 → 提示输入链接，粘贴（右键）后回车即可；直接回车则从剪贴板读
+  - 或命令行带参数：`bat\run.bat "<链接>"`（URL 含 `&` 时必须加双引号）
+  - 整段分享文案也能直接粘，会自动从中抽出链接
+- **`bat/xhs.bat`** —— 小红书笔记：下载视频 + ASR 转文字（见下方「小红书」一节）
 - **`bat/sync.bat`** —— 同步所有已注册博主的昨天视频，参数透传（如 `bat\sync.bat --days 3`）
 - **`bat/creator-agent.bat`** —— 交互菜单（doctor / sync / creator list）
 - **`bat/doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）：
@@ -57,6 +62,47 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 原理：`service-api.tver.jp` 内部 API 列剧集 + yt-dlp 下载（无加密 HLS，最高 1080p）
   - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
+
+## 小红书（视频提取 + 转文案）
+
+小红书笔记走和抖音完全相同的状态机（`NEW -> METADATA_SAVED -> VIDEO_DOWNLOADED -> ASR_DONE`），
+只是入口从「博主主页」换成「单条笔记分享链接」。`creator-agent run` 会按链接自动分发到对应平台，
+所以命令行和 Web UI 的粘贴框都不用区分平台。
+
+```bash
+uv run creator-agent run "https://www.xiaohongshu.com/explore/<note_id>?xsec_token=..."   # 下载 + 转写
+uv run creator-agent run --no-asr "<分享链接>"                                              # 只下载
+uv run creator-agent run                                                                   # 不带参数 = 读剪贴板
+```
+
+Windows 上双击 `bat\xhs.bat` 即可（无参数时从剪贴板读链接）。
+
+**怎么拿到链接**：App 里「分享 → 复制链接」，粘贴整段分享文案也行（会自动从文字里抽出链接、
+丢掉 `apptime`/`track_code` 之类的统计参数，保留笔记页必需的 `xsec_token`）。
+
+**关于登录与风控**：实测（2026-09）未登录访客就能下载；真正的拦路虎是 IP 风控（300012「安全限制」）——
+连续高频访问后小红书会把页面重定向到风控页。采集器已做了两层防护：拦截风控跳转 + 直接从 SSR HTML
+里解析笔记数据（不依赖页面 JS 执行）。遇到「未能从小红书笔记页解析出内容」时，等几十分钟到几小时
+让风控自行解除，或切换网络；反复触发时再登录一次：
+
+```bash
+uv run creator-agent auth-login --platform xiaohongshu   # 打开有头浏览器，登录完在终端按 Enter
+uv run creator-agent auth-login                          # 不带参数 = 抖音（原行为）
+```
+
+> 注意：`auth-login` 不做任何 cookie 自动检测——小红书会给未登录访客也下发 `web_session`，
+> 检测它会误判。登录完成后回终端按 Enter 才会关闭浏览器。
+
+**产物**：和抖音一致，落在 `storage/{作者昵称}/videos/{日期}/` 下 —— 视频、`cover.jpg`、
+`metadata.json`、转写后的 `transcript.txt` / `transcript.json`（含逐句时间戳），音频中间文件 `*.wav`。
+作者会按笔记里的 `userId` 自动注册成 `xiaohongshu_{userId}` 创作者，方便下次复用和归档。
+
+**实现要点**：小红书笔记是服务端渲染的——整条笔记的 JSON 就内嵌在 `/explore` 文档的
+`window.__INITIAL_STATE__` 里。采集器用 Playwright 导航一次，从**网络层抓取的文档正文**里
+brace-match 提取这块 blob（`undefined`→`null` 后 `json.loads`），拿到标题、作者、点赞收藏分享、
+话题标签、封面、时长和同 codec 多档码率的 CDN 直链（按 `size` 挑最大的一份）。不用
+`page.evaluate`：风控状态下页面 JS 根本不会启动。拦截到的 `sns-video-*.xhscdn.com` mp4
+响应作为兜底。视频用 httpx + cookies + Referer 直接下载（CDN 不受 IP 风控影响）。
 
 ## 架构要点
 

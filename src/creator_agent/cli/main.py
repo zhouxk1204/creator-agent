@@ -35,6 +35,14 @@ app = typer.Typer(
 creator_app = typer.Typer(help="Manage creators.")
 app.add_typer(creator_app, name="creator")
 
+# platform -> homepage to open for `auth-login`. Both sites are SPAs visited by
+# the same dedicated profile, so logging in once per site covers every later
+# headless run.
+_LOGIN_SITES = {
+    "douyin": "https://www.douyin.com",
+    "xiaohongshu": "https://www.xiaohongshu.com",
+}
+
 
 def _init_components(storage_dir=None, db_path=None):
     settings = load_settings()
@@ -172,34 +180,39 @@ def doctor():
     raise typer.Exit(code=0 if all_pass else 1)
 
 
-@app.command(name="auth-login", help="Open browser for Douyin login (headful).")
+@app.command(name="auth-login", help="Open a headful browser to log in (douyin / xiaohongshu), then press Enter.")
 def auth_login(
-    force: bool = typer.Option(False, "--force", "-f", help="Re-login even if profile exists."),
+    platform: str = typer.Option("douyin", "--platform", "-p", help="Site to log in to: douyin or xiaohongshu."),
 ):
+    if platform not in _LOGIN_SITES:
+        typer.echo(f"Unknown platform: {platform}. Choose one of: {', '.join(_LOGIN_SITES)}")
+        raise typer.Exit(code=1)
+
+    site_url = _LOGIN_SITES[platform]
     settings = load_settings()
     profile_dir = Path(settings.browser.user_data_dir)
 
-    if profile_dir.exists() and any(profile_dir.iterdir()) and not force:
-        typer.echo(f"Browser profile already exists at {profile_dir}")
-        typer.echo("Use --force to re-login.")
-        return
-
-    typer.echo("Opening browser for Douyin login...")
-    typer.echo("Please log in to Douyin manually in the browser window.")
+    typer.echo(f"Opening browser for {platform} login...")
+    typer.echo(f"  1. Log in to {site_url} in the window that opens.")
+    typer.echo("  2. Come back here and press Enter to save the session and close the browser.")
+    typer.echo("  (Ctrl+C cancels; cookies written up to that point are kept either way.)")
 
     config = BrowserConfig(user_data_dir=profile_dir, headless=False)
     with BrowserManager(config) as browser:
         page = browser.new_page()
-        page.goto("https://www.douyin.com", wait_until="load", timeout=60000)
-        typer.echo("Waiting for login... (press Ctrl+C when done)")
+        page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
         try:
-            page.wait_for_url("https://www.douyin.com/?*", timeout=300000)
-            page.wait_for_timeout(5000)
-            typer.echo("Login detected!")
-        except Exception:
-            typer.echo("Login page loaded, cookies should be set.")
+            # Deliberately no cookie/URL-based auto-detection: xiaohongshu hands
+            # an anonymous ``web_session`` to logged-out visitors, so "a session
+            # cookie exists" is true before anyone logs in - polling for it
+            # closed the window a few seconds after it opened. Waiting for the
+            # human is the only signal that cannot misfire.
+            typer.prompt("Press Enter when logged in", default="", show_default=False)
+        except (KeyboardInterrupt, EOFError):
+            typer.echo("\nCancelled - closing the browser.")
 
     typer.echo(f"Profile saved at {profile_dir}")
+    typer.echo(f'Verify with: uv run creator-agent run --no-asr "<a {platform} link>"')
 
 
 @creator_app.command("add")
@@ -380,8 +393,7 @@ def asr(
                 raise typer.Exit(code=1)
             if video.status != VideoStatus.VIDEO_DOWNLOADED:
                 typer.echo(
-                    f"Video {video_id} status is {video.status.value}; "
-                    "only VIDEO_DOWNLOADED videos can be transcribed."
+                    f"Video {video_id} status is {video.status.value}; only VIDEO_DOWNLOADED videos can be transcribed."
                 )
                 raise typer.Exit(code=1)
             typer.echo(f"Transcribing video {video_id} ({creator.nickname})...")
@@ -421,15 +433,20 @@ def asr(
         repo.close()
 
 
-@app.command(help="Run the full pipeline for one pasted Douyin URL (download + ASR). No arg = read clipboard.")
+@app.command(
+    help="Run the full pipeline for one pasted video URL (Douyin / Xiaohongshu). "
+    "Download + ASR. No arg = read the clipboard."
+)
 def run(
-    url: str | None = typer.Argument(None, help="Douyin video URL / share text / video id. Omit to use the clipboard."),
+    url: str | None = typer.Argument(
+        None, help="Douyin or Xiaohongshu video URL / share text / video id. Omit to use the clipboard."
+    ),
     no_asr: bool = typer.Option(False, "--no-asr", help="Download only, skip transcription."),
 ):
     if not url:
         url = _read_clipboard()
         if not url:
-            typer.echo("Clipboard is empty. Copy a Douyin link first, or pass it as an argument.")
+            typer.echo("Clipboard is empty. Copy a Douyin/Xiaohongshu link first, or pass it as an argument.")
             raise typer.Exit(code=1)
         typer.echo(f"From clipboard: {url[:120]}")
 
@@ -514,6 +531,8 @@ def _resolve_sync_filter(date_str: str | None, days: int) -> tuple[str, CollectF
 def _detect_platform(url: str) -> str:
     if "douyin.com" in url:
         return "douyin"
+    if "xiaohongshu.com" in url or "xhslink.com" in url:
+        return "xiaohongshu"
     if "bilibili.com" in url or "b23.tv" in url:
         return "bilibili"
     if "youtube.com" in url or "youtu.be" in url:
@@ -524,6 +543,8 @@ def _detect_platform(url: str) -> str:
 def _extract_uid(url: str, platform: str) -> str:
     if platform == "douyin" and "/user/" in url:
         return url.split("/user/")[-1].split("/")[0].split("?")[0]
+    if platform == "xiaohongshu" and "/user/profile/" in url:
+        return url.split("/user/profile/")[-1].split("/")[0].split("?")[0]
     if platform == "bilibili":
         parts = url.rstrip("/").split("/")
         return parts[-1].split("?")[0]
