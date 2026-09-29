@@ -57,6 +57,55 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 原理：`service-api.tver.jp` 内部 API 列剧集 + yt-dlp 下载（无加密 HLS，最高 1080p）
   - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
+- **`bat/ja-asr.bat`** —— 日语视频去背景音 + ASR + 字幕（需要 creator-asr-ja 环境，见下文）：
+  - **双击运行 = 处理 `storage\ja_inbox\` 里的所有视频**（已有 `.srt` 的自动跳过）
+  - 或 `bat\ja-asr.bat video.mp4 [more.mp4 ...]`，也可把 mp4 拖到 bat 上
+  - 输出 `<名字>.txt`（逐句分段）/ `<名字>.srt`（日语字幕）/ `<名字>.transcript.json`
+
+## 日语 ASR（去背景音 + Qwen3-ASR + 字幕）
+
+针对 TVer / 哆啦A梦等日语视频的独立工具（与 sync 流水线无关，纯文件进文件出）：
+
+```
+MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad 按静音分块
+    → Qwen3-ASR 逐块识别 → 分段 txt + transcript.json + 日语 SRT 字幕
+```
+
+字幕时间轴来自 VAD 块边界（代码里预留了 Qwen3-ForcedAligner 精对齐的接口，后续可升级）。
+
+### 一次性环境搭建（专用 conda 环境，与 creator-asr 的 FunASR 环境隔离）
+
+```bash
+conda create -n creator-asr-ja python=3.12 -y
+conda activate creator-asr-ja
+pip install torch "transformers>=5.13" accelerate audio-separator silero-vad soundfile scipy
+# Windows CUDA 再装: pip install onnxruntime-gpu   (Mac 用自带 onnxruntime 即可)
+```
+
+首次运行会自动下载模型（Qwen3-ASR-1.7B ~4GB 到 `~/.cache/huggingface`，分离模型到 `~/.cache/audio-separator-models`）；国内网络可设 `HF_ENDPOINT=https://hf-mirror.com`。
+
+然后在 `config/settings.yaml` 里配置：
+
+```yaml
+ja_asr:
+  env_python: "C:/Users/<你>/.conda/envs/creator-asr-ja/python.exe"  # macOS: ~/miniconda3/envs/creator-asr-ja/bin/python
+  input_dir: "./storage/ja_inbox"   # 视频丢进这个目录即可
+  model: "Qwen/Qwen3-ASR-1.7B-hf"   # 想快速验证可换 Qwen/Qwen3-ASR-0.6B-hf
+  device: "cuda:0"                  # Mac 调试用 mps / cpu
+  language: "Japanese"
+```
+
+### 用法
+
+日常用法就一步：**把视频丢进 `storage/ja_inbox/`，然后跑 `uv run creator-agent ja-asr`**（不带参数自动扫目录，递归，支持 mp4/mkv/mov/webm/ts/flv/avi；已有 `.srt` 的跳过，`--force` 重跑）。产物写在视频旁边。
+
+```bash
+uv run creator-agent ja-asr                            # 处理 ja_inbox 里的新视频
+uv run creator-agent ja-asr --force                    # 全部重跑
+uv run creator-agent ja-asr video.mp4 [more.mp4 ...]   # 指定文件 / glob
+uv run creator-agent ja-asr "storage/tver/**/*.mp4" -o out/
+uv run python scripts/transcribe_ja.py                 # 等价的脚本入口
+```
 
 ## 架构要点
 
