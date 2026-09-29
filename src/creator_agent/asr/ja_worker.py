@@ -94,8 +94,18 @@ def _load_asr(model_id: str, device: str):
 
 def _separate_vocals(separator, audio_path: Path, out_dir: Path) -> Path:
     """Isolate the vocal stem; returns the vocals WAV path."""
+    # Redirect separator output into the per-job temp dir; otherwise
+    # audio-separator writes <name>_(Vocals)_*.wav into the process CWD.
+    # The model instance captured output_dir at load_model time, so set both
+    # (mirrors the library's own chunked-path re-sync).
+    separator.output_dir = str(out_dir)
+    if getattr(separator, "model_instance", None) is not None:
+        separator.model_instance.output_dir = str(out_dir)
     outputs = separator.separate(str(audio_path))
-    vocals = [Path(p) for p in outputs if "vocal" in Path(p).stem.lower()]
+    # audio-separator returns bare filenames (relative to its output_dir);
+    # resolve them against the temp dir we just redirected output into.
+    paths = [Path(p) if Path(p).is_absolute() else out_dir / Path(p).name for p in outputs]
+    vocals = [p for p in paths if "vocal" in p.stem.lower()]
     if not vocals:
         raise RuntimeError(f"separator produced no vocal stem: {outputs}")
     # Normalize to 16kHz mono (separation models usually output 44.1kHz).

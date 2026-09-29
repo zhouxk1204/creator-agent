@@ -1,7 +1,8 @@
 # 日语 ASR 工具交接文档（去背景音 + Qwen3-ASR + 字幕）
 
-> 日期：2026-09-29。状态：**代码完成、单测全绿（140 passed），但 worker 全链路一次都没在真机跑过**。
-> 所有改动尚未提交（`git status` 可见 4 个修改 + 9 个新文件）。
+> 日期：2026-09-29（当晚更新）。状态：**真机全链路已验证通过**。2 分钟哆啦A梦测试片段（`storage/ja_inbox/doraemon_test_2min.mp4`）
+> 用 0.6B 和 1.7B 模型各跑通一次，产出 `.txt` / `.srt` / `.transcript.json` 均正常，1.7B 质量明显更好
+>（"点滅""キャベツ""ドラえもん"等 0.6B 听错的词都对了）。
 
 ## 功能回顾
 
@@ -12,30 +13,39 @@ MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad �
 
 用法：视频丢进 `storage/ja_inbox/` → `uv run creator-agent ja-asr`（或双击 `bat/ja-asr.bat`）。已有 `.srt` 的跳过，`--force` 重跑。也支持指定文件/glob。
 
-## 一、回家必做（首次搭建）
+## 一、首次搭建（已完成 ✅，存档备查）
 
-| # | 事项 | 说明 |
+| # | 事项 | 实际结果 |
 |---|---|---|
-| 1 | 建 conda 环境 | `conda create -n creator-asr-ja python=3.12 -y`，然后 `pip install torch "transformers>=5.13" accelerate audio-separator silero-vad soundfile scipy onnxruntime-gpu`（CUDA 版 torch 按显卡选对应 cu 源） |
-| 2 | 核对 `config/settings.yaml` 的 `ja_asr.env_python` | 已预填 `C:/Users/34696/miniconda3/envs/creator-asr-ja/python.exe`，若 conda 安装路径不同需改 |
-| 3 | 首次运行下载模型 | Qwen3-ASR-1.7B（~4GB → `~/.cache/huggingface`）+ 分离模型（→ `~/.cache/audio-separator-models`）。网络慢先 `set HF_ENDPOINT=https://hf-mirror.com`（Windows）|
-| 4 | 拿一集短视频首跑验证 | 建议先 `--model Qwen/Qwen3-ASR-0.6B-hf` 快速跑通，再切回 1.7B |
+| 1 | conda 环境 | `creator-asr-ja`（py3.12）已建。torch **2.11.0+cu128**（RTX 5060 Ti 必须 cu128，CUDA 验证 True）、transformers 5.17.0、accelerate、audio-separator 0.47.0、silero-vad 6.2.3、soundfile、scipy、onnxruntime-gpu 1.30.0（CUDAExecutionProvider ✓）、**audioread**（清单漏了，audio-separator 经 librosa 依赖它，首跑报 `No module named 'audioread'`） |
+| 2 | `settings.yaml` 的 `ja_asr.env_python` | 预填路径正确，无需改 |
+| 3 | 模型 | 走 **ModelScope**（`creator-asr` 环境的 `modelscope.exe download`，~9MB/s）下到本地目录：`C:/models/Qwen3-ASR-0.6B-hf`、`C:/models/Qwen3-ASR-1.7B-hf`。HF 直连/镜像都慢不可用。settings 默认模型已改成本地路径。分离模型 BS-RoFormer 首跑自动下载（GitHub，需走代理）→ `~/.cache/audio-separator-models` |
+| 4 | 首跑验证 | 0.6B / 1.7B 均跑通 |
 
-## 二、未验证的高风险点（首跑最可能挂的地方）
+**网络环境备忘**：本机 Clash 代理在 `127.0.0.1:7897`（Windows 系统代理已开，pip/curl 自动走；约 2MB/s）。
+mirrors.aliyun.com 的 PyPI 镜像当时极慢（索引页 33KB/s），**pip 安装统一走官方源 + 代理**；ModelScope 直连很快。
+⚠️ **大坑：装 audio-separator 会把 PyPI 版 CPU torch 顶掉 cu128 torch**（它声明依赖 torch，pip 直接换最新 CPU 版）。
+修复：`pip install --force-reinstall --no-deps torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128`。
+以后在这个环境装任何包前先确认不会动 torch（必要时 `--no-deps`）。
 
-代码是按官方文档/API 惯例写的，以下点**没有真机验证过**，按可能性排序：
+## 二、真机验证结论（原"高风险点"逐条销案）
 
-1. **Qwen3-ASR 的 `apply_transcription_request` 调用**（`ja_worker.py::_transcribe_chunk`）
-   - 按模型卡示例写的（`audio=<本地wav路径>, language="Japanese"`，`.to(model.device, model.dtype)`，`processor.decode(..., return_format="transcription_only")`）。
-   - 若 transformers 5.x 实际签名不同（参数名、decode 返回值结构），**只改这一个函数**即可。
-2. **audio-separator 输出文件名匹配**（`ja_worker.py::_separate_vocals`）
-   - 假设输出文件名含 "vocals"（如 `xxx_(Vocals)_model.wav`）。若默认模型输出命名不同，按实际打印的 `outputs` 列表调整匹配逻辑。
-3. **silero-vad API 版本差异**（`ja_worker.py::_speech_chunks`）
-   - 用的是 `from silero_vad import load_silero_vad, get_speech_timestamps`，返回 `[{"start": 样本序号, "end": ...}]`（按样本数除以 16000 得秒）。旧版包 API 不同（torch.hub 方式），装最新版即可。
-4. **audio-separator 的输出采样率**（`ja_worker.py::_to_16k_mono`）
-   - 假设可能输出 44.1kHz 立体声，已做重采样+混单声道（依赖 scipy，audio-separator 自带）。若它直接输出 16k 也没问题（有判断）。
-5. **device_map 写法**（`ja_worker.py::_load_asr`）
-   - `device_map={"": device}` 需要 accelerate；`mps`/`cpu` 路径在 Mac 上只做了冒烟（未跑模型）。
+1. **`apply_transcription_request`** ✅ transformers 5.17 签名与代码一致，`audio=` 传本地路径字符串可用（docstring 明确支持 URL/本地路径/ndarray）。
+2. **audio-separator 输出文件名匹配** ✅ 默认模型输出含 "Vocals"，匹配逻辑工作正常。
+3. **silero-vad API** ✅ 6.2.3 的 `load_silero_vad` / `get_speech_timestamps` 与代码一致。
+4. **分离输出采样率** ✅ 重采样逻辑工作正常。
+5. **device_map** ✅ `{"": "cuda:0"}` + accelerate 正常。
+
+**真机修的两个 bug**：
+
+1. **ffmpeg 不在 PATH**：audio-separator 初始化时会 `subprocess` 调裸 `ffmpeg -version`（PATH 查找），
+   系统 PATH 没有 ffmpeg → `WinError 2`。修复：`ja_transcriber.py::_run_worker`
+   把 `ja_asr.ffmpeg_path` 所在目录注入 worker 子进程 PATH（bat/CLI 任何入口都生效）。
+2. **分离中间产物污染 CWD**：`separator.separate()` 默认把 `_(Vocals)_*.wav` / `_(Instrumental)_*.wav`
+   写到进程当前目录（双击 bat 时 = 仓库根目录，每个视频 ~100MB）。修复：`ja_worker.py::_separate_vocals`
+   每 job 把 `separator.output_dir` **和 `separator.model_instance.output_dir`** 都指到该 job 的临时目录
+   （model instance 在 load_model 时就快照了 output_dir，只改 separator 的不够）；
+   且 `separate()` 返回的是**裸文件名**（相对其 output_dir），需自行 join 回去再打开。
 
 ## 三、已知设计限制（有意为之，但要知道）
 

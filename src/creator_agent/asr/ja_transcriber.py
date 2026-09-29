@@ -152,6 +152,11 @@ class JaTranscriber:
             worker_env = os.environ.copy()
             worker_env["PYTHONUTF8"] = "1"
             worker_env["PYTHONIOENCODING"] = "utf-8"
+            # audio-separator shells out to `ffmpeg` (plain PATH lookup), but
+            # our ffmpeg is a full-build path from config, not on the system
+            # PATH — expose its dir to the worker subprocess.
+            ffmpeg_dir = str(Path(self._settings.ffmpeg_path).parent)
+            worker_env["PATH"] = ffmpeg_dir + os.pathsep + worker_env.get("PATH", "")
             logger.info("Running JA ASR worker on %d video(s)...", len(jobs))
             proc = subprocess.run(cmd, capture_output=True, env=worker_env)
             stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
