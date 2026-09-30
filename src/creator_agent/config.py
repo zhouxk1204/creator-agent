@@ -49,8 +49,12 @@ class JaAsrSettings(BaseModel):
     keep_vocals: bool = False  # keep isolated vocals.wav (only with --out-dir)
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
     # Word-level alignment (Qwen3-ForcedAligner-0.6B, HF id or local path).
-    # Blank = skip; cue times then fall back to proportional allocation.
+    # Runs in a SEPARATE env (aligner_env_python) because qwen-asr pins
+    # transformers==4.57.6 while the ASR model needs >=5.13. Both aligner_model
+    # AND aligner_env_python must be set; otherwise cue times fall back to
+    # proportional allocation.
     aligner_model: str = ""
+    aligner_env_python: str = ""  # path to the creator-asr-ja-aligner env's python
     # Speaker diarization (ModelScope CAM++ id, e.g.
     # iic/speech_campplus_sv_zh-cn_16k-common). Blank = skip diarization.
     speaker_model: str = ""

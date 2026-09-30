@@ -168,6 +168,8 @@ class JaTranscriber:
             ]
             if s.aligner_model:
                 cmd += ["--aligner-model", s.aligner_model]
+                if s.aligner_env_python:
+                    cmd += ["--aligner-python", s.aligner_env_python]
             if s.speaker_model:
                 cmd += ["--speaker-model", s.speaker_model]
             if self._settings.keep_vocals and out_dir:

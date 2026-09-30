@@ -10,6 +10,7 @@ Usage:
     python ja_worker.py --jobs jobs.json [--model Qwen/Qwen3-ASR-1.7B-hf]
         [--sep-model ""] [--device cuda:0] [--language Japanese] [--keep-vocals]
         [--aligner-model Qwen/Qwen3-ForcedAligner-0.6B]
+        [--aligner-python C:/.../creator-asr-ja-aligner/python.exe]
         [--speaker-model iic/speech_campplus_sv_zh-cn_16k-common]
 
 jobs.json = [{"video_id": str, "audio_path": str}, ...]
@@ -17,12 +18,17 @@ jobs.json = [{"video_id": str, "audio_path": str}, ...]
 
 Pipeline per job: audio-separator vocal isolation -> silero-vad speech
 intervals -> [optional: CAM++ speaker embeddings + clustering -> per-speaker
-chunks] -> Qwen3-ASR per chunk -> [optional: Qwen3-ForcedAligner word-level
-timestamps] -> cue splitting at punctuation -> segments. Loads all models
-ONCE for the whole batch. Optional models that fail to load only degrade
-their own step (no alignment / no diarization), never the whole batch.
-Prints results wrapped in sentinel markers (identical contract to
-asr/worker.py):
+chunks] -> Qwen3-ASR per chunk -> [optional: word-level timestamps via the
+aligner_worker.py SUBPROCESS in the separate creator-asr-ja-aligner env]
+-> cue splitting at punctuation -> segments. Loads all models ONCE for the
+whole batch. Optional steps that fail only degrade themselves (no alignment /
+no diarization), never the whole batch.
+
+Word alignment runs out-of-process because qwen-asr (ForcedAligner) pins
+transformers==4.57.6 while Qwen3-ASR needs transformers>=5.13 — the two
+cannot share an env. --aligner-model + --aligner-python select the subprocess;
+without BOTH, cue times fall back to proportional. Prints results wrapped in
+sentinel markers (identical contract to asr/worker.py):
 
     ===ASR_RESULTS_BEGIN===
     [{"video_id":..., "ok":true, "text":..., "segments":[{"start","end","text","speaker"?}],
@@ -41,8 +47,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -114,13 +123,9 @@ def _load_asr(model_id: str, device: str):
     return processor, model
 
 
-def _load_aligner(model_id: str, device: str):
-    """Qwen3-ForcedAligner via the qwen-asr package (word-level timestamps)."""
-    import torch
-    from qwen_asr import Qwen3ForcedAligner
-
-    dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    return Qwen3ForcedAligner.from_pretrained(model_id, dtype=dtype, device_map=device)
+def _aligner_worker_script() -> str:
+    """aligner_worker.py ships next to this file (same package dir)."""
+    return str(Path(__file__).resolve().parent / "aligner_worker.py")
 
 
 def _load_speaker(model_id: str):
@@ -216,8 +221,11 @@ def _diarize(
             continue
         clip_path = work / f"spk_{i:04d}.wav"
         sf.write(str(clip_path), data[int(s * sr) : int(e * sr)], sr)
-        out = sv_pipeline(str(clip_path), output_emb=True)
-        embs[i] = np.asarray(out["spk_embedding"], dtype=np.float64).ravel()
+        # modelscope speaker_verification pipeline takes a *list* of clips and,
+        # with output_emb=True, returns {'outputs', 'embs'} (embeddings under
+        # 'embs', shape [N, 192]) -- NOT 'spk_embedding'.
+        out = sv_pipeline([str(clip_path)], output_emb=True)
+        embs[i] = np.asarray(out["embs"], dtype=np.float64).ravel()
         done += 1
         if done % 10 == 0 or done == todo:
             _progress(vid, f"  说话人嵌入 {done}/{todo}")
@@ -254,20 +262,81 @@ def _transcribe_chunk(processor, model, chunk_wav: Path, language: str) -> str:
     return processor.decode(generated, return_format="transcription_only")[0].strip()
 
 
-def _align_words(aligner, chunk_wav: Path, text: str, language: str, chunk_start: float) -> list | None:
-    """Word-level timestamps for one chunk, offset to absolute seconds.
+_ALIGN_BEGIN = "===ALIGN_RESULTS_BEGIN==="
+_ALIGN_END = "===ALIGN_RESULTS_END==="
 
-    Returns None on any failure — the caller then splits cues with
-    proportional timing instead. Never raises.
+
+def _align_batch(args, work: Path, asr_chunks: list[dict], vid: str) -> dict[int, list]:
+    """Word-level timestamps for ALL chunks of one video via the aligner
+    subprocess (separate ``creator-asr-ja-aligner`` env). Returns
+    ``{chunk_index: [(text, start, end), ...]}``; failed chunks are simply
+    absent and the caller falls back to proportional cue times for them.
+
+    One subprocess per video -> the aligner model loads once per video. Never
+    raises: any config/subprocess/parse failure returns {} (proportional).
     """
+    if not args.aligner_python:
+        _warn("aligner_model set but aligner_python not configured; proportional cue times")
+        return {}
+    if not Path(args.aligner_python).exists():
+        _warn(f"aligner_python not found: {args.aligner_python}; proportional cue times")
+        return {}
+    jobs = [
+        {"chunk_id": c["idx"], "wav": str(c["wav"]), "text": c["text"], "chunk_start": c["start"]}
+        for c in asr_chunks
+    ]
+    jobs_path = work / "align_jobs.json"
+    jobs_path.write_text(json.dumps(jobs, ensure_ascii=False), encoding="utf-8")
+    cmd = [
+        args.aligner_python,
+        _aligner_worker_script(),
+        "--jobs",
+        str(jobs_path),
+        "--model",
+        args.aligner_model,
+        "--device",
+        args.device,
+        "--language",
+        args.language,
+    ]
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    _progress(vid, f"词级对齐：启动独立环境对齐器（{len(jobs)} 块，模型加载约半分钟）…")
     try:
-        res = aligner.align(audio=str(chunk_wav), text=text, language=language)
-        items = res[0]
-        words = [(w.text, float(w.start_time) + chunk_start, float(w.end_time) + chunk_start) for w in items]
-        return words or None
+        # Popen + stderr streaming (same pattern as JaTranscriber): aligner
+        # progress lines surface live; stdout carries the JSON, drained on a
+        # thread to avoid Windows pipe-buffer deadlock.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        stdout_buf: list[bytes] = []
+
+        def _drain() -> None:
+            stdout_buf.append(proc.stdout.read() if proc.stdout else b"")
+
+        t = threading.Thread(target=_drain, daemon=True)
+        t.start()
+        assert proc.stderr is not None
+        for raw in iter(proc.stderr.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if line:
+                print(line, file=sys.stderr, flush=True)
+        rc = proc.wait()
+        t.join()
+        stdout = (stdout_buf[0] if stdout_buf else b"").decode("utf-8", errors="replace")
+        if rc != 0:
+            _warn(f"aligner subprocess exited {rc}; proportional cue times")
+            return {}
+        begin, end = stdout.rfind(_ALIGN_BEGIN), stdout.rfind(_ALIGN_END)
+        if begin < 0 or end < 0 or end <= begin:
+            _warn(f"aligner output missing markers; proportional cue times. tail: {stdout[-300:]}")
+            return {}
+        rows = json.loads(stdout[begin + len(_ALIGN_BEGIN) : end].strip())
+        out = {row["chunk_id"]: [tuple(w) for w in row["words"]] for row in rows if row.get("ok") and row.get("words")}
+        _progress(vid, f"词级对齐完成：{len(out)}/{len(jobs)} 块成功")
+        return out
     except Exception as e:
-        _warn(f"aligner failed on chunk @{chunk_start:.1f}s: {e}")
-        return None
+        _warn(f"aligner subprocess failed ({e}); proportional cue times")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +347,7 @@ def _align_words(aligner, chunk_wav: Path, text: str, language: str, chunk_start
 def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     import soundfile as sf
 
-    separator, vad_model, processor, asr_model, aligner, sv_pipeline = models
+    separator, vad_model, processor, asr_model, sv_pipeline = models
     audio_path = Path(job["audio_path"])
     duration = float(sf.info(str(audio_path)).duration)
 
@@ -312,10 +381,13 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         else:
             chunks = [(s, e, None) for s, e in _plain_chunks(intervals, args, duration)]
 
-        step = "ASR + 词级对齐" if aligner else "ASR"
+        align_on = bool(args.aligner_model and args.aligner_python)
+        step = "ASR（随后词级对齐）" if align_on else "ASR"
         _progress(vid, f"分块完成：{len(chunks)} 块 → 开始{step}…")
 
-        segments: list[dict] = []
+        # Phase 1: ASR every chunk -> text. Chunk WAVs stay in `work` so the
+        # aligner subprocess (phase 2) can re-read them.
+        asr_chunks: list[dict] = []
         for i, (start, end, speaker) in enumerate(chunks):
             tc = time.monotonic()
             chunk_wav = _slice_wav(vocals, work / f"chunk_{i:04d}.wav", start, end)
@@ -323,19 +395,35 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             if not text:
                 _progress(vid, f"  块 {i + 1}/{len(chunks)}：无语音内容，跳过")
                 continue
-            words = _align_words(aligner, chunk_wav, text, args.language, start) if aligner else None
-            cues = split_cues(text, start, end, words=words, max_chars=args.max_cue_chars, max_sec=args.max_cue_sec)
-            for cue in cues:
-                seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
-                if speaker:
-                    seg["speaker"] = speaker
-                segments.append(seg)
+            asr_chunks.append(
+                {"idx": i, "start": start, "end": end, "speaker": speaker, "wav": chunk_wav, "text": text}
+            )
             who = f"[{speaker}] " if speaker else ""
             _progress(
                 vid,
                 f"  块 {i + 1}/{len(chunks)}（{time.monotonic() - tc:.1f}s）："
-                f"{who}{len(cues)} 条字幕｜{text[:30]}{'…' if len(text) > 30 else ''}",
+                f"{who}{text[:30]}{'…' if len(text) > 30 else ''}",
             )
+
+        # Phase 2: optional word-level alignment — one subprocess for all chunks.
+        words_by_idx = _align_batch(args, work, asr_chunks, vid) if align_on and asr_chunks else {}
+
+        # Phase 3: split each chunk's text into subtitle cues.
+        segments: list[dict] = []
+        for c in asr_chunks:
+            cues = split_cues(
+                c["text"],
+                c["start"],
+                c["end"],
+                words=words_by_idx.get(c["idx"]),
+                max_chars=args.max_cue_chars,
+                max_sec=args.max_cue_sec,
+            )
+            for cue in cues:
+                seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
+                if c["speaker"]:
+                    seg["speaker"] = c["speaker"]
+                segments.append(seg)
 
         _progress(vid, f"完成：{len(segments)} 条字幕（共 {time.monotonic() - t0:.0f}s）")
 
@@ -378,6 +466,11 @@ def main() -> int:
         "--aligner-model", default="", help="Qwen3-ForcedAligner HF id / local path (blank = no word alignment)"
     )
     parser.add_argument(
+        "--aligner-python",
+        default="",
+        help="python.exe of the separate creator-asr-ja-aligner env (runs the aligner subprocess)",
+    )
+    parser.add_argument(
         "--speaker-model", default="", help="ModelScope CAM++ speaker model id (blank = no diarization)"
     )
     parser.add_argument(
@@ -412,17 +505,13 @@ def main() -> int:
         _emit(results)
         return 0
 
-    # Optional models: their failure only disables their own step.
-    aligner = None
-    if args.aligner_model:
-        try:
-            aligner = _load_aligner(args.aligner_model, args.device)
-            _progress("-", "ForcedAligner 加载完成（词级时间戳已启用）")
-        except Exception as e:
-            traceback.print_exc()
-            _warn(f"aligner load failed ({e}); cue times will be proportional")
+    # Word alignment runs out-of-process (one subprocess per video) — there is
+    # no in-env aligner model to load. It only engages when BOTH the model path
+    # and the aligner env's python are configured.
+    if args.aligner_model and args.aligner_python:
+        _progress("-", "词级对齐已启用（独立 aligner 环境子进程，每视频一次）")
     else:
-        _progress("-", "未配置 aligner_model：字幕时间按比例分摊")
+        _progress("-", "未同时配置 aligner_model + aligner_python：字幕时间按比例分摊")
     sv_pipeline = None
     if args.speaker_model:
         try:
@@ -434,7 +523,7 @@ def main() -> int:
     else:
         _progress("-", "未配置 speaker_model：不做说话人分离")
 
-    models = (*core, aligner, sv_pipeline)
+    models = (*core, sv_pipeline)
 
     results: list[dict] = []
     for job_idx, job in enumerate(jobs):

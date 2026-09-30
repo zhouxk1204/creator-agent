@@ -58,7 +58,10 @@ def test_parse_srt_multiline_and_crlf(tmp_path):
         "1\r\n00:00:01,000 --> 00:00:02,000\r\n一行目\r\n二行目\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\n次\r\n"
     )
     path = tmp_path / "b.srt"
-    path.write_text(content, encoding="utf-8")
+    # newline="" disables Windows text-mode \n->\r\n translation so the literal
+    # \r\n in `content` is written verbatim (otherwise the file ends up \r\r\n
+    # and reads back as \n\n, breaking the CRLF case on Windows only).
+    path.write_text(content, encoding="utf-8", newline="")
     parsed = parse_srt(path)
     assert [s.text for s in parsed] == ["一行目\n二行目", "次"]
 

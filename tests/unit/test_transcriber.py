@@ -55,7 +55,7 @@ def _worker_stdout(results: list) -> bytes:
         "===ASR_RESULTS_BEGIN===\n"
         f"{json.dumps(results, ensure_ascii=False)}\n"
         "===ASR_RESULTS_END===\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 def test_transcribe_batch_empty_returns_zero():
