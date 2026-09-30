@@ -75,6 +75,9 @@ curl http://localhost:11434/v1/models
 把人工修正后的字幕喂回来，让 Qwen3.5 9B 当"审校专家"分析 AI 翻译和人工译文的差异，
 沉淀成知识库；之后每次 `translate` / `ja-asr --translate` 会**自动把相关知识注入翻译 prompt**。
 
+> 环境要求：**和翻译共用同一个 Ollama / Qwen3.5 9B 服务**（第一节装好即可，无新增依赖）。
+> learn 只是多调几次同一个接口。
+
 ### 目录约定（settings.yaml 的 `translate.project_dir`，默认 `./subtitle-project`）
 
 ```
