@@ -81,6 +81,12 @@ pip install modelscope kaldiio scikit-learn
 | `config.py::JaAsrSettings` + `settings.yaml` | 新增 `aligner_model / speaker_model / speaker_threshold / max_cue_chars / max_cue_sec / max_chunk_sec` |
 | `tests/unit/test_{cue_splitter,speaker_turns}.py`（新） | 19 个新单测；`test_subtitle.py` 加 2 个 |
 
+**进度显示（2026-09-30 追加）**：worker 从阻塞式 `subprocess.run` 改成 `Popen`，stderr 实时转发到
+控制台。跑批时能看到每个阶段的进展：`[ja-asr] 提取音频 2/5` → `[ja-worker] 加载模型` →
+`[ja-worker][视频名] 人声分离中/完成(耗时)` → `VAD N 个语音段` → `说话人嵌入 i/N + 聚类 M 位` →
+`块 i/N（耗时）：[話者X] k 条字幕｜识别文本预览` → `完成：N 条字幕`。卡在哪一步、哪一步慢，
+看最后一条进度行即可定位。worker 的 stderr 尾部（50 行）在非零退出时也会带进异常信息。
+
 ## 四、已知设计限制
 
 - **aligner 单段上限 5 分钟**：chunk 已 ≤15s，不会触顶。

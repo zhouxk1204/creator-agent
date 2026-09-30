@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,13 @@ _RESULT_BEGIN = "===ASR_RESULTS_BEGIN==="
 _RESULT_END = "===ASR_RESULTS_END==="
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".ts", ".m2ts", ".flv", ".avi"}
+
+
+def _progress(msg: str) -> None:
+    """User-visible progress on stderr (works from the CLI, the bat, and
+    scripts); stdlib logging stays for the log file."""
+    print(f"[ja-asr] {msg}", file=sys.stderr, flush=True)
+    logger.info(msg)
 
 
 def scan_videos(input_dir: Path) -> list[Path]:
@@ -87,9 +95,10 @@ class JaTranscriber:
         with tempfile.TemporaryDirectory(prefix="ja-asr-") as tmp:
             audio_dir = Path(tmp)
             used_ids: set[str] = set()
-            for vpath in video_paths:
+            for idx, vpath in enumerate(video_paths):
                 vpath = Path(vpath)
                 vid = self._unique_id(vpath.stem, used_ids)
+                _progress(f"提取音频 {idx + 1}/{len(video_paths)}：{vpath.name}")
                 try:
                     apath = audio_dir / f"{vid}.wav"
                     extract_audio(vpath, apath, self._settings.ffmpeg_path)
@@ -97,6 +106,7 @@ class JaTranscriber:
                     extracted.append((vpath, vid))
                 except Exception as e:  # one bad video must not block the rest
                     logger.warning("Audio extraction failed for %s: %s", vpath, e)
+                    _progress(f"  ! 提取失败：{vpath.name}: {e}")
                     failed.append((vpath.name, str(e)))
 
             if not jobs:
@@ -127,6 +137,8 @@ class JaTranscriber:
     # ------------------------------------------------------------------
 
     def _run_worker(self, jobs: list[dict], out_dir: Path | None) -> list:
+        import threading
+
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             json.dump(jobs, f, ensure_ascii=False)
             jobs_path = f.name
@@ -171,11 +183,33 @@ class JaTranscriber:
             ffmpeg_dir = str(Path(self._settings.ffmpeg_path).parent)
             worker_env["PATH"] = ffmpeg_dir + os.pathsep + worker_env.get("PATH", "")
             logger.info("Running JA ASR worker on %d video(s)...", len(jobs))
-            proc = subprocess.run(cmd, capture_output=True, env=worker_env)
-            stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
-            stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
-            if proc.returncode != 0:
-                raise RuntimeError(f"JA ASR worker exited {proc.returncode}.\nstderr:\n{stderr[-1500:]}")
+            _progress(f"启动 ASR worker（{len(jobs)} 个视频，模型加载约需 1~2 分钟）…")
+            # Popen instead of run(): the worker prints one progress line per
+            # step (separation / VAD / diarization / per-chunk ASR) on stderr —
+            # stream those live so long batches are watchable; stdout carries
+            # the result JSON and is drained on a thread (Windows pipe buffers
+            # are tiny, reading both from one thread would deadlock).
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=worker_env)
+            stdout_buf: list[bytes] = []
+            stderr_tail: list[str] = []
+
+            def _drain_stdout() -> None:
+                stdout_buf.append(proc.stdout.read() if proc.stdout else b"")
+
+            t = threading.Thread(target=_drain_stdout, daemon=True)
+            t.start()
+            assert proc.stderr is not None
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if line:
+                    print(line, file=sys.stderr, flush=True)
+                    stderr_tail.append(line)
+                    del stderr_tail[:-50]
+            rc = proc.wait()
+            t.join()
+            stdout = (stdout_buf[0] if stdout_buf else b"").decode("utf-8", errors="replace")
+            if rc != 0:
+                raise RuntimeError(f"JA ASR worker exited {rc}.\nstderr:\n" + "\n".join(stderr_tail[-25:]))
             return self._parse_worker_output(stdout)
         finally:
             Path(jobs_path).unlink(missing_ok=True)

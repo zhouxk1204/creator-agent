@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from unittest import mock
@@ -26,6 +27,16 @@ def _worker_stdout(results: list) -> bytes:
         f"{json.dumps(results, ensure_ascii=False)}\n"
         "===ASR_RESULTS_END===\n"
     ).encode()
+
+
+def _popen_patch(results: list | None = None, rc: int = 0, stderr: bytes = b"") -> mock.Mock:
+    """Patch subprocess.Popen with a fake worker process (real BytesIO pipes,
+    since _run_worker streams stderr and drains stdout on a thread)."""
+    proc = mock.Mock()
+    proc.stdout = io.BytesIO(_worker_stdout(results or []))
+    proc.stderr = io.BytesIO(stderr)
+    proc.wait.return_value = rc
+    return mock.patch("creator_agent.asr.ja_transcriber.subprocess.Popen", return_value=proc)
 
 
 def _ok_result(vid: str, text: str = "こんにちは世界") -> dict:
@@ -63,16 +74,13 @@ def test_transcribe_files_happy_path_writes_three_outputs(tmp_path):
     t = JaTranscriber(settings=_settings())
     with (
         mock.patch("creator_agent.asr.ja_transcriber.extract_audio") as extract,
-        mock.patch(
-            "creator_agent.asr.ja_transcriber.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=_worker_stdout(results), stderr=b""),
-        ) as run,
+        _popen_patch(results) as popen,
     ):
         done, failed = t.transcribe_files([video])
 
     assert done == 1 and failed == []
     extract.assert_called_once()
-    cmd = run.call_args.args[0]
+    cmd = popen.call_args.args[0]
     assert cmd[0] == sys.executable
     assert "--jobs" in cmd and "--language" in cmd and "Japanese" in cmd
 
@@ -98,10 +106,7 @@ def test_transcribe_files_out_dir_overrides_output_location(tmp_path):
     t = JaTranscriber(settings=_settings())
     with (
         mock.patch("creator_agent.asr.ja_transcriber.extract_audio"),
-        mock.patch(
-            "creator_agent.asr.ja_transcriber.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=_worker_stdout(results), stderr=b""),
-        ),
+        _popen_patch(results),
     ):
         done, failed = t.transcribe_files([video], out_dir=out_dir)
 
@@ -119,10 +124,7 @@ def test_transcribe_files_worker_failure_isolated_per_video(tmp_path):
     t = JaTranscriber(settings=_settings())
     with (
         mock.patch("creator_agent.asr.ja_transcriber.extract_audio"),
-        mock.patch(
-            "creator_agent.asr.ja_transcriber.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=_worker_stdout(results), stderr=b""),
-        ),
+        _popen_patch(results),
     ):
         done, failed = t.transcribe_files([v1, v2])
 
@@ -138,10 +140,7 @@ def test_transcribe_files_nonzero_exit_raises(tmp_path):
     t = JaTranscriber(settings=_settings())
     with (
         mock.patch("creator_agent.asr.ja_transcriber.extract_audio"),
-        mock.patch(
-            "creator_agent.asr.ja_transcriber.subprocess.run",
-            return_value=mock.Mock(returncode=2, stdout=b"", stderr=b"traceback"),
-        ),
+        _popen_patch(rc=2, stderr=b"traceback\n"),
     ):
         with pytest.raises(RuntimeError, match="exited 2"):
             t.transcribe_files([video])

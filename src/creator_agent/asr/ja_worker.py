@@ -43,6 +43,7 @@ import argparse
 import json
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -68,7 +69,14 @@ def _emit(results: list) -> None:
 
 
 def _warn(msg: str) -> None:
-    print(f"[ja_worker] WARNING: {msg}", file=sys.stderr, flush=True)
+    print(f"[ja-worker] WARNING: {msg}", file=sys.stderr, flush=True)
+
+
+def _progress(vid: str, msg: str) -> None:
+    """Progress line on stderr — the caller (JaTranscriber) streams stderr
+    live to the console, and it's equally readable when the worker is run
+    by hand."""
+    print(f"[ja-worker][{vid}] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +192,12 @@ def _speech_intervals(vad_model, vocals_path: Path) -> list[tuple[float, float]]
 
 
 def _diarize(
-    sv_pipeline, vocals_path: Path, intervals: list[tuple[float, float]], work: Path, threshold: float
+    sv_pipeline,
+    vocals_path: Path,
+    intervals: list[tuple[float, float]],
+    work: Path,
+    threshold: float,
+    vid: str = "",
 ) -> list[int]:
     """Cluster per-interval CAM++ embeddings -> speaker label per interval.
 
@@ -196,6 +209,8 @@ def _diarize(
 
     data, sr = sf.read(str(vocals_path))
     embs: list = [None] * len(intervals)
+    todo = sum(1 for s, e in intervals if e - s >= _MIN_EMBED_SEC)
+    done = 0
     for i, (s, e) in enumerate(intervals):
         if e - s < _MIN_EMBED_SEC:
             continue
@@ -203,6 +218,9 @@ def _diarize(
         sf.write(str(clip_path), data[int(s * sr) : int(e * sr)], sr)
         out = sv_pipeline(str(clip_path), output_emb=True)
         embs[i] = np.asarray(out["spk_embedding"], dtype=np.float64).ravel()
+        done += 1
+        if done % 10 == 0 or done == todo:
+            _progress(vid, f"  说话人嵌入 {done}/{todo}")
 
     have = [i for i, e in enumerate(embs) if e is not None]
     labels: list[int | None] = [None] * len(intervals)
@@ -264,17 +282,26 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     audio_path = Path(job["audio_path"])
     duration = float(sf.info(str(audio_path)).duration)
 
+    vid = job["video_id"]
+
     with tempfile.TemporaryDirectory(prefix="ja-asr-") as tmp:
         work = Path(tmp)
+        t0 = time.monotonic()
+        _progress(vid, "人声分离中…（BS-RoFormer，长视频可能要几分钟）")
         vocals = _separate_vocals(separator, audio_path, work)
+        _progress(vid, f"人声分离完成（{time.monotonic() - t0:.0f}s）→ VAD 检测语音段…")
+
         intervals = _speech_intervals(vad_model, vocals)
+        _progress(vid, f"VAD 完成：{len(intervals)} 个语音段")
 
         # Chunking: per-speaker turns when diarization is on, else plain VAD merge.
         names: dict[int, str] = {}
         if sv_pipeline is not None and intervals:
             try:
-                labels = smooth_labels(_diarize(sv_pipeline, vocals, intervals, work, args.speaker_threshold))
+                _progress(vid, "说话人分离：提取 CAM++ 嵌入…")
+                labels = smooth_labels(_diarize(sv_pipeline, vocals, intervals, work, args.speaker_threshold, vid=vid))
                 names = speaker_names(labels)
+                _progress(vid, f"说话人聚类完成：{len(names)} 位（{', '.join(names.values())}）")
                 raw_chunks = build_speaker_chunks(
                     intervals, labels, max_gap=0.3, max_chunk=args.max_chunk, pad=0.1, duration=duration
                 )
@@ -285,20 +312,32 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         else:
             chunks = [(s, e, None) for s, e in _plain_chunks(intervals, args, duration)]
 
+        step = "ASR + 词级对齐" if aligner else "ASR"
+        _progress(vid, f"分块完成：{len(chunks)} 块 → 开始{step}…")
+
         segments: list[dict] = []
         for i, (start, end, speaker) in enumerate(chunks):
+            tc = time.monotonic()
             chunk_wav = _slice_wav(vocals, work / f"chunk_{i:04d}.wav", start, end)
             text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language)
             if not text:
+                _progress(vid, f"  块 {i + 1}/{len(chunks)}：无语音内容，跳过")
                 continue
             words = _align_words(aligner, chunk_wav, text, args.language, start) if aligner else None
-            for cue in split_cues(
-                text, start, end, words=words, max_chars=args.max_cue_chars, max_sec=args.max_cue_sec
-            ):
+            cues = split_cues(text, start, end, words=words, max_chars=args.max_cue_chars, max_sec=args.max_cue_sec)
+            for cue in cues:
                 seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
                 if speaker:
                     seg["speaker"] = speaker
                 segments.append(seg)
+            who = f"[{speaker}] " if speaker else ""
+            _progress(
+                vid,
+                f"  块 {i + 1}/{len(chunks)}（{time.monotonic() - tc:.1f}s）："
+                f"{who}{len(cues)} 条字幕｜{text[:30]}{'…' if len(text) > 30 else ''}",
+            )
+
+        _progress(vid, f"完成：{len(segments)} 条字幕（共 {time.monotonic() - t0:.0f}s）")
 
         vocals_out = None
         if keep_dir is not None:
@@ -359,12 +398,14 @@ def main() -> int:
 
     keep_dir = Path(args.keep_vocals_dir) if args.keep_vocals_dir else None
 
+    _progress("-", f"加载模型中（人声分离 + VAD + {args.model}）…")
     try:
         core = (
             _load_separator(args.sep_model),
             _load_vad(),
             *_load_asr(args.model, args.device),
         )
+        _progress("-", "核心模型加载完成")
     except Exception as e:  # core model load failure -> all jobs fail, but we still emit JSON
         traceback.print_exc()
         results = [{"video_id": j["video_id"], "ok": False, "error": f"model load: {e}"} for j in jobs]
@@ -376,22 +417,29 @@ def main() -> int:
     if args.aligner_model:
         try:
             aligner = _load_aligner(args.aligner_model, args.device)
+            _progress("-", "ForcedAligner 加载完成（词级时间戳已启用）")
         except Exception as e:
             traceback.print_exc()
             _warn(f"aligner load failed ({e}); cue times will be proportional")
+    else:
+        _progress("-", "未配置 aligner_model：字幕时间按比例分摊")
     sv_pipeline = None
     if args.speaker_model:
         try:
             sv_pipeline = _load_speaker(args.speaker_model)
+            _progress("-", "说话人模型加载完成（CAM++，首跑会自动下载模型）")
         except Exception as e:
             traceback.print_exc()
             _warn(f"speaker model load failed ({e}); diarization disabled")
+    else:
+        _progress("-", "未配置 speaker_model：不做说话人分离")
 
     models = (*core, aligner, sv_pipeline)
 
     results: list[dict] = []
-    for job in jobs:
+    for job_idx, job in enumerate(jobs):
         vid = job["video_id"]
+        _progress(vid, f"===== 视频 {job_idx + 1}/{len(jobs)} =====")
         if not Path(job["audio_path"]).exists():
             results.append({"video_id": vid, "ok": False, "error": f"audio not found: {job['audio_path']}"})
             continue
