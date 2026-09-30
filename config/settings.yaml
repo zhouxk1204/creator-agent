@@ -45,3 +45,13 @@ ja_asr:
   max_cue_chars: 24         # subtitle cue length cap
   max_cue_sec: 8.0          # subtitle cue duration cap
   max_chunk_sec: 15.0       # ASR chunk cap (was 30)
+translate:
+  # JA->ZH subtitle translation via local OpenAI-compatible server (Ollama shown).
+  base_url: http://localhost:11434/v1
+  api_key: ollama
+  model: qwen3.5:9b         # 回家装好后改成实际 tag
+  batch_size: 30            # 每次发给模型的字幕条数（20~50）
+  context_cues: 5           # 每批附带的上文条数（不翻译，仅供上下文）
+  ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
+  burn_font: Microsoft YaHei
+  burn_fontsize: 16

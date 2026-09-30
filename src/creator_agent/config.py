@@ -61,6 +61,21 @@ class JaAsrSettings(BaseModel):
     max_chunk_sec: float = 15.0  # ASR chunk cap (was hardcoded 30s)
 
 
+class TranslateSettings(BaseModel):
+    # JA -> ZH subtitle translation via a local OpenAI-compatible LLM server
+    # (Ollama / llama.cpp / vLLM / LM Studio). No heavy deps in this env.
+    base_url: str = "http://localhost:11434/v1"  # Ollama default
+    api_key: str = "ollama"
+    model: str = "qwen3.5:9b"  # whatever tag the installed Qwen3.5 9B has
+    batch_size: int = 30  # cues per LLM call (keep within 20~50)
+    context_cues: int = 5  # preceding untranslated cues sent as context
+    timeout_sec: float = 300
+    # Subtitle burn-in (ffmpeg subtitles filter, needs libass).
+    ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
+    burn_font: str = "Microsoft YaHei"
+    burn_fontsize: int = 16
+
+
 class LogSettings(BaseModel):
     level: str = "INFO"
     file: str = "./logs/creator-agent.log"
@@ -76,6 +91,7 @@ class Settings(BaseSettings):
     downloader: DownloaderSettings = DownloaderSettings()
     asr: AsrSettings = AsrSettings()
     ja_asr: JaAsrSettings = JaAsrSettings()
+    translate: TranslateSettings = TranslateSettings()
     log: LogSettings = LogSettings()
 
     model_config = {"env_prefix": "CREATOR_AGENT_", "env_nested_delimiter": "__"}

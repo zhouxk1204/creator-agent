@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from creator_agent.asr.subtitle import segments_to_srt, write_srt
+from creator_agent.asr.subtitle import parse_srt, segments_to_srt, write_srt
 from creator_agent.models.transcript import TranscriptSegment
 
 
@@ -44,6 +44,23 @@ def test_speaker_prefix_added():
 def test_no_speaker_no_prefix():
     srt = segments_to_srt([_seg(1.0, 2.0, "おはよう")])
     assert "\nおはよう\n" in srt
+
+
+def test_parse_srt_roundtrip(tmp_path):
+    segs = [_seg(1.5, 2.0, "こんにちは"), _seg(65.25, 66.0, "世界")]
+    path = write_srt(segs, tmp_path / "a.srt")
+    parsed = parse_srt(path)
+    assert [(s.start, s.end, s.text) for s in parsed] == [(1.5, 2.0, "こんにちは"), (65.25, 66.0, "世界")]
+
+
+def test_parse_srt_multiline_and_crlf(tmp_path):
+    content = (
+        "1\r\n00:00:01,000 --> 00:00:02,000\r\n一行目\r\n二行目\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\n次\r\n"
+    )
+    path = tmp_path / "b.srt"
+    path.write_text(content, encoding="utf-8")
+    parsed = parse_srt(path)
+    assert [s.text for s in parsed] == ["一行目\n二行目", "次"]
 
 
 def test_write_srt(tmp_path):

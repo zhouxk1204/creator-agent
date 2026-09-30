@@ -446,6 +446,8 @@ def ja_asr(
     device: str | None = typer.Option(None, "--device", help="Override device (cuda:0 / mps / cpu)."),
     model: str | None = typer.Option(None, "--model", help="Override ASR model (e.g. Qwen/Qwen3-ASR-0.6B-hf)."),
     force: bool = typer.Option(False, "--force", "-f", help="Reprocess videos that already have a .srt."),
+    translate: bool = typer.Option(False, "--translate", "-t", help="After ASR, translate .srt -> .zh.srt."),
+    burn: bool = typer.Option(False, "--burn", "-b", help="After translating, burn zh subs into <name>.zh.mp4."),
 ):
     import glob as globmod
 
@@ -498,6 +500,70 @@ def ja_asr(
     transcriber = JaTranscriber(settings=ja)
     done, failed = transcriber.transcribe_files(pending, out)
     typer.echo(f"Done: {done} transcribed, {len(failed)} failed.")
+    for name, err in failed:
+        typer.echo(f"  {name}: {err}")
+    if failed and done == 0:
+        raise typer.Exit(code=1)
+
+    if translate or burn:
+        from creator_agent.translate.translator import process_translations
+
+        # Only translate videos that were (re)transcribed this run.
+        ok_videos = [p for p in pending if p.name not in {n for n, _ in failed}]
+        typer.echo(f"Translating {len(ok_videos)} subtitle file(s) via {settings.translate.model} ...")
+        tdone, tfailed = process_translations(ok_videos, settings.translate, out_dir=out, burn=burn, force=True)
+        typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
+        for name, err in tfailed:
+            typer.echo(f"  {name}: {err}")
+
+
+@app.command(
+    name="translate",
+    help="Translate <name>.srt to <name>.zh.srt (JA->ZH) via the local LLM; --burn also makes <name>.zh.mp4.",
+)
+def translate_cmd(
+    paths: list[str] | None = typer.Argument(
+        None, help="Video or .srt paths / globs. Omit to scan ja_asr.input_dir for videos."
+    ),
+    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: next to each file)."),
+    burn: bool = typer.Option(False, "--burn", "-b", help="Burn translated subs into <name>.zh.mp4."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-translate files that already have a .zh.srt."),
+    model: str | None = typer.Option(None, "--model", help="Override translate.model."),
+    base_url: str | None = typer.Option(None, "--base-url", help="Override translate.base_url."),
+):
+    import glob as globmod
+
+    from creator_agent.asr.ja_transcriber import VIDEO_EXTS, scan_videos
+    from creator_agent.translate.translator import process_translations
+
+    settings = load_settings()
+    ts = settings.translate
+    overrides = {k: v for k, v in {"model": model, "base_url": base_url}.items() if v}
+    if overrides:
+        ts = ts.model_copy(update=overrides)
+
+    if paths:
+        resolved: list[Path] = []
+        for arg in paths:
+            matches = [Path(m) for m in sorted(globmod.glob(arg, recursive=True)) if Path(m).is_file()]
+            if matches:
+                resolved.extend(matches)
+            else:
+                typer.echo(f"  ! not found: {arg}")
+    else:
+        input_dir = Path(settings.ja_asr.input_dir)
+        resolved = scan_videos(input_dir)
+        typer.echo(f"Scanning {input_dir} ...")
+    # Keep only videos / .srt files.
+    targets = [p for p in resolved if p.suffix.lower() in VIDEO_EXTS | {".srt"}]
+    if not targets:
+        typer.echo("Nothing to translate (no videos or .srt files found).")
+        return
+
+    out = Path(out_dir) if out_dir else None
+    typer.echo(f"Translating {len(targets)} file(s) via {ts.model} @ {ts.base_url} ...")
+    done, failed = process_translations(targets, ts, out_dir=out, burn=burn, force=force)
+    typer.echo(f"Done: {done} translated, {len(failed)} failed.")
     for name, err in failed:
         typer.echo(f"  {name}: {err}")
     if failed and done == 0:
