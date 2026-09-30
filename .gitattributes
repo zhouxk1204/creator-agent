@@ -1,0 +1,4 @@
+# Windows batch files must use CRLF line endings; LF-only .bat files misparse
+# in cmd (e.g. `chcp 65001` -> "'5001' is not recognized") and flash-close on
+# double-click. Force CRLF for all .bat regardless of core.autocrlf.
+*.bat text eol=crlf
