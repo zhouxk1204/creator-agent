@@ -49,10 +49,13 @@ ja_asr:
   max_cue_sec: 8.0          # subtitle cue duration cap
   max_chunk_sec: 15.0       # ASR chunk cap (was 30)
 translate:
-  # JA->ZH subtitle translation via local OpenAI-compatible server (Ollama shown).
-  base_url: http://localhost:11434/v1
-  api_key: ollama
-  model: qwen3.5:9b         # 回家装好后改成实际 tag
+  # JA->ZH subtitle translation via local OpenAI-compatible server.
+  # llama.cpp llama-server (Vulkan, RTX 5060 Ti) serving Qwen3.5-9B GGUF.
+  # Start: tools/llama.cpp/llama-server.exe -m C:/models/Qwen3.5-9B-Q6_K.gguf \
+  #   --alias qwen3.5-9b --host 127.0.0.1 --port 8080 -c 8192 -ngl 99
+  base_url: http://localhost:8080/v1
+  api_key: llama
+  model: qwen3.5-9b         # llama-server --alias (see /v1/models)
   batch_size: 30            # 每次发给模型的字幕条数（20~50）
   context_cues: 5           # 每批附带的上文条数（不翻译，仅供上下文）
   ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"

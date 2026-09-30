@@ -1,45 +1,56 @@
 # 日译中字幕 + 烧录 + 二次学习交接文档（Qwen3.5 9B 本地翻译）
 
-> 日期：2026-09-30。状态：**代码已实现、单测全过（255 个），等真机装模型验证**。
+> 日期：2026-10-01。状态：**真机验证通过**（translate 日译中 + --burn 烧录端到端跑通，
+> 单测 255 全过、ruff src/+tests/ 干净）。
 > 链路：`视频 → ja-asr（日文 .srt）→ translate（本地 LLM 日译中 → .zh.srt，时间轴不变）→ --burn（ffmpeg 烧录 → .zh.mp4）`。
 > 翻译 prompt 是用户定的"专业日中字幕翻译"10 条要求，原样写在 `translate/translator.py::SYSTEM_PROMPT`。
 > 另有**二次学习**回路：人工修正字幕 → `learn` 差异分析 → 知识库 → 下次翻译自动注入 prompt。
+>
+> **2026-10-01 更新**：翻译后端定为 **llama.cpp `llama-server`（Vulkan）+ Qwen3.5-9B GGUF**，
+> 不用 Ollama（机器没装也装不了；原 LM Studio 后端已被卸载）。
 
-## 一、真机要做的事（模型安装）
+## 一、翻译后端（llama.cpp llama-server，已搭好）
 
-代码不绑定部署方式——任何 **OpenAI 兼容接口**都行。推荐 Ollama（最省事）：
+代码不绑定部署方式——任何 **OpenAI 兼容接口**都行。本机实际用的是 **llama.cpp 的
+`llama-server`（Vulkan 构建）**，纯命令行、免安装：
 
-```bat
-:: 1. 装 Ollama（https://ollama.com/download/windows），装完它常驻后台
-:: 2. 拉模型（tag 以实际发布名为准，Qwen3.5 9B）
-ollama pull qwen3.5:9b
-:: 3. 确认服务在跑（Ollama 默认 localhost:11434）
-curl http://localhost:11434/v1/models
-:: 4. settings.yaml 的 translate.model 改成实际 tag（ollama list 里看到的名字）
-```
+- **为什么 Vulkan 而非 CUDA**：本机显卡驱动 CUDA UMD 为 13.3 → `cuda-13.4` 构建跑不了；
+  `cuda-12.4` 构建又不含 Blackwell(sm_120) 内核。Vulkan 跨厂商、不受 CUDA 版本限制，
+  RTX 5060 Ti 直接可用（`--list-devices` 显示 `Vulkan0: NVIDIA GeForce RTX 5060 Ti`）。
+- **llama.cpp**：`C:\tools\llama.cpp\`（构建 b11146 / v0.5.0，Vulkan x64 zip 解压即用）。
+- **模型**：`C:\models\Qwen3.5-9B-Q6_K.gguf`（7.36GB，Q6_K，全量上 GPU 约 14GB 显存内）。
+- **启动**：`bat\translate-server.bat`（双击即起，窗口需保持开着），或手动：
+  ```bat
+  C:\tools\llama.cpp\llama-server.exe -m C:\models\Qwen3.5-9B-Q6_K.gguf ^
+    --alias qwen3.5-9b --host 127.0.0.1 --port 8080 -c 8192 -ngl 99
+  ```
+- **配置**（`settings.yaml` 的 `translate`）：`base_url=http://localhost:8080/v1`，
+  `model=qwen3.5-9b`（= llama-server `--alias`，可用 `curl localhost:8080/v1/models` 查）。
+- **已验证**：`enable_thinking=false` 生效（无思考冗 token）、编号格式稳定、
+  日译中自然、时间轴逐条不变、libass 用 directwrite 成功选中 Microsoft YaHei（非方块字）。
 
-不想用 Ollama 的话，llama.cpp `llama-server` / vLLM / LM Studio 都可以，把
-`translate.base_url` 指过去即可（api_key 随便填）。
+> 想换别的后端（Ollama / vLLM / LM Studio 等），把 `translate.base_url` + `translate.model`
+> 指过去即可（api_key 随便填），代码不用动。
+> RTX 5060 Ti 16G 跑 9B Q6_K 没问题。翻译和 ASR 不共享环境、不共享显存（ASR 跑完才翻译）。
 
-> RTX 5060 Ti 16G 跑 9B 量化版（Q4/Q5）没问题。翻译和 ASR 不共享环境、不共享显存
-> （ASR 跑完才翻译），无需改 creator-asr-ja 环境。
-
-## 二、验证步骤（按顺序）
+## 二、验证步骤（已跑通，回归时用）
 
 1. **冒烟**（不烧录）：`uv run creator-agent translate <某个已有视频.mp4>`
    → 旁边出现 `<名>.zh.srt`，打开抽查：编号连续、时间轴和 `.srt` 完全一致、
    中文自然。控制台有 `[translate] [视频名] 批次 i/N：字幕 x~y 翻译中…` 进度。
+   **真机已验证**：25 条日文 cue → 25 条中文 cue，时间戳逐条相同、中文自然、
+   保留 `話者X:` 前缀。
 2. **重跑**：`translate <视频> --force` 覆盖已有 .zh.srt。
 3. **烧录**：`translate <视频> --burn`（已有 .zh.srt 会直接烧，不重新调模型）
-   → `<名>.zh.mp4`，播放检查字幕位置/字号（字体默认微软雅黑 16，可调配置）。
+   → `<名>.zh.mp4`。**真机已验证**：libass directwrite 成功选中 Microsoft YaHei，非方块字。
 4. **全链路**：`ja-asr <新视频> --translate --burn` 一条命令出烧录成片。
 
 ## 三、真机验证要点 / 高风险点
 
 | # | 点 | 说明 | 排障 |
 |---|---|---|---|
-| 1 | 模型 tag | `translate.model` 必须和 `ollama list` 里的名字**完全一致** | 404/model not found → 改配置 |
-| 2 | 思考模式 | 请求里带了 `chat_template_kwargs.enable_thinking=false`（Qwen3 系关闭思考，省时间）；服务端不认识这个字段会忽略，无副作用 | 输出若混入 `<think>` 内容，解析会自动忽略非编号行，但会拖慢——换关闭思考的方式 |
+| 1 | 模型名 | `translate.model` 必须等于 llama-server 的 `--alias`（`curl localhost:8080/v1/models` 查到的 id） | 404/model not found → 改配置或 `--alias` |
+| 2 | 思考模式 | 请求里带了 `chat_template_kwargs.enable_thinking=false`（Qwen3 系关闭思考，省时间）。**真机已验证 llama-server 认这个字段**（无思考冗 token） | 输出若混入 `<think>` 内容，解析会自动忽略非编号行，但会拖慢——换关闭思考的方式 |
 | 3 | 编号完整性 | 9B 模型偶尔漏编号/重复编号 → 自动重试 1 次 → 拆半递归 → 单条保底保留日文原文（日志 WARNING） | 大量"保留原文"说明模型/提示词不匹配，先手动 curl 一发看原始输出 |
 | 4 | 烧录字体 | `subtitles` 滤镜需要 libass（full build ffmpeg 有）；中文字体用系统字体名，`Microsoft YaHei` Windows 自带 | 字幕变方块 → 字体名不对；`fc-list :lang=zh` 查可用名 |
 | 5 | 批次大小 | 默认 30 条/批（要求 20~50）。9B 上下文有限，批太大容易漏编号，太小上下文断裂 | 漏编号多→调小到 20；语气不连贯→调大 `context_cues` |
@@ -130,8 +141,8 @@ uv run creator-agent learn   :: 等价命令行（--model/--base-url 可覆盖�
 
 | 症状 | 看哪里 |
 |---|---|
-| 连接 refused | Ollama 没启动 / base_url 不对；`curl localhost:11434/v1/models` |
-| model not found | `translate.model` 与 `ollama list` 不一致 |
+| 连接 refused | llama-server 没启动（跑 `bat\translate-server.bat`）/ base_url 不对；`curl localhost:8080/v1/models` |
+| model not found | `translate.model` 与 llama-server `--alias` 不一致 |
 | 控制台大量"保留原文" | 模型输出格式不符合「编号. 译文」；手动 curl 看原始输出 |
 | .zh.srt 编号和 .srt 对不上 | 不可能（单测锁定）；除非是手工改过 .srt——以日文 .srt 为准 |
 | 烧录字幕是方块/乱码 | 字体问题，见风险点 4 |
