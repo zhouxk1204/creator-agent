@@ -1,93 +1,119 @@
-# 日语 ASR 工具交接文档（去背景音 + Qwen3-ASR + 字幕）
+# 日语 ASR 工具交接文档（去背景音 + 说话人分离 + Qwen3-ASR + 词级对齐字幕）
 
-> 日期：2026-09-29（当晚更新）。状态：**真机全链路已验证通过**。2 分钟哆啦A梦测试片段（`storage/ja_inbox/doraemon_test_2min.mp4`）
-> 用 0.6B 和 1.7B 模型各跑通一次，产出 `.txt` / `.srt` / `.transcript.json` 均正常，1.7B 质量明显更好
->（"点滅""キャベツ""ドラえもん"等 0.6B 听错的词都对了）。
+> 日期：2026-09-30。状态：**代码已实现、单测全过（210 个），等真机装模型验证**。
+> 本次在旧管线（人声分离 + VAD + Qwen3-ASR）基础上新增两步：**CAM++ 说话人分离**
+> 和 **Qwen3-ForcedAligner 词级对齐**，解决"字幕太长"和"两人的话并入一条字幕"两个问题。
+> 旧文档（2026-09-29 版，首次搭建记录）已删除；环境搭建要点并入本文第一节。
 
 ## 功能回顾
 
 ```
-MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad 按静音分块
-    → Qwen3-ASR-1.7B 逐块识别 → <名>.txt（逐句）+ <名>.srt（日语字幕）+ <名>.transcript.json
+MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad 语音段
+    → CAM++ 说话人嵌入聚类 → 按说话人切换点分块（≤15s）
+    → Qwen3-ASR-1.7B 逐块识别 → Qwen3-ForcedAligner 词级时间戳
+    → 按标点+真实词时间切字幕（≤24 字 / ≤8s，标注 話者A/話者B）
+    → <名>.txt + <名>.srt + <名>.transcript.json
 ```
 
-用法：视频丢进 `storage/ja_inbox/` → `uv run creator-agent ja-asr`（或双击 `bat/ja-asr.bat`）。已有 `.srt` 的跳过，`--force` 重跑。也支持指定文件/glob。
+用法不变：视频丢进 `storage/ja_inbox/` → `uv run creator-agent ja-asr`（或 `bat/ja-asr.bat`）。
+已有 `.srt` 的跳过，`--force` 重跑。
 
-## 一、首次搭建（已完成 ✅，存档备查）
+两个新步骤都是**可选降级**：模型没装/加载失败只关掉自己那一步（退回按比例分摊时间、
+不分说话人），不影响 ASR 主流程；worker stderr 会打 `[ja_worker] WARNING` 说明。
 
-| # | 事项 | 实际结果 |
-|---|---|---|
-| 1 | conda 环境 | `creator-asr-ja`（py3.12）已建。torch **2.11.0+cu128**（RTX 5060 Ti 必须 cu128，CUDA 验证 True）、transformers 5.17.0、accelerate、audio-separator 0.47.0、silero-vad 6.2.3、soundfile、scipy、onnxruntime-gpu 1.30.0（CUDAExecutionProvider ✓）、**audioread**（清单漏了，audio-separator 经 librosa 依赖它，首跑报 `No module named 'audioread'`） |
-| 2 | `settings.yaml` 的 `ja_asr.env_python` | 预填路径正确，无需改 |
-| 3 | 模型 | 走 **ModelScope**（`creator-asr` 环境的 `modelscope.exe download`，~9MB/s）下到本地目录：`C:/models/Qwen3-ASR-0.6B-hf`、`C:/models/Qwen3-ASR-1.7B-hf`。HF 直连/镜像都慢不可用。settings 默认模型已改成本地路径。分离模型 BS-RoFormer 首跑自动下载（GitHub，需走代理）→ `~/.cache/audio-separator-models` |
-| 4 | 首跑验证 | 0.6B / 1.7B 均跑通 |
+## 一、真机要做的事（模型与依赖）
 
-**网络环境备忘**：本机 Clash 代理在 `127.0.0.1:7897`（Windows 系统代理已开，pip/curl 自动走；约 2MB/s）。
-mirrors.aliyun.com 的 PyPI 镜像当时极慢（索引页 33KB/s），**pip 安装统一走官方源 + 代理**；ModelScope 直连很快。
-⚠️ **大坑：装 audio-separator 会把 PyPI 版 CPU torch 顶掉 cu128 torch**（它声明依赖 torch，pip 直接换最新 CPU 版）。
-修复：`pip install --force-reinstall --no-deps torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128`。
-以后在这个环境装任何包前先确认不会动 torch（必要时 `--no-deps`）。
+以下全部在 Windows 真机的 `creator-asr-ja` conda 环境里做（**不是**主 uv 环境）。
 
-## 二、真机验证结论（原"高风险点"逐条销案）
+### 1. ForcedAligner（词级时间戳）
 
-1. **`apply_transcription_request`** ✅ transformers 5.17 签名与代码一致，`audio=` 传本地路径字符串可用（docstring 明确支持 URL/本地路径/ndarray）。
-2. **audio-separator 输出文件名匹配** ✅ 默认模型输出含 "Vocals"，匹配逻辑工作正常。
-3. **silero-vad API** ✅ 6.2.3 的 `load_silero_vad` / `get_speech_timestamps` 与代码一致。
-4. **分离输出采样率** ✅ 重采样逻辑工作正常。
-5. **device_map** ✅ `{"": "cuda:0"}` + accelerate 正常。
+```bat
+:: 装 qwen-asr 包（注意先用 pip show torch 确认不会动 cu128 torch，必要时 --no-deps）
+pip install -U qwen-asr
+:: 模型走 ModelScope 下载（~9MB/s），与 ASR 模型同目录
+modelscope.exe download --model Qwen/Qwen3-ForcedAligner-0.6B --local_dir C:/models/Qwen3-ForcedAligner-0.6B
+```
 
-**真机修的两个 bug**：
+`settings.yaml` 的 `ja_asr.aligner_model` 已预填 `C:/models/Qwen3-ForcedAligner-0.6B`。
 
-1. **ffmpeg 不在 PATH**：audio-separator 初始化时会 `subprocess` 调裸 `ffmpeg -version`（PATH 查找），
-   系统 PATH 没有 ffmpeg → `WinError 2`。修复：`ja_transcriber.py::_run_worker`
-   把 `ja_asr.ffmpeg_path` 所在目录注入 worker 子进程 PATH（bat/CLI 任何入口都生效）。
-2. **分离中间产物污染 CWD**：`separator.separate()` 默认把 `_(Vocals)_*.wav` / `_(Instrumental)_*.wav`
-   写到进程当前目录（双击 bat 时 = 仓库根目录，每个视频 ~100MB）。修复：`ja_worker.py::_separate_vocals`
-   每 job 把 `separator.output_dir` **和 `separator.model_instance.output_dir`** 都指到该 job 的临时目录
-   （model instance 在 load_model 时就快照了 output_dir，只改 separator 的不够）；
-   且 `separate()` 返回的是**裸文件名**（相对其 output_dir），需自行 join 回去再打开。
+### 2. CAM++ 说话人模型
 
-## 三、已知设计限制（有意为之，但要知道）
+```bat
+pip install modelscope kaldiio scikit-learn
+:: 模型不用手动下，modelscope pipeline 首跑自动拉（~几十MB）
+```
 
-- **字幕时间轴 = VAD 块边界**，不是词级精对齐。密集对白时一个块可能到 30 秒上限，对应一行超长字幕。备选改进：
-  - 调小 `vad_chunker.merge_speech_intervals` 的 `max_chunk`（如 10~15s）；
-  - 或实现 `ja_worker.py::refine_timestamps`（已留接缝）接 Qwen3-ForcedAligner-0.6B（词级对齐；注意它单段上限 5 分钟、日语需 `pip install nagisa`）。
-- **SRT 未做按字数/时长的 cue 拆分**（日语一行 30 秒对白会很长）。需要时在 `subtitle.py::segments_to_srt` 前加一个 split 步骤。
-- **`keep_vocals: true` 只在同时指定 `--out-dir` 时生效**（`ja_transcriber.py:148`），vocals 写到 out_dir 下 `<名>.vocals.wav`。不指定 out-dir 时静默丢弃。
-- **与 sync 流水线完全隔离**：不进 SQLite、不动 VideoStatus、web UI 看不到。这是按需求定的（独立工具）。
-- **重复文件名处理**：不同目录下同 stem 的视频会加 `_2` 后缀区分 job id，但产物仍按原 stem 写回各自目录，互不覆盖。
+`settings.yaml` 的 `ja_asr.speaker_model` 已预填 `iic/speech_campplus_sv_zh-cn_16k-common`。
 
-## 四、明确未实现（后续需求候选）
+> ⚠️ 老坑提醒：在这个环境装任何包都可能把 cu128 torch 顶成 CPU 版。装完务必
+> `python -c "import torch; print(torch.__version__, torch.cuda.is_available())"`，
+> 不对就 `pip install --force-reinstall --no-deps torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128`。
 
-| 事项 | 备注 |
+### 3. 验证步骤（按顺序）
+
+1. 不带新模型先跑通回归：`uv run creator-agent ja-asr --force <测试视频>`，
+   字幕应该已经变短（标点切句 + 按比例分摊时间），证明 cue_splitter 链路 OK。
+2. 加 aligner：`aligner_model` 已填则默认启用。看 stderr 没有 aligner WARNING，
+   字幕时间轴应明显贴合语音（句间静音不再算进字幕时长）。
+3. 加 speaker：字幕应出现 `話者A:` / `話者B:` 前缀，对话轮替处一定分条。
+4. 完整重跑哆啦A梦测试片，对照画面抽查 3~5 处双人对话。
+
+## 二、真机验证要点 / 高风险点（代码未在真机跑过的部分）
+
+| # | 点 | 不确定处 | 排障 |
+|---|---|---|---|
+| 1 | `qwen_asr.Qwen3ForcedAligner.align()` | 返回 `results[0]` 的词列表，每项 `.text/.start_time/.end_time`（模型卡用法）。时间是**相对该 chunk** 的，代码已加 chunk 偏移 | 手动跑 `python -c` 调 align 打印结构 |
+| 2 | modelscope pipeline `output_emb=True` | 返回 dict 的 `spk_embedding` 键（192 维）。若键名变了，看 `TypeError/KeyError` 后打印 out 的 keys | `sv(str(p), output_emb=True)` 手动试 |
+| 3 | modelscope 是否用 GPU | pipeline 默认可能跑 CPU。说话人模型小，CPU 也够（每段一次前向），不强制 | 慢再查 `pipeline(..., device='gpu')` |
+| 4 | 聚类阈值 `speaker_threshold: 0.5` | 动漫角色音色差异大，0.5 应该够；若两人被并成一人→调小到 0.35；若一人被拆成多人→调大到 0.65 | 改 settings.yaml 即可，不用改代码 |
+| 5 | transformers 5.17 与 qwen-asr 包版本兼容 | qwen-asr 是较新的包，可能要求更新 transformers | 按报错升/降 qwen-asr 版本 |
+
+## 三、这次改了什么（代码侧）
+
+| 文件 | 改动 |
 |---|---|
-| e2e 测试 | 计划里有 `@pytest.mark.e2e` 真机测试，未写。参考 `tests/e2e/test_real_asr.py` 的模式 |
-| ForcedAligner 精对齐 | 接缝已留（见上） |
-| 中日双语字幕 | 仓库根目录的 `fix_subtitles.py` 是早前手工对轴脚本，暗示有翻译需求；本工具只出日语原文 |
-| 集成进 pipeline / web UI | 若以后想让 sync 下来的抖音视频也走 Qwen3-ASR，把 `JaTranscriber` 像 `Transcriber` 一样挂进 `PipelineRunner` 即可 |
-| 批量进度展示 | worker 子进程是阻塞式 `subprocess.run`，长批次时只能看 worker 自己 print 的日志（没被实时转发）。需要的话改成 Popen + 逐行转发 stderr |
+| `asr/cue_splitter.py`（新） | 纯函数：按标点切句、超长按顿号/硬切、词级时间戳→字幕时间（无词时间时按字数比例分摊）。`max_cue_chars`/`max_cue_sec` 双上限 |
+| `asr/speaker_turns.py`（新） | 纯函数：标签平滑（单点误标翻转）、按说话人分块（换人必断块）、話者A/B 命名 |
+| `asr/ja_worker.py` | 新管线串联；新增 `--aligner-model / --speaker-model / --speaker-threshold / --max-cue-chars / --max-cue-sec / --max-chunk`；`_diarize()` 提取 CAM++ 嵌入 + AgglomerativeClustering（cosine, average linkage）；可选模型加载失败只降级；旧的 `refine_timestamps` 空接缝已删除（对齐已实现）；max_chunk 默认 30s→15s |
+| `asr/ja_transcriber.py` | 透传新配置给 worker；.txt 输出行加 `話者X:` 前缀 |
+| `asr/subtitle.py` | SRT cue 加 `話者X:` 前缀 |
+| `models/transcript.py` | `TranscriptSegment.speaker: str \| None` |
+| `config.py::JaAsrSettings` + `settings.yaml` | 新增 `aligner_model / speaker_model / speaker_threshold / max_cue_chars / max_cue_sec / max_chunk_sec` |
+| `tests/unit/test_{cue_splitter,speaker_turns}.py`（新） | 19 个新单测；`test_subtitle.py` 加 2 个 |
+
+## 四、已知设计限制
+
+- **aligner 单段上限 5 分钟**：chunk 已 ≤15s，不会触顶。
+- **短于 0.4s 的语音段不提嵌入**（「うん」「はい」之类），直接继承邻居标签 + 平滑，
+  短回应偶尔标错人是预期内的。
+- **说话人是匿名标签**（話者A/B），不做"这是哆啦A梦"的角色实名映射。
+- **CAM++ 是中文数据训练的**：跨语言说话人嵌入一般可用，但动漫夸张音色（机械音、
+  变声道具回）可能聚类不稳，以真机效果为准，先调阈值再考虑换模型。
+- **与 sync 流水线完全隔离**：不进 SQLite、不动 VideoStatus。独立工具定位不变。
+- **`keep_vocals: true` 只在同时指定 `--out-dir` 时生效**。
 
 ## 五、排障速查
 
 | 症状 | 看哪里 |
 |---|---|
-| `JA ASR is not configured` | `settings.yaml` 的 `ja_asr.env_python` 路径 |
-| worker 报 model load 错 | stderr 会原样带出（transcriber 截取最后 1500 字符抛出）；先手动跑 `python src/creator_agent/asr/ja_worker.py --jobs ...` 复现 |
-| 分离结果没有人声轨 | `_separate_vocals` 的 outputs 打印，调匹配规则 |
-| 字幕时间轴整体偏移 | 不会偏移（时间戳直接来自原音频采样位置）；块太粗见"设计限制"第 1 条 |
-| 识别出中文/乱语 | `--language Japanese` 是否传进 worker（CLI 有 `-l` 覆盖） |
+| stderr 有 `aligner load failed` | qwen-asr 没装 / 模型路径错；只影响时间轴精度 |
+| stderr 有 `speaker model load failed` | modelscope 没装 / 首次下载失败；只影响分人 |
+| 字幕没有 話者 前缀 | `speaker_model` 是否为空；或 `_diarize` 抛异常走了降级（stderr 有 WARNING） |
+| 所有人被标成同一話者 | 阈值太大→调小 `speaker_threshold`；或嵌入提取全失败 |
+| 一个人被拆成多个話者 | 阈值太小→调大 |
+| 字幕时间轴和语音对不上 | aligner 没启用或失败；确认 stderr 无 WARNING 且 `.srt` 时间不是均匀分摊 |
+| worker 报 model load 错 | 手动跑 `python src/creator_agent/asr/ja_worker.py --jobs ...` 复现 |
 
 ## 六、关键文件索引
 
 | 文件 | 角色 |
 |---|---|
-| `src/creator_agent/asr/ja_worker.py` | 专用环境 worker（分离+VAD+ASR），真机调试主战场 |
-| `src/creator_agent/asr/ja_transcriber.py` | 主环境编排 + `scan_videos`/`split_pending`（inbox 扫描、增量跳过） |
-| `src/creator_agent/asr/vad_chunker.py` | 分块策略纯函数（调字幕粒度改这里） |
-| `src/creator_agent/asr/subtitle.py` | SRT 生成 |
+| `src/creator_agent/asr/ja_worker.py` | 专用环境 worker（分离+VAD+分人+ASR+对齐），真机调试主战场 |
+| `src/creator_agent/asr/cue_splitter.py` | 字幕切句策略纯函数（调字幕粒度改这里） |
+| `src/creator_agent/asr/speaker_turns.py` | 说话人分块策略纯函数 |
+| `src/creator_agent/asr/vad_chunker.py` | VAD 合并策略纯函数 |
+| `src/creator_agent/asr/ja_transcriber.py` | 主环境编排 |
 | `src/creator_agent/config.py::JaAsrSettings` | 配置项 |
-| `src/creator_agent/cli/main.py::ja_asr` | CLI 入口 |
-| `scripts/transcribe_ja.py` / `bat/ja-asr.bat` | 等价入口 |
-| `tests/unit/test_{ja_transcriber,subtitle,vad_chunker}.py` | 22 个单测 |
+| `tests/unit/test_{cue_splitter,speaker_turns,ja_transcriber,subtitle,vad_chunker}.py` | 单测 |
 
-验证命令：`uv run pytest -m "not e2e"`、`uv run ruff check src/ scripts/transcribe_ja.py tests/`（注意仓库根目录 `fix_subtitles.py`、`temp_patch_final.py` 等存量文件本身有 lint 错误，与本次改动无关）。
+验证命令：`uv run pytest -m "not e2e"`、`uv run ruff check src/`。

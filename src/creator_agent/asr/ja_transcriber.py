@@ -131,20 +131,33 @@ class JaTranscriber:
             json.dump(jobs, f, ensure_ascii=False)
             jobs_path = f.name
         try:
+            s = self._settings
             cmd = [
-                self._settings.env_python,
+                s.env_python,
                 self._worker_script,
                 "--jobs",
                 jobs_path,
                 "--model",
-                self._settings.model,
+                s.model,
                 "--sep-model",
-                self._settings.sep_model,
+                s.sep_model,
                 "--device",
-                self._settings.device,
+                s.device,
                 "--language",
-                self._settings.language,
+                s.language,
+                "--speaker-threshold",
+                str(s.speaker_threshold),
+                "--max-cue-chars",
+                str(s.max_cue_chars),
+                "--max-cue-sec",
+                str(s.max_cue_sec),
+                "--max-chunk",
+                str(s.max_chunk_sec),
             ]
+            if s.aligner_model:
+                cmd += ["--aligner-model", s.aligner_model]
+            if s.speaker_model:
+                cmd += ["--speaker-model", s.speaker_model]
             if self._settings.keep_vocals and out_dir:
                 cmd += ["--keep-vocals-dir", str(out_dir)]
             # Same rationale as Transcriber: force UTF-8 in the worker and
@@ -184,7 +197,7 @@ class JaTranscriber:
         )
         (target_dir / f"{stem}.transcript.json").write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
         # Segmented text: one segment per line for easy reading / diffing.
-        lines = [s.text for s in segs if s.text.strip()]
+        lines = [f"{s.speaker}: {s.text}" if s.speaker else s.text for s in segs if s.text.strip()]
         (target_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         write_srt(segs, target_dir / f"{stem}.srt")
 

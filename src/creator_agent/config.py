@@ -48,6 +48,17 @@ class JaAsrSettings(BaseModel):
     language: str = "Japanese"
     keep_vocals: bool = False  # keep isolated vocals.wav (only with --out-dir)
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
+    # Word-level alignment (Qwen3-ForcedAligner-0.6B, HF id or local path).
+    # Blank = skip; cue times then fall back to proportional allocation.
+    aligner_model: str = ""
+    # Speaker diarization (ModelScope CAM++ id, e.g.
+    # iic/speech_campplus_sv_zh-cn_16k-common). Blank = skip diarization.
+    speaker_model: str = ""
+    speaker_threshold: float = 0.5  # cosine distance for clustering; lower = more speakers
+    # Subtitle cue shaping.
+    max_cue_chars: int = 24  # split/merge cues to at most this many characters
+    max_cue_sec: float = 8.0  # ... and at most this duration
+    max_chunk_sec: float = 15.0  # ASR chunk cap (was hardcoded 30s)
 
 
 class LogSettings(BaseModel):

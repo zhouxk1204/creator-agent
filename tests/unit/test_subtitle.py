@@ -35,6 +35,17 @@ def test_empty_input_returns_empty_string():
     assert segments_to_srt([]) == ""
 
 
+def test_speaker_prefix_added():
+    seg = TranscriptSegment(start=1.0, end=2.0, text="おはよう", speaker="話者A")
+    srt = segments_to_srt([seg])
+    assert "\n話者A: おはよう\n" in srt
+
+
+def test_no_speaker_no_prefix():
+    srt = segments_to_srt([_seg(1.0, 2.0, "おはよう")])
+    assert "\nおはよう\n" in srt
+
+
 def test_write_srt(tmp_path):
     out = write_srt([_seg(0, 1.5, "テスト")], tmp_path / "sub" / "a.srt")
     content = out.read_text(encoding="utf-8")

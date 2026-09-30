@@ -37,3 +37,11 @@ ja_asr:
   language: Japanese
   keep_vocals: false
   ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
+  # Word-level alignment -> accurate subtitle cue times (see docs/ja-asr-handoff.md).
+  aligner_model: C:/models/Qwen3-ForcedAligner-0.6B   # blank = proportional cue times
+  # Speaker diarization (CAM++ via ModelScope) -> split cues at speaker turns.
+  speaker_model: iic/speech_campplus_sv_zh-cn_16k-common   # blank = no diarization
+  speaker_threshold: 0.5    # cosine distance; lower = more speakers (too many -> raise it)
+  max_cue_chars: 24         # subtitle cue length cap
+  max_cue_sec: 8.0          # subtitle cue duration cap
+  max_chunk_sec: 15.0       # ASR chunk cap (was 30)

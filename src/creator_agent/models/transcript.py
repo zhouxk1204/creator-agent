@@ -11,6 +11,7 @@ class TranscriptSegment(BaseModel):
     start: float
     end: float
     text: str
+    speaker: str | None = None  # diarization label (e.g. "話者A"); None = not diarized
 
 
 class Transcript(BaseModel):

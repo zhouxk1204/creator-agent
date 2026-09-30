@@ -9,17 +9,23 @@ in this env). Invoked as a subprocess by the main env's JaTranscriber.
 Usage:
     python ja_worker.py --jobs jobs.json [--model Qwen/Qwen3-ASR-1.7B-hf]
         [--sep-model ""] [--device cuda:0] [--language Japanese] [--keep-vocals]
+        [--aligner-model Qwen/Qwen3-ForcedAligner-0.6B]
+        [--speaker-model iic/speech_campplus_sv_zh-cn_16k-common]
 
 jobs.json = [{"video_id": str, "audio_path": str}, ...]
 (audio_path must be 16kHz mono WAV, produced by the caller's extract_audio.)
 
-Pipeline per job: audio-separator vocal isolation -> silero-vad speech chunks
--> Qwen3-ASR per chunk -> segments with chunk-boundary timestamps. Loads all
-models ONCE for the whole batch. Prints results wrapped in sentinel markers
-(identical contract to asr/worker.py):
+Pipeline per job: audio-separator vocal isolation -> silero-vad speech
+intervals -> [optional: CAM++ speaker embeddings + clustering -> per-speaker
+chunks] -> Qwen3-ASR per chunk -> [optional: Qwen3-ForcedAligner word-level
+timestamps] -> cue splitting at punctuation -> segments. Loads all models
+ONCE for the whole batch. Optional models that fail to load only degrade
+their own step (no alignment / no diarization), never the whole batch.
+Prints results wrapped in sentinel markers (identical contract to
+asr/worker.py):
 
     ===ASR_RESULTS_BEGIN===
-    [{"video_id":..., "ok":true, "text":..., "segments":[{"start","end","text"}],
+    [{"video_id":..., "ok":true, "text":..., "segments":[{"start","end","text","speaker"?}],
       "duration_sec":..., "vocals_path":...}, ...]
     ===ASR_RESULTS_END===
 
@@ -27,7 +33,8 @@ Per-video failures set ``ok: false`` with an ``error`` field; they never abort
 the batch. Exit code 0 even if some videos failed (the caller reads the JSON).
 
 Model caches: HF models -> ~/.cache/huggingface (set HF_ENDPOINT for mirrors);
-separation model -> ~/.cache/audio-separator-models.
+separation model -> ~/.cache/audio-separator-models; ModelScope (speaker)
+-> ~/.cache/modelscope.
 """
 
 from __future__ import annotations
@@ -43,6 +50,14 @@ _RESULT_BEGIN = "===ASR_RESULTS_BEGIN==="
 _RESULT_END = "===ASR_RESULTS_END==="
 
 _SAMPLE_RATE = 16000  # silero-vad + Qwen3-ASR both want 16 kHz mono
+_MIN_EMBED_SEC = 0.4  # intervals shorter than this give unreliable speaker embeddings
+
+# Pure-policy modules shared with the main env via this sys.path shim (they
+# live in creator_agent, which is not installed here).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cue_splitter import split_cues  # noqa: E402
+from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
+from vad_chunker import merge_speech_intervals  # noqa: E402
 
 
 def _emit(results: list) -> None:
@@ -50,6 +65,10 @@ def _emit(results: list) -> None:
     print(_RESULT_BEGIN, flush=True)
     print(json.dumps(results, ensure_ascii=False), flush=True)
     print(_RESULT_END, flush=True)
+
+
+def _warn(msg: str) -> None:
+    print(f"[ja_worker] WARNING: {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +104,23 @@ def _load_asr(model_id: str, device: str):
     else:
         model = AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype="auto", device_map={"": device})
     return processor, model
+
+
+def _load_aligner(model_id: str, device: str):
+    """Qwen3-ForcedAligner via the qwen-asr package (word-level timestamps)."""
+    import torch
+    from qwen_asr import Qwen3ForcedAligner
+
+    dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+    return Qwen3ForcedAligner.from_pretrained(model_id, dtype=dtype, device_map=device)
+
+
+def _load_speaker(model_id: str):
+    """CAM++ speaker-verification pipeline via ModelScope (embeddings)."""
+    from modelscope.pipelines import pipeline
+    from modelscope.utils.constant import Tasks
+
+    return pipeline(Tasks.speaker_verification, model=model_id)
 
 
 # ---------------------------------------------------------------------------
@@ -129,15 +165,11 @@ def _to_16k_mono(wav_path: Path, out_path: Path) -> Path:
     return out_path
 
 
-def _speech_chunks(vad_model, vocals_path: Path, duration: float) -> list[tuple[float, float]]:
-    """silero-vad speech intervals -> merged ASR chunks [(start, end), ...]."""
+def _speech_intervals(vad_model, vocals_path: Path) -> list[tuple[float, float]]:
+    """silero-vad raw speech intervals [(start, end), ...] (unmerged)."""
     import soundfile as sf
     import torch
     from silero_vad import get_speech_timestamps
-
-    # Local import shim: vad_chunker lives in creator_agent, not installed here.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from vad_chunker import merge_speech_intervals  # noqa: E402
 
     data, _ = sf.read(str(vocals_path))
     wav = torch.from_numpy(data).float()
@@ -148,8 +180,50 @@ def _speech_chunks(vad_model, vocals_path: Path, duration: float) -> list[tuple[
         min_speech_duration_ms=250,
         min_silence_duration_ms=300,
     )
-    intervals = [(t["start"] / _SAMPLE_RATE, t["end"] / _SAMPLE_RATE) for t in ts]
-    return merge_speech_intervals(intervals, max_gap=0.3, max_chunk=30.0, pad=0.1, duration=duration)
+    return [(t["start"] / _SAMPLE_RATE, t["end"] / _SAMPLE_RATE) for t in ts]
+
+
+def _diarize(
+    sv_pipeline, vocals_path: Path, intervals: list[tuple[float, float]], work: Path, threshold: float
+) -> list[int]:
+    """Cluster per-interval CAM++ embeddings -> speaker label per interval.
+
+    Intervals too short for a stable embedding inherit their neighbour's
+    label. Falls back to a single speaker when there is nothing to cluster.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    data, sr = sf.read(str(vocals_path))
+    embs: list = [None] * len(intervals)
+    for i, (s, e) in enumerate(intervals):
+        if e - s < _MIN_EMBED_SEC:
+            continue
+        clip_path = work / f"spk_{i:04d}.wav"
+        sf.write(str(clip_path), data[int(s * sr) : int(e * sr)], sr)
+        out = sv_pipeline(str(clip_path), output_emb=True)
+        embs[i] = np.asarray(out["spk_embedding"], dtype=np.float64).ravel()
+
+    have = [i for i, e in enumerate(embs) if e is not None]
+    labels: list[int | None] = [None] * len(intervals)
+    if len(have) > 1:
+        mat = np.stack([embs[i] for i in have])
+        mat /= np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9
+        from sklearn.cluster import AgglomerativeClustering
+
+        cl = AgglomerativeClustering(n_clusters=None, metric="cosine", linkage="average", distance_threshold=threshold)
+        for i, lab in zip(have, cl.fit_predict(mat)):
+            labels[i] = int(lab)
+    elif have:
+        labels[have[0]] = 0
+    # Fill gaps (short intervals) from the previous labelled interval, else the next.
+    for i in range(len(labels)):
+        if labels[i] is None and i > 0:
+            labels[i] = labels[i - 1]
+    for i in range(len(labels) - 1, -1, -1):
+        if labels[i] is None and i < len(labels) - 1:
+            labels[i] = labels[i + 1]
+    return [0 if lab is None else lab for lab in labels]
 
 
 def _transcribe_chunk(processor, model, chunk_wav: Path, language: str) -> str:
@@ -162,13 +236,20 @@ def _transcribe_chunk(processor, model, chunk_wav: Path, language: str) -> str:
     return processor.decode(generated, return_format="transcription_only")[0].strip()
 
 
-def refine_timestamps(segments: list[dict], vocals_path: Path) -> list[dict]:
-    """Seam for Qwen3-ForcedAligner word-level refinement (not implemented).
+def _align_words(aligner, chunk_wav: Path, text: str, language: str, chunk_start: float) -> list | None:
+    """Word-level timestamps for one chunk, offset to absolute seconds.
 
-    Currently VAD chunk boundaries are used as-is. A future aligner pass would
-    take (segments, vocals_path) and tighten each segment's start/end.
+    Returns None on any failure — the caller then splits cues with
+    proportional timing instead. Never raises.
     """
-    return segments
+    try:
+        res = aligner.align(audio=str(chunk_wav), text=text, language=language)
+        items = res[0]
+        words = [(w.text, float(w.start_time) + chunk_start, float(w.end_time) + chunk_start) for w in items]
+        return words or None
+    except Exception as e:
+        _warn(f"aligner failed on chunk @{chunk_start:.1f}s: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -179,23 +260,45 @@ def refine_timestamps(segments: list[dict], vocals_path: Path) -> list[dict]:
 def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     import soundfile as sf
 
-    separator, vad_model, processor, asr_model = models
+    separator, vad_model, processor, asr_model, aligner, sv_pipeline = models
     audio_path = Path(job["audio_path"])
     duration = float(sf.info(str(audio_path)).duration)
 
     with tempfile.TemporaryDirectory(prefix="ja-asr-") as tmp:
         work = Path(tmp)
         vocals = _separate_vocals(separator, audio_path, work)
-        chunks = _speech_chunks(vad_model, vocals, duration)
+        intervals = _speech_intervals(vad_model, vocals)
+
+        # Chunking: per-speaker turns when diarization is on, else plain VAD merge.
+        names: dict[int, str] = {}
+        if sv_pipeline is not None and intervals:
+            try:
+                labels = smooth_labels(_diarize(sv_pipeline, vocals, intervals, work, args.speaker_threshold))
+                names = speaker_names(labels)
+                raw_chunks = build_speaker_chunks(
+                    intervals, labels, max_gap=0.3, max_chunk=args.max_chunk, pad=0.1, duration=duration
+                )
+                chunks = [(s, e, names.get(lab)) for s, e, lab in raw_chunks]
+            except Exception as e:
+                _warn(f"diarization failed, falling back to plain chunks: {e}")
+                chunks = [(s, e, None) for s, e in _plain_chunks(intervals, args, duration)]
+        else:
+            chunks = [(s, e, None) for s, e in _plain_chunks(intervals, args, duration)]
 
         segments: list[dict] = []
-        for i, (start, end) in enumerate(chunks):
+        for i, (start, end, speaker) in enumerate(chunks):
             chunk_wav = _slice_wav(vocals, work / f"chunk_{i:04d}.wav", start, end)
             text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language)
-            if text:
-                segments.append({"start": round(start, 3), "end": round(end, 3), "text": text})
-
-        segments = refine_timestamps(segments, vocals)
+            if not text:
+                continue
+            words = _align_words(aligner, chunk_wav, text, args.language, start) if aligner else None
+            for cue in split_cues(
+                text, start, end, words=words, max_chars=args.max_cue_chars, max_sec=args.max_cue_sec
+            ):
+                seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
+                if speaker:
+                    seg["speaker"] = speaker
+                segments.append(seg)
 
         vocals_out = None
         if keep_dir is not None:
@@ -209,6 +312,10 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         "duration_sec": round(duration, 3),
         "vocals_path": str(vocals_out) if vocals_out else None,
     }
+
+
+def _plain_chunks(intervals: list[tuple[float, float]], args, duration: float) -> list[tuple[float, float]]:
+    return merge_speech_intervals(intervals, max_gap=0.3, max_chunk=args.max_chunk, pad=0.1, duration=duration)
 
 
 def _slice_wav(vocals_path: Path, out_path: Path, start: float, end: float) -> Path:
@@ -228,6 +335,21 @@ def main() -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--language", default="Japanese")
     parser.add_argument("--keep-vocals-dir", default="", help="dir to keep vocals.wav per video (blank = discard)")
+    parser.add_argument(
+        "--aligner-model", default="", help="Qwen3-ForcedAligner HF id / local path (blank = no word alignment)"
+    )
+    parser.add_argument(
+        "--speaker-model", default="", help="ModelScope CAM++ speaker model id (blank = no diarization)"
+    )
+    parser.add_argument(
+        "--speaker-threshold",
+        type=float,
+        default=0.5,
+        help="cosine distance threshold for speaker clustering (lower = more speakers)",
+    )
+    parser.add_argument("--max-cue-chars", type=int, default=24)
+    parser.add_argument("--max-cue-sec", type=float, default=8.0)
+    parser.add_argument("--max-chunk", type=float, default=15.0, help="ASR chunk cap in seconds")
     args = parser.parse_args()
 
     jobs = json.loads(Path(args.jobs).read_text(encoding="utf-8"))
@@ -238,16 +360,34 @@ def main() -> int:
     keep_dir = Path(args.keep_vocals_dir) if args.keep_vocals_dir else None
 
     try:
-        models = (
+        core = (
             _load_separator(args.sep_model),
             _load_vad(),
             *_load_asr(args.model, args.device),
         )
-    except Exception as e:  # model load failure -> all jobs fail, but we still emit JSON
+    except Exception as e:  # core model load failure -> all jobs fail, but we still emit JSON
         traceback.print_exc()
         results = [{"video_id": j["video_id"], "ok": False, "error": f"model load: {e}"} for j in jobs]
         _emit(results)
         return 0
+
+    # Optional models: their failure only disables their own step.
+    aligner = None
+    if args.aligner_model:
+        try:
+            aligner = _load_aligner(args.aligner_model, args.device)
+        except Exception as e:
+            traceback.print_exc()
+            _warn(f"aligner load failed ({e}); cue times will be proportional")
+    sv_pipeline = None
+    if args.speaker_model:
+        try:
+            sv_pipeline = _load_speaker(args.speaker_model)
+        except Exception as e:
+            traceback.print_exc()
+            _warn(f"speaker model load failed ({e}); diarization disabled")
+
+    models = (*core, aligner, sv_pipeline)
 
     results: list[dict] = []
     for job in jobs:

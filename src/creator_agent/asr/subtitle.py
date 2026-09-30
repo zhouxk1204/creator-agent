@@ -28,6 +28,8 @@ def segments_to_srt(segments: list[TranscriptSegment]) -> str:
         text = seg.text.strip()
         if not text:
             continue
+        if seg.speaker:
+            text = f"{seg.speaker}: {text}"
         cues.append(f"{len(cues) + 1}\n{_fmt_timestamp(seg.start)} --> {_fmt_timestamp(seg.end)}\n{text}\n")
     return "\n".join(cues)
 
