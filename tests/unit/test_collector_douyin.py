@@ -210,8 +210,14 @@ def test_list_page_cover_preferred_over_detail_cover(patched_fetch):
     # The card <img> cover (what users see on Douyin) must win over the
     # aweme-detail video.cover field, which resolves to a different image.
     patched_fetch.update({"1": _meta("1", IN_WINDOW)})  # meta.cover_url = p.douyinpic.com/1.jpg
-    links = [{"vid": "1", "href": "https://www.douyin.com/video/1", "title": "video 1",
-              "cover": "https://p.douyinpic.com/list-cover-1.jpeg"}]
+    links = [
+        {
+            "vid": "1",
+            "href": "https://www.douyin.com/video/1",
+            "title": "video 1",
+            "cover": "https://p.douyinpic.com/list-cover-1.jpeg",
+        }
+    ]
 
     result, _ = _run(links)
 

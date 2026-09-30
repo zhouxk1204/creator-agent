@@ -55,3 +55,6 @@ translate:
   ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
   burn_font: Microsoft YaHei
   burn_fontsize: 16
+  # 二次学习：人工修正字幕 → 记忆库 → 注入下次翻译
+  project_dir: ./subtitle-project   # episodes/<剧集>/{01,02,03}.srt + knowledge/ + reports/
+  memory_cases: 10                  # 每批翻译注入的历史相似案例上限

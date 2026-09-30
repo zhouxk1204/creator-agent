@@ -1,8 +1,9 @@
-# 日译中字幕 + 烧录交接文档（Qwen3.5 9B 本地翻译）
+# 日译中字幕 + 烧录 + 二次学习交接文档（Qwen3.5 9B 本地翻译）
 
-> 日期：2026-09-30。状态：**代码已实现、单测全过（230 个），等真机装模型验证**。
+> 日期：2026-09-30。状态：**代码已实现、单测全过（255 个），等真机装模型验证**。
 > 链路：`视频 → ja-asr（日文 .srt）→ translate（本地 LLM 日译中 → .zh.srt，时间轴不变）→ --burn（ffmpeg 烧录 → .zh.mp4）`。
 > 翻译 prompt 是用户定的"专业日中字幕翻译"10 条要求，原样写在 `translate/translator.py::SYSTEM_PROMPT`。
+> 另有**二次学习**回路：人工修正字幕 → `learn` 差异分析 → 知识库 → 下次翻译自动注入 prompt。
 
 ## 一、真机要做的事（模型安装）
 
@@ -54,6 +55,11 @@ curl http://localhost:11434/v1/models
 | `cli/main.py` | 新命令 `translate`（独立翻译/烧录）；`ja-asr` 新增 `--translate` / `--burn` 链式执行 |
 | `bat/translate.bat`（新） | 双击批量翻译 inbox，支持拖文件、`--burn` |
 | `tests/unit/test_{translator,burner}.py`（新） | 18 个单测（分批/prompt/解析/重试/回退/时间轴保持/烧录命令构造） |
+| `translate/alignment.py`（新） | 02 vs 03 按时间轴对齐成块：same / time_changed / split / merge |
+| `translate/memory.py`（新） | `MemoryStore`：knowledge/ 读写、去重合并、`prompt_section` 检索注入 |
+| `translate/learn.py`（新） | `analyze_episode`（对齐 + LLM 分类 + 04_analysis.json）、`learn_project`、`write_reports` |
+| `cli/main.py` + `bat/learn.bat` | 新命令 `learn` |
+| `tests/unit/test_{alignment,memory,learn}.py`（新） | 对齐/去重/注入/端到端幂等 |
 
 ## 五、行为约定（要知道的）
 
@@ -64,7 +70,60 @@ curl http://localhost:11434/v1/models
 - **温度 0.2**：翻译求稳不求活。
 - **说话人前缀**：`話者A:` 会作为文本一起被翻译（模型一般会翻成"说话人A："）。不想要的話先去掉前缀再翻，或在 prompt 里加规则。
 
-## 六、排障速查
+## 六、二次学习（learn）
+
+把人工修正后的字幕喂回来，让 Qwen3.5 9B 当"审校专家"分析 AI 翻译和人工译文的差异，
+沉淀成知识库；之后每次 `translate` / `ja-asr --translate` 会**自动把相关知识注入翻译 prompt**。
+
+### 目录约定（settings.yaml 的 `translate.project_dir`，默认 `./subtitle-project`）
+
+```
+subtitle-project/
+├── episodes/<剧集名>/          ← 每集一个目录，放 3 个输入文件
+│   ├── 01_original_ja.srt      Qwen3-ASR 原始日文（ja-asr 产物）
+│   ├── 02_ai_zh.srt            AI 初翻（translate 产物的 .zh.srt 改名）
+│   ├── 03_final_zh.srt         人工修改后的最终字幕
+│   └── 04_analysis.json        （learn 自动写出：对齐 + 差异明细）
+├── knowledge/                  （learn 自动维护，translation_rules.md 可手工编辑）
+│   ├── error_cases.json        错误案例库（带类别标签）
+│   ├── terminology.json        术语/人名固定译法
+│   ├── segmentation_rules.json 结构/时间轴修改记录
+│   ├── translation_rules.md    可泛化的翻译规则（每条一行 "- " 开头）
+│   └── translation_memory.json 编译产物（translator 实际读取的）
+└── reports/
+    ├── episode_report.csv      每条差异一行（Excel 直接开）
+    └── project_report.html     全项目汇总（类别分布、术语、规则、案例）
+```
+
+### 使用
+
+```bat
+bat\learn.bat                :: 扫描 project_dir/episodes/ 下所有剧集
+uv run creator-agent learn   :: 等价命令行（--model/--base-url 可覆盖配置）
+```
+
+流程：02 和 03 按时间轴对齐（same/时间轴修改/拆分/合并，容差 0.05s）→ 有差异的块按 20 条/批
+发给 LLM 分类（用户的类别体系：翻译错误 9 类 / 字幕结构 6 类 / 时间轴 4 类，同时提取术语和
+可泛化规则）→ 写 04_analysis.json → 去重合并进 knowledge/ → 生成 reports/。
+
+### 注入逻辑（translate 时自动发生，无需干预）
+
+每个翻译批次的 prompt 里会插入（`memory.py::MemoryStore.prompt_section`）：
+
+1. **【术语库】** 本批日文里字面上出现的术语 → 强制统一译名；
+2. **【历史错误案例】** 与本批最相似（字符 bigram 重合度）的 top-K 条（`memory_cases`，默认 10）；
+3. **【翻译规则】** 全部规则的前 15 条。
+
+知识库不存在时不注入，行为和以前完全一样。
+
+### 注意
+
+- **幂等**：案例按 (日文, AI译文) 去重、术语按日文去重（人工修正覆盖旧值）、规则按文本去重
+  → 同一集重复 learn 不会膨胀。新增剧集直接丢进 episodes/ 再跑一次即可。
+- **LLM 失败的批次不会中断**：该批只记录结构差异（拆分/合并/时间轴），文字差异分类留空。
+- `translation_rules.md` 是给人看的，可以手工增删行，下次翻译即生效（learn 重跑不会覆盖手工行——追加式去重合并）。
+
+## 七、排障速查
 
 | 症状 | 看哪里 |
 |---|---|

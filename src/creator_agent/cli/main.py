@@ -571,6 +571,36 @@ def translate_cmd(
 
 
 @app.command(
+    name="learn",
+    help="Learn from human-corrected subtitles (episodes/*/01_ja+02_ai+03_final.srt) "
+    "-> knowledge/ memory + reports/. Next translations inject the memory automatically.",
+)
+def learn_cmd(
+    project_dir: str | None = typer.Argument(
+        None, help="Subtitle project dir (default: translate.project_dir in settings.yaml)."
+    ),
+    model: str | None = typer.Option(None, "--model", help="Override translate.model."),
+    base_url: str | None = typer.Option(None, "--base-url", help="Override translate.base_url."),
+):
+    from creator_agent.translate.learn import learn_project
+
+    settings = load_settings()
+    ts = settings.translate
+    overrides = {k: v for k, v in {"model": model, "base_url": base_url}.items() if v}
+    if overrides:
+        ts = ts.model_copy(update=overrides)
+
+    pdir = Path(project_dir) if project_dir else Path(ts.project_dir)
+    typer.echo(f"Learning from {pdir}/episodes/ via {ts.model} ...")
+    done, failed = learn_project(pdir, ts)
+    typer.echo(f"Done: {done} episode(s) learned, {len(failed)} failed.")
+    for name, err in failed:
+        typer.echo(f"  {name}: {err}")
+    if failed and done == 0:
+        raise typer.Exit(code=1)
+
+
+@app.command(
     help="Run the full pipeline for one pasted video URL (Douyin / Xiaohongshu). "
     "Download + ASR. No arg = read the clipboard."
 )

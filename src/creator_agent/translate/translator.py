@@ -65,10 +65,19 @@ def make_batches(n_cues: int, batch_size: int) -> list[tuple[int, int]]:
     return [(i, min(i + batch_size, n_cues)) for i in range(0, n_cues, batch_size)]
 
 
-def build_prompt(segments: list[TranscriptSegment], start: int, end: int, context_cues: int = 5) -> str:
-    """User message for one batch: up to ``context_cues`` preceding cues as
-    reference-only context, then the numbered cues to translate."""
+def build_prompt(
+    segments: list[TranscriptSegment],
+    start: int,
+    end: int,
+    context_cues: int = 5,
+    memory_note: str = "",
+) -> str:
+    """User message for one batch: optional learned-memory section, up to
+    ``context_cues`` preceding cues as reference-only context, then the
+    numbered cues to translate."""
     lines: list[str] = []
+    if memory_note:
+        lines += [memory_note, ""]
     ctx = segments[max(0, start - context_cues) : start]
     if ctx:
         lines.append("【上文参考，仅供理解语气与上下文，不要翻译这部分】")
@@ -115,26 +124,19 @@ class SrtTranslator:
     # -- LLM backend --------------------------------------------------------
 
     def _chat(self, user: str) -> str:
-        s = self._s
-        resp = httpx.post(
-            f"{s.base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {s.api_key}"},
-            json={
-                "model": s.model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": 0.2,
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-            timeout=s.timeout_sec,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        from creator_agent.translate.llm import chat
+
+        return chat(self._s, SYSTEM_PROMPT, user)
 
     # -- translation ----------------------------------------------------------
+
+    def _memory(self):
+        """Learned-corrections store (lazy; None when no memory exists yet)."""
+        if not hasattr(self, "_store"):
+            from creator_agent.translate.memory import MemoryStore
+
+            self._store = MemoryStore.load(self._s.project_dir)
+        return self._store
 
     def translate_segments(self, segments: list[TranscriptSegment], tag: str = "") -> list[str]:
         """Translate every segment's text; returns a parallel list of Chinese
@@ -149,7 +151,12 @@ class SrtTranslator:
     def _translate_batch(
         self, segments: list[TranscriptSegment], start: int, end: int, zh: list[str], tag: str
     ) -> None:
-        prompt = build_prompt(segments, start, end, self._s.context_cues)
+        memory_note = ""
+        store = self._memory()
+        if store is not None:
+            batch_text = " ".join(_one_line(segments[i].text) for i in range(start, end))
+            memory_note = store.prompt_section(batch_text, max_cases=self._s.memory_cases)
+        prompt = build_prompt(segments, start, end, self._s.context_cues, memory_note=memory_note)
         last_err: Exception | None = None
         for attempt in range(2):
             try:

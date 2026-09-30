@@ -74,6 +74,11 @@ class TranslateSettings(BaseModel):
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
     burn_font: str = "Microsoft YaHei"
     burn_fontsize: int = 16
+    # Learning from human corrections (see `creator-agent learn`). Layout:
+    # <project_dir>/{episodes/<ep>/{01_original_ja,02_ai_zh,03_final_zh}.srt,
+    #               knowledge/*.json+md, reports/*}
+    project_dir: str = "./subtitle-project"
+    memory_cases: int = 10  # max similar past cases injected per translation batch
 
 
 class LogSettings(BaseModel):
