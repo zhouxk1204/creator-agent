@@ -484,37 +484,48 @@ def ja_asr(
         pending, skipped = split_pending(paths, out)
     for p in skipped:
         typer.echo(f"  - skip (has .srt): {p.name}")
-    if not pending:
-        typer.echo(f"Nothing to do ({len(skipped)} already transcribed; --force to redo).")
-        return
 
-    # Only require the worker env once there is actual work to do.
-    if not ja.env_python or not Path(ja.env_python).exists():
-        typer.echo(
-            "JA ASR is not configured. Set ja_asr.env_python in config/settings.yaml "
-            "to the dedicated creator-asr-ja env's python (see README)."
-        )
-        raise typer.Exit(code=1)
-
-    typer.echo(f"Transcribing {len(pending)} video(s) with vocal separation + {ja.model} ...")
-    transcriber = JaTranscriber(settings=ja)
-    done, failed = transcriber.transcribe_files(pending, out)
-    typer.echo(f"Done: {done} transcribed, {len(failed)} failed.")
-    for name, err in failed:
-        typer.echo(f"  {name}: {err}")
-    if failed and done == 0:
-        raise typer.Exit(code=1)
+    # ASR the videos that still need it (already-done ones are left as-is).
+    ok_videos: list[Path] = []
+    if pending:
+        # Only require the worker env once there is actual ASR work to do.
+        if not ja.env_python or not Path(ja.env_python).exists():
+            typer.echo(
+                "JA ASR is not configured. Set ja_asr.env_python in config/settings.yaml "
+                "to the dedicated creator-asr-ja env's python (see README)."
+            )
+            raise typer.Exit(code=1)
+        typer.echo(f"Transcribing {len(pending)} video(s) with vocal separation + {ja.model} ...")
+        transcriber = JaTranscriber(settings=ja)
+        done, failed = transcriber.transcribe_files(pending, out)
+        typer.echo(f"Done: {done} transcribed, {len(failed)} failed.")
+        for name, err in failed:
+            typer.echo(f"  {name}: {err}")
+        if failed and done == 0:
+            raise typer.Exit(code=1)
+        ok_videos = [p for p in pending if p.name not in {n for n, _ in failed}]
+    else:
+        typer.echo(f"No new videos to transcribe ({len(skipped)} already have .srt).")
 
     if translate or burn:
         from creator_agent.translate.translator import process_translations
 
-        # Only translate videos that were (re)transcribed this run.
-        ok_videos = [p for p in pending if p.name not in {n for n, _ in failed}]
-        typer.echo(f"Translating {len(ok_videos)} subtitle file(s) via {settings.translate.model} ...")
-        tdone, tfailed = process_translations(ok_videos, settings.translate, out_dir=out, burn=burn, force=True)
-        typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
-        for name, err in tfailed:
-            typer.echo(f"  {name}: {err}")
+        # Newly transcribed this run -> (re)translate their fresh .srt.
+        if ok_videos:
+            typer.echo(f"Translating {len(ok_videos)} new subtitle file(s) via {settings.translate.model} ...")
+            tdone, tfailed = process_translations(ok_videos, settings.translate, out_dir=out, burn=burn, force=True)
+            typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
+            for name, err in tfailed:
+                typer.echo(f"  {name}: {err}")
+        # Already-done videos: translate any still missing a .zh.srt. Existing
+        # Chinese subs are left untouched (force=False), so hand-edits survive.
+        if skipped:
+            typer.echo(f"Translating existing subtitle file(s) missing Chinese via {settings.translate.model} ...")
+            tdone, tfailed = process_translations(skipped, settings.translate, out_dir=out, burn=burn, force=False)
+            if tdone or tfailed:
+                typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
+            for name, err in tfailed:
+                typer.echo(f"  {name}: {err}")
 
 
 @app.command(
