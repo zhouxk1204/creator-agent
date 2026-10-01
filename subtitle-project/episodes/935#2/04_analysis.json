@@ -1,0 +1,1880 @@
+{
+  "episode": "935#2",
+  "cues": {
+    "ja": 157,
+    "ai": 154,
+    "final": 203
+  },
+  "summary": {
+    "time_changed": 80,
+    "split": 44,
+    "merge": 13,
+    "text_changed": 137
+  },
+  "records": [
+    {
+      "ai_indices": [
+        0
+      ],
+      "final_indices": [
+        0
+      ],
+      "kind": "time_changed",
+      "ja": "届いも。",
+      "ai": "终于到了。",
+      "final": "我回来了",
+      "item_id": 1
+    },
+    {
+      "ai_indices": [
+        1
+      ],
+      "final_indices": [
+        1
+      ],
+      "kind": "time_changed",
+      "ja": "帰ってきたか。",
+      "ai": "回来了吗？",
+      "final": "回来了啊",
+      "item_id": 2
+    },
+    {
+      "ai_indices": [
+        2
+      ],
+      "final_indices": [
+        2
+      ],
+      "kind": "time_changed",
+      "ja": "今日こそ言ってやらねば。",
+      "ai": "今天必须说出来了。",
+      "final": "今天非得好好说说你",
+      "item_id": 3
+    },
+    {
+      "ai_indices": [
+        3
+      ],
+      "final_indices": [
+        3
+      ],
+      "kind": "time_changed",
+      "ja": "のび太くん。",
+      "ai": "大雄。",
+      "final": "大雄！",
+      "item_id": 4
+    },
+    {
+      "ai_indices": [
+        4
+      ],
+      "final_indices": [
+        4,
+        5
+      ],
+      "kind": "split",
+      "ja": "たまにや昼寝やおやつの前にさっさと宿題をし。",
+      "ai": "偶尔的话，午休或吃点心前，赶紧把作业做完。",
+      "final": "偶尔也在午睡和吃点心之前先把作业做完... 嗯？",
+      "item_id": 5
+    },
+    {
+      "ai_indices": [
+        5
+      ],
+      "final_indices": [
+        6,
+        7
+      ],
+      "kind": "split",
+      "ja": "ねねねねねね何してるな？宿題に決まってるだろう。",
+      "ai": "嗯？嗯？嗯？你在干什么？当然是做作业啦。",
+      "final": "喂喂喂喂 你在做什么呢 当然是写作业啦",
+      "item_id": 6
+    },
+    {
+      "ai_indices": [
+        6
+      ],
+      "final_indices": [
+        8
+      ],
+      "kind": "time_changed",
+      "ja": "どうしたの？具合でも悪いの？",
+      "ai": "怎么了？身体不舒服吗？",
+      "final": "怎么了 哪里不舒服吗",
+      "item_id": 7
+    },
+    {
+      "ai_indices": [
+        7
+      ],
+      "final_indices": [
+        9
+      ],
+      "kind": "time_changed",
+      "ja": "ひとまず昼寝でもしたら、OSでも食べる。",
+      "ai": "先小睡一会儿，然后再吃点东西吧。",
+      "final": "要不先睡个午觉 或者先吃点心吧",
+      "item_id": 8
+    },
+    {
+      "ai_indices": [
+        8
+      ],
+      "final_indices": [
+        10,
+        11
+      ],
+      "kind": "split",
+      "ja": "今日はすごく大変なんだよ。",
+      "ai": "今天特别辛苦呢。",
+      "final": "今天可不得了了 不快点的话老师就要来了",
+      "item_id": 9
+    },
+    {
+      "ai_indices": [
+        9
+      ],
+      "final_indices": [
+        12
+      ],
+      "kind": "time_changed",
+      "ja": "早くしないと先生が来ちゃう。え、先生が来るな。",
+      "ai": "快点，不然老师要来了。啊，老师来了。",
+      "final": "老师要来？",
+      "item_id": 10
+    },
+    {
+      "ai_indices": [
+        10
+      ],
+      "final_indices": [
+        13
+      ],
+      "kind": "time_changed",
+      "ja": "成績のことでママに話があるって言うんだ。",
+      "ai": "妈妈说要跟你谈谈成绩的事。",
+      "final": "说是成绩方面有事要找妈妈谈",
+      "item_id": 11
+    },
+    {
+      "ai_indices": [
+        11
+      ],
+      "final_indices": [
+        14
+      ],
+      "kind": "time_changed",
+      "ja": "だからせめて宿題だけでも片付けておこう。ああ。",
+      "ai": "所以至少先把作业收拾一下吧。啊。",
+      "final": "所以至少先把作业写完吧...",
+      "item_id": 12
+    },
+    {
+      "ai_indices": [
+        12
+      ],
+      "final_indices": [
+        15
+      ],
+      "kind": "time_changed",
+      "ja": "のび太くん。全然。",
+      "ai": "大雄。完全不行。",
+      "final": "大雄",
+      "item_id": 13
+    },
+    {
+      "ai_indices": [
+        13
+      ],
+      "final_indices": [
+        16
+      ],
+      "kind": "time_changed",
+      "ja": "未来デパートの新製品です。",
+      "ai": "这是未来百货的新产品。",
+      "final": "是未来百货公司的新产品",
+      "item_id": 14
+    },
+    {
+      "ai_indices": [
+        14
+      ],
+      "final_indices": [
+        17
+      ],
+      "kind": "time_changed",
+      "ja": "どうぞお試しください。",
+      "ai": "请试用。",
+      "final": "请试用",
+      "item_id": 15
+    },
+    {
+      "ai_indices": [
+        15
+      ],
+      "final_indices": [
+        18
+      ],
+      "kind": "time_changed",
+      "ja": "なんだ紙用品か。",
+      "ai": "原来是纸制品啊。",
+      "final": "什么嘛 是试用品啊",
+      "item_id": 16
+    },
+    {
+      "ai_indices": [
+        16
+      ],
+      "final_indices": [
+        19,
+        20
+      ],
+      "kind": "split",
+      "ja": "なにこれ。なになに。",
+      "ai": "这是什么？什么什么？",
+      "final": "这是什么 我看看哈",
+      "item_id": 17
+    },
+    {
+      "ai_indices": [
+        17
+      ],
+      "final_indices": [
+        21
+      ],
+      "kind": "time_changed",
+      "ja": "変身レプリンター。",
+      "ai": "变身复印机。",
+      "final": "变身复印机",
+      "item_id": 18
+    },
+    {
+      "ai_indices": [
+        18
+      ],
+      "final_indices": [
+        22
+      ],
+      "kind": "time_changed",
+      "ja": "これを指先に付けてタッチすると、",
+      "ai": "把这个贴在指尖上触碰，",
+      "final": "把它戴在指尖去触碰别人",
+      "item_id": 19
+    },
+    {
+      "ai_indices": [
+        19
+      ],
+      "final_indices": [
+        23
+      ],
+      "kind": "time_changed",
+      "ja": "体つきや能力も含めその人に変身することができます",
+      "ai": "就能变身成那个人，连体型和能力都包括在内。",
+      "final": "就能连同体格和能力一起变成那个人",
+      "item_id": 20
+    },
+    {
+      "ai_indices": [
+        20
+      ],
+      "final_indices": [
+        24
+      ],
+      "kind": "time_changed",
+      "ja": "それは使えるぞ。",
+      "ai": "这东西真好用啊。",
+      "final": "这个好用啊",
+      "item_id": 21
+    },
+    {
+      "ai_indices": [
+        21,
+        22
+      ],
+      "final_indices": [
+        25
+      ],
+      "kind": "merge",
+      "ja": "相手の体細胞からデータを読み取り、 それを自分の体にプリント。",
+      "ai": "读取对方体细胞的数据， 然后打印到自己的身上。",
+      "final": "从对方的体细胞读取数据，再打印到自己身体上",
+      "item_id": 22
+    },
+    {
+      "ai_indices": [
+        23
+      ],
+      "final_indices": [
+        26
+      ],
+      "kind": "time_changed",
+      "ja": "その際代謝機能を極度にスピード化させて、",
+      "ai": "同时让代谢功能极度加速，",
+      "final": "此时会让代谢功能极度加速...",
+      "item_id": 23
+    },
+    {
+      "ai_indices": [
+        24
+      ],
+      "final_indices": [
+        27
+      ],
+      "kind": "time_changed",
+      "ja": "どうするにこれでタッチすればいいんでしょう。",
+      "ai": "那么，这样触碰就可以了吗？",
+      "final": "这样碰一下就行了吧",
+      "item_id": 24
+    },
+    {
+      "ai_indices": [
+        25
+      ],
+      "final_indices": [
+        28,
+        29
+      ],
+      "kind": "split",
+      "ja": "貸して。ゴラ。",
+      "ai": "借我一下。格拉。",
+      "final": "借我！ 啊 喂",
+      "item_id": 25
+    },
+    {
+      "ai_indices": [
+        26
+      ],
+      "final_indices": [
+        30
+      ],
+      "kind": "time_changed",
+      "ja": "ハーさん、お肩をたたきましょう。",
+      "ai": "哈桑，给你捶捶肩吧。",
+      "final": "妈妈 我来给您捶捶肩吧",
+      "item_id": 26
+    },
+    {
+      "ai_indices": [
+        27
+      ],
+      "final_indices": [
+        31
+      ],
+      "kind": "time_changed",
+      "ja": "あら、急にどうしたの？ありがと。",
+      "ai": "哎呀，怎么突然这样？谢谢。",
+      "final": "哎呀 突然怎么了 谢谢",
+      "item_id": 27
+    },
+    {
+      "ai_indices": [
+        28
+      ],
+      "final_indices": [
+        32
+      ],
+      "kind": "time_changed",
+      "ja": "最近疲れてるのよ。",
+      "ai": "最近好累啊。",
+      "final": "最近好累呢",
+      "item_id": 28
+    },
+    {
+      "ai_indices": [
+        29
+      ],
+      "final_indices": [
+        33
+      ],
+      "kind": "time_changed",
+      "ja": "あら。",
+      "ai": "哎呀。",
+      "final": "啊？人呢？",
+      "item_id": 29
+    },
+    {
+      "ai_indices": [
+        30
+      ],
+      "final_indices": [
+        34
+      ],
+      "kind": "time_changed",
+      "ja": "何もならないよ。",
+      "ai": "没什么用哦。",
+      "final": "什么变化都没有啊",
+      "item_id": 30
+    },
+    {
+      "ai_indices": [
+        31
+      ],
+      "final_indices": [
+        35,
+        36,
+        37
+      ],
+      "kind": "split",
+      "ja": "えっと、変身には精神の集中が必要です。だって。",
+      "ai": "嗯，变身需要集中精神。因为……",
+      "final": "呃…… 变身需要集中精神 是这么说的",
+      "item_id": 31
+    },
+    {
+      "ai_indices": [
+        32
+      ],
+      "final_indices": [
+        38
+      ],
+      "kind": "time_changed",
+      "ja": "精神集中か。",
+      "ai": "集中精神吗？",
+      "final": "集中精神啊",
+      "item_id": 32
+    },
+    {
+      "ai_indices": [
+        33
+      ],
+      "final_indices": [
+        39
+      ],
+      "kind": "time_changed",
+      "ja": "ママになれママになれ。",
+      "ai": "成为妈妈，成为妈妈。",
+      "final": "变成妈妈 变成妈妈",
+      "item_id": 33
+    },
+    {
+      "ai_indices": [
+        34
+      ],
+      "final_indices": [
+        40
+      ],
+      "kind": "time_changed",
+      "ja": "どっからどう見てもママだ。",
+      "ai": "怎么看都是妈妈啊。",
+      "final": "成功了 怎么看都是妈妈",
+      "item_id": 34
+    },
+    {
+      "ai_indices": [
+        35
+      ],
+      "final_indices": [
+        41
+      ],
+      "kind": "time_changed",
+      "ja": "でも。",
+      "ai": "但是……",
+      "final": "可是",
+      "item_id": 35
+    },
+    {
+      "ai_indices": [
+        36
+      ],
+      "final_indices": [
+        42,
+        43,
+        44
+      ],
+      "kind": "split",
+      "ja": "お、なんか変。ごめんください。先生だ。",
+      "ai": "啊，有点不对劲。打扰了，老师。",
+      "final": "啊 好像哪里不对劲 唔…… 打扰了 有人吗",
+      "item_id": 36
+    },
+    {
+      "ai_indices": [
+        37
+      ],
+      "final_indices": [
+        45,
+        46,
+        47
+      ],
+      "kind": "split",
+      "ja": "はい。どなたかしら。え、ほら。",
+      "ai": "是的。请问是哪位？诶，看那边。",
+      "final": "是老师 来了*2 是谁呢",
+      "item_id": 37
+    },
+    {
+      "ai_indices": [
+        38
+      ],
+      "final_indices": [
+        48,
+        49,
+        50
+      ],
+      "kind": "split",
+      "ja": "いやあのやっぱり疲れてると。",
+      "ai": "不，那个……果然还是因为太累了。",
+      "final": "咦 哎呀 嗯，那啥... 果然是太累了",
+      "item_id": 38
+    },
+    {
+      "ai_indices": [
+        39
+      ],
+      "final_indices": [
+        51
+      ],
+      "kind": "time_changed",
+      "ja": "はい、お待たせしました。",
+      "ai": "是的，让您久等了。",
+      "final": "让您久等了",
+      "item_id": 39
+    },
+    {
+      "ai_indices": [
+        40
+      ],
+      "final_indices": [
+        52,
+        53
+      ],
+      "kind": "split",
+      "ja": "いやいや、今日はまたずいぶんと。やっぱり変？",
+      "ai": "不不，今天又变得……果然很奇怪？",
+      "final": "哪里哪里 您今天可真是…… 咦 果然不对劲",
+      "item_id": 40
+    },
+    {
+      "ai_indices": [
+        41,
+        42
+      ],
+      "final_indices": [
+        54
+      ],
+      "kind": "merge",
+      "ja": "いやいや、 実はそののびくんの成績がカンバスしくなくてですね",
+      "ai": "不不， 其实那个“的比君”的成绩不太理想……",
+      "final": "呃是这样的 其实大雄的成绩不太理想……",
+      "item_id": 41
+    },
+    {
+      "ai_indices": [
+        43
+      ],
+      "final_indices": [
+        55
+      ],
+      "kind": "time_changed",
+      "ja": "。それなら大丈夫。",
+      "ai": "那也没关系。",
+      "final": "那样的话没关系",
+      "item_id": 42
+    },
+    {
+      "ai_indices": [
+        44
+      ],
+      "final_indices": [
+        56,
+        57
+      ],
+      "kind": "split",
+      "ja": "うちはもう成績は気にしないことにしました。",
+      "ai": "我们家已经决定不再在意成绩了。",
+      "final": "我们家已经决定不再在意成绩了 哦呵呵呵呵",
+      "item_id": 43
+    },
+    {
+      "ai_indices": [
+        45
+      ],
+      "final_indices": [
+        58
+      ],
+      "kind": "time_changed",
+      "ja": "大成功。",
+      "ai": "大成功。",
+      "final": "大成功",
+      "item_id": 44
+    },
+    {
+      "ai_indices": [
+        46
+      ],
+      "final_indices": [
+        59
+      ],
+      "kind": "time_changed",
+      "ja": "勝手なことして、後でどうなっても知らないぞ。",
+      "ai": "擅自这么做，以后出了事可别怪我。",
+      "final": "自作主张 之后怎么样我可不管",
+      "item_id": 45
+    },
+    {
+      "ai_indices": [
+        47
+      ],
+      "final_indices": [
+        60
+      ],
+      "kind": "time_changed",
+      "ja": "平気だよ。そうだ。",
+      "ai": "没关系啦。对了。",
+      "final": "没事的啦",
+      "item_id": 46
+    },
+    {
+      "ai_indices": [
+        48
+      ],
+      "final_indices": [
+        61
+      ],
+      "kind": "time_changed",
+      "ja": "これコピーした人の能力も身につくんだったよね。",
+      "ai": "把这份复印件的能力也学会了吧？",
+      "final": "对了 这个连被复制的人的能力也能学到手吧",
+      "item_id": 47
+    },
+    {
+      "ai_indices": [
+        49
+      ],
+      "final_indices": [
+        62
+      ],
+      "kind": "time_changed",
+      "ja": "グッホホホ。",
+      "ai": "咕哈哈哈哈。",
+      "final": "咕呼呼呼呼",
+      "item_id": 48
+    },
+    {
+      "ai_indices": [
+        50
+      ],
+      "final_indices": [
+        63
+      ],
+      "kind": "time_changed",
+      "ja": "できすぎになって宿題をパッと終わらせちゃう。",
+      "ai": "做得太完美，作业一下子就被搞定了。",
+      "final": "变成出木杉 把作业一下子做完吧",
+      "item_id": 49
+    },
+    {
+      "ai_indices": [
+        51
+      ],
+      "final_indices": [
+        64
+      ],
+      "kind": "time_changed",
+      "ja": "それは自分でやらないといいんじゃないの？",
+      "ai": "那不如自己不做算了？",
+      "final": "那个不自己做就没有意义哦 知道吗",
+      "item_id": 50
+    },
+    {
+      "ai_indices": [
+        52
+      ],
+      "final_indices": [
+        65
+      ],
+      "kind": "time_changed",
+      "ja": "いた。",
+      "ai": "来了。",
+      "final": "来了",
+      "item_id": 51
+    },
+    {
+      "ai_indices": [
+        53
+      ],
+      "final_indices": [
+        66,
+        67
+      ],
+      "kind": "split",
+      "ja": "いや、のびくん。ね、今日の宿題終わった。",
+      "ai": "不，的比君。呐，今天的作业写完了。",
+      "final": "哟 大雄 呐 今天的作业做完了吗",
+      "item_id": 52
+    },
+    {
+      "ai_indices": [
+        54
+      ],
+      "final_indices": [
+        68,
+        69
+      ],
+      "kind": "split",
+      "ja": "終わったけど、すごいな。さすができすぎくん。",
+      "ai": "写完了啊，真厉害。不愧是“做得太完美君”。",
+      "final": "做完了呀 好厉害 不愧是出木杉",
+      "item_id": 53
+    },
+    {
+      "ai_indices": [
+        55
+      ],
+      "final_indices": [
+        70,
+        71
+      ],
+      "kind": "split",
+      "ja": "すぐしたいよ。わからないところでもあったな。",
+      "ai": "想快点知道结果。也有不懂的地方呢。",
+      "final": "怪痒的，兄弟 有没有哪里不懂呀",
+      "item_id": 54
+    },
+    {
+      "ai_indices": [
+        56
+      ],
+      "final_indices": [
+        72,
+        73,
+        74,
+        75
+      ],
+      "kind": "split",
+      "ja": "よかったら、これだけで大丈夫。サンキュー。え？",
+      "ai": "如果只看这份的话就没问题了。谢谢。诶？",
+      "final": "需要的话... 不用 这样就够了 谢谢",
+      "item_id": 55
+    },
+    {
+      "ai_indices": [
+        57
+      ],
+      "final_indices": [
+        76
+      ],
+      "kind": "time_changed",
+      "ja": "うん、できすぎ、できすぎ。",
+      "ai": "嗯，做得太完美，做得太完美。",
+      "final": "出木杉 出木杉",
+      "item_id": 56
+    },
+    {
+      "ai_indices": [
+        58,
+        59
+      ],
+      "final_indices": [
+        77
+      ],
+      "kind": "merge",
+      "ja": "そう。 こうしたらどう見てもできすぎくんだ。",
+      "ai": "没错。 这样一看，怎么看都是“做得太完美君”了。",
+      "final": "对 这样一来怎么看都是出木杉",
+      "item_id": 57
+    },
+    {
+      "ai_indices": [
+        60
+      ],
+      "final_indices": [
+        78
+      ],
+      "kind": "time_changed",
+      "ja": "なんだか頭がスッキリしてきた。",
+      "ai": "感觉脑子清醒多了。",
+      "final": "总觉得头脑清醒多了 作业好像也能顺利做出来",
+      "item_id": 58
+    },
+    {
+      "ai_indices": [
+        61
+      ],
+      "final_indices": [
+        79
+      ],
+      "kind": "time_changed",
+      "ja": "宿題がスラスラできそう。あら、デキスニさん。ん？",
+      "ai": "作业好像能轻松完成了。啊，德克斯尼先生。嗯？",
+      "final": "哎呀 出木杉",
+      "item_id": 59
+    },
+    {
+      "ai_indices": [
+        62
+      ],
+      "final_indices": [
+        80,
+        81,
+        82
+      ],
+      "kind": "split",
+      "ja": "ドラちゃんも静香ちゃんちょうど良かったわ今日の宿",
+      "ai": "多拉酱和静香酱，今天刚好呢，作业",
+      "final": "嗯？ 哆啦A梦也在 静香",
+      "item_id": 60
+    },
+    {
+      "ai_indices": [
+        63
+      ],
+      "final_indices": [
+        83,
+        84,
+        85
+      ],
+      "kind": "split",
+      "ja": "題難しいでしょう良かったら行きます何でも聞いて嬉",
+      "ai": "挺难的吧？要是方便的话就去吧，有什么都能问，很",
+      "final": "来得正好 今天的作业很难吧 可以的话... 我来教你 什么都可以问 太好了",
+      "item_id": 61
+    },
+    {
+      "ai_indices": [
+        64
+      ],
+      "final_indices": [
+        86,
+        87
+      ],
+      "kind": "split",
+      "ja": "しいわそうと決まったら最高それじゃ静香くん行こう",
+      "ai": "开心呢。既然决定了那就最棒了。那走吧，静香君。",
+      "final": "就这么定了 太棒了 那么静香 我们走吧",
+      "item_id": 62
+    },
+    {
+      "ai_indices": [
+        65
+      ],
+      "final_indices": [
+        88,
+        89,
+        90
+      ],
+      "kind": "split",
+      "ja": "かえ二番目がさっぱりわからなくて調子に乗らないと",
+      "ai": "第二题完全不懂，要是得意忘形可不行呢。",
+      "final": "好 第二题啊 我还是不太懂 希望他别得意忘形就好",
+      "item_id": 63
+    },
+    {
+      "ai_indices": [
+        66
+      ],
+      "final_indices": [
+        91
+      ],
+      "kind": "time_changed",
+      "ja": "いいんだけど。",
+      "ai": "这里是这样，这里会变成这样，所以才会变成这样、",
+      "final": "这里是这样 这里变成这样 所以这样就变成这样了",
+      "item_id": 64
+    },
+    {
+      "ai_indices": [
+        67
+      ],
+      "final_indices": [
+        92,
+        93,
+        94,
+        95
+      ],
+      "kind": "split",
+      "ja": "ここがこうでここがこうなるからこうなってこうなる",
+      "ai": "变成那样的。原来如此。太厉害了。懂了懂了。不过。",
+      "final": "原来如此 好厉害 我懂了我懂了 可是...",
+      "item_id": 65
+    },
+    {
+      "ai_indices": [
+        68
+      ],
+      "final_indices": [
+        96,
+        97
+      ],
+      "kind": "split",
+      "ja": "んだよ。なるほど。すごい。わかるわかるぞ。でも。",
+      "ai": "果然还是想留点作业啊。那维塔卡。",
+      "final": "作业果然好无聊啊 大雄",
+      "item_id": 66
+    },
+    {
+      "ai_indices": [
+        69
+      ],
+      "final_indices": [
+        98,
+        99
+      ],
+      "kind": "split",
+      "ja": "やっぱり宿題出たいくつだな。ナビタカ。",
+      "ai": "德克斯尼先生，这里这样没问题吗？嗯。",
+      "final": "出木衫 这里这样可以吗",
+      "item_id": 67
+    },
+    {
+      "ai_indices": [
+        70
+      ],
+      "final_indices": [
+        100
+      ],
+      "kind": "time_changed",
+      "ja": "デキスミさん、ここはこれでいいのかしら。うん。",
+      "ai": "这样就可以了。啊。还有那杯茶，要续杯哦。",
+      "final": "嗯 这样就没问题了",
+      "item_id": 68
+    },
+    {
+      "ai_indices": [
+        71,
+        72,
+        73
+      ],
+      "final_indices": [
+        101,
+        102
+      ],
+      "kind": "merge",
+      "ja": "これで大丈夫だよ。ああ。あのお茶のおかわりよ。 そうね。 デキスミさんも一緒",
+      "ai": "是啊。 德克斯尼先生也一起 休息一下吧。",
+      "final": "那个…… 请再给我一杯茶 好啊 出木杉也一起休息一下吧",
+      "item_id": 69
+    },
+    {
+      "ai_indices": [
+        74
+      ],
+      "final_indices": [
+        103
+      ],
+      "kind": "time_changed",
+      "ja": "に休憩しましょう。",
+      "ai": "要是能再吃点茶点就更好了。",
+      "final": "哎呀",
+      "item_id": 70
+    },
+    {
+      "ai_indices": [
+        75
+      ],
+      "final_indices": [
+        104,
+        105,
+        106,
+        107
+      ],
+      "kind": "split",
+      "ja": "あのできればお茶菓子もいただけるといいわよ。",
+      "ai": "别捣乱啦。喂，快看。",
+      "final": "可以的话 再给我来点茶点…… 可以哦 别来捣乱啊 快看",
+      "item_id": 71
+    },
+    {
+      "ai_indices": [
+        76
+      ],
+      "final_indices": [
+        108
+      ],
+      "kind": "time_changed",
+      "ja": "邪魔しないでよ。ね、見てみろ。",
+      "ai": "部队，集中精神，集中，集中。",
+      "final": "集中精神 集中 集中",
+      "item_id": 72
+    },
+    {
+      "ai_indices": [
+        77
+      ],
+      "final_indices": [
+        109
+      ],
+      "kind": "time_changed",
+      "ja": "部隊に集中して集中集中。",
+      "ai": "回来——",
+      "final": "啊啊 要变回去了",
+      "item_id": 73
+    },
+    {
+      "ai_indices": [
+        78
+      ],
+      "final_indices": [
+        110,
+        111
+      ],
+      "kind": "split",
+      "ja": "戻ってっ",
+      "ai": "喂，快点，快点，快点。打开，别打不开。",
+      "final": "快 快点 快点快点 别催我啊 更容易分心了",
+      "item_id": 74
+    },
+    {
+      "ai_indices": [
+        79,
+        80
+      ],
+      "final_indices": [
+        112
+      ],
+      "kind": "merge",
+      "ja": "ちゃう。 ほら、急いで急いで急いで。開け開けないでよ。",
+      "ai": "只会更让人分心。 德克斯尼小姐。",
+      "final": "出木杉",
+      "item_id": 75
+    },
+    {
+      "ai_indices": [
+        81
+      ],
+      "final_indices": [
+        113
+      ],
+      "kind": "time_changed",
+      "ja": "余計に気が散る。",
+      "ai": "我放了糖，你觉得怎么样？",
+      "final": "我放了糖 没关系吧",
+      "item_id": 76
+    },
+    {
+      "ai_indices": [
+        82
+      ],
+      "final_indices": [
+        114
+      ],
+      "kind": "time_changed",
+      "ja": "テキスニさん。",
+      "ai": "当然啦，我最爱糖了。",
+      "final": "当然啦 我最爱吃糖了",
+      "item_id": 77
+    },
+    {
+      "ai_indices": [
+        83
+      ],
+      "final_indices": [
+        115,
+        116
+      ],
+      "kind": "split",
+      "ja": "お砂糖入れちゃったけど、よかったかしら。",
+      "ai": "喂，看，嗯，走吧。那个。",
+      "final": "呐 快看这个 看好了",
+      "item_id": 78
+    },
+    {
+      "ai_indices": [
+        84
+      ],
+      "final_indices": [
+        117
+      ],
+      "kind": "time_changed",
+      "ja": "もちろんだよ。お砂糖大好きさ。",
+      "ai": "啊，那……",
+      "final": "锵——",
+      "item_id": 79
+    },
+    {
+      "ai_indices": [
+        85
+      ],
+      "final_indices": [
+        118
+      ],
+      "kind": "time_changed",
+      "ja": "ねえ見て、うん、行くよ。それ。",
+      "ai": "得意忘形了。",
+      "final": "越来越得意了",
+      "item_id": 80
+    },
+    {
+      "ai_indices": [
+        86
+      ],
+      "final_indices": [
+        119
+      ],
+      "kind": "time_changed",
+      "ja": "あ、じゃ。",
+      "ai": "真厉害呢。嗯。",
+      "final": "好厉害呢",
+      "item_id": 81
+    },
+    {
+      "ai_indices": [
+        87
+      ],
+      "final_indices": [
+        120,
+        121
+      ],
+      "kind": "split",
+      "ja": "調子に乗って。",
+      "ai": "没想到德克斯尼小姐还有这么轻快的一面呢。",
+      "final": "出木杉原来有这么滑稽的一面呢 真意外",
+      "item_id": 82
+    },
+    {
+      "ai_indices": [
+        88,
+        89
+      ],
+      "final_indices": [
+        122,
+        123
+      ],
+      "kind": "merge",
+      "ja": "おすごいよね。うん。 デキスニさんってこんな剽軽な一面があるのね。",
+      "ai": "意外呢。 那就应大家要求，接下来是连续背对背。",
+      "final": "那么 应大家的要求 接下来表演小小酥8连吃",
+      "item_id": 83
+    },
+    {
+      "ai_indices": [
+        90
+      ],
+      "final_indices": [
+        124
+      ],
+      "kind": "time_changed",
+      "ja": "意外だわ。",
+      "ai": "诶，诶。",
+      "final": "打扰了！",
+      "item_id": 84
+    },
+    {
+      "ai_indices": [
+        91
+      ],
+      "final_indices": [
+        125,
+        126
+      ],
+      "kind": "split",
+      "ja": "ではリクエストにお応えして、次は背面連続タメ。",
+      "ai": "你在干什么啊！太得意忘形了。",
+      "final": "你在赣神魔？ 太得意忘形了",
+      "item_id": 85
+    },
+    {
+      "ai_indices": [
+        92
+      ],
+      "final_indices": [
+        127,
+        128
+      ],
+      "kind": "split",
+      "ja": "ね、ね。",
+      "ai": "因为大家会高兴啊。一万日元。哎呀。",
+      "final": "因为当了回爽文男主嘛 一万日元",
+      "item_id": 86
+    },
+    {
+      "ai_indices": [
+        93
+      ],
+      "final_indices": [
+        129,
+        130
+      ],
+      "kind": "split",
+      "ja": "何するんだよ！調子に乗りすぎた。",
+      "ai": "两个人一起还真是少见呢。",
+      "final": "咦 真是稀奇的组合呢",
+      "item_id": 87
+    },
+    {
+      "ai_indices": [
+        94
+      ],
+      "final_indices": [
+        131,
+        132
+      ],
+      "kind": "split",
+      "ja": "だって喜んでくれるからさ。一万円。あれ。",
+      "ai": "我想让大雄做做《哆啦 A 梦王国》的功课。",
+      "final": "哇啊 我想请出木杉帮忙看看大雄的作业",
+      "item_id": 88
+    },
+    {
+      "ai_indices": [
+        95
+      ],
+      "final_indices": [
+        133
+      ],
+      "kind": "time_changed",
+      "ja": "珍しいよ二人で。",
+      "ai": "大雄很优秀，应该没问题吧。",
+      "final": "大雄很优秀的 我想应该没问题的",
+      "item_id": 89
+    },
+    {
+      "ai_indices": [
+        96
+      ],
+      "final_indices": [
+        134
+      ],
+      "kind": "time_changed",
+      "ja": "できすぎくにのび太くんの宿題を見てもらおうと思っ",
+      "ai": "教那种笨蛋完全是白费力气。",
+      "final": "那种笨蛋 教他也是白教",
+      "item_id": 90
+    },
+    {
+      "ai_indices": [
+        97
+      ],
+      "final_indices": [
+        135,
+        136
+      ],
+      "kind": "split",
+      "ja": "のび太くんは優秀だから大丈夫だと思うんだけどね。",
+      "ai": "那还是来教我吧。什么？",
+      "final": "比起那个 你教我嘛 什么啊",
+      "item_id": 91
+    },
+    {
+      "ai_indices": [
+        98
+      ],
+      "final_indices": [
+        137
+      ],
+      "kind": "time_changed",
+      "ja": "あんなおバカ教えてやるだけ無駄無駄。",
+      "ai": "谁要教别人踢腿啊？谁啊？哇啊。",
+      "final": "谁要教小夫这种人啊",
+      "item_id": 92
+    },
+    {
+      "ai_indices": [
+        99
+      ],
+      "final_indices": [
+        138,
+        139
+      ],
+      "kind": "split",
+      "ja": "それより僕に教えてや。何だと？",
+      "ai": "稍等一下。",
+      "final": "咦 等一下啦",
+      "item_id": 93
+    },
+    {
+      "ai_indices": [
+        100
+      ],
+      "final_indices": [
+        140,
+        141,
+        142
+      ],
+      "kind": "split",
+      "ja": "誰がスネをなんかに教えてやる？誰か。おおお。",
+      "ai": "诶，是胖虎？可是变成胖虎又能怎么样呢？",
+      "final": "小夫？！ 嘿嘿嘿 可是变成小夫想干什么",
+      "item_id": 94
+    },
+    {
+      "ai_indices": [
+        101
+      ],
+      "final_indices": [
+        143,
+        144
+      ],
+      "kind": "split",
+      "ja": "ちょっと待ってよ。",
+      "ai": "胖虎，你居然敢这么小看我。哼。喂，",
+      "final": "小夫这家伙 竟敢瞧不起我 oi~",
+      "item_id": 95
+    },
+    {
+      "ai_indices": [
+        102
+      ],
+      "final_indices": [
+        145,
+        146
+      ],
+      "kind": "split",
+      "ja": "え、スネオ！でもスネオになってどうするつもり？",
+      "ai": "那边有个胖虎在嘲笑大雄呢。",
+      "final": "那边小夫在说胖虎你的坏话哦 嗯？",
+      "item_id": 96
+    },
+    {
+      "ai_indices": [
+        103
+      ],
+      "final_indices": [
+        147
+      ],
+      "kind": "time_changed",
+      "ja": "スネオめよくもバカにしたな。うんか。おい、",
+      "ai": "啊，你在说什么啊。",
+      "final": "你说什么呢",
+      "item_id": 97
+    },
+    {
+      "ai_indices": [
+        104
+      ],
+      "final_indices": [
+        148,
+        149
+      ],
+      "kind": "split",
+      "ja": "あっちでスネオがジャイアンのことバカにしてたぞ。",
+      "ai": "现在轮到我嘲笑胖虎了。啊，原来如此。",
+      "final": "现在你自己就是小夫吧 啊 对哦",
+      "item_id": 98
+    },
+    {
+      "ai_indices": [
+        105
+      ],
+      "final_indices": [
+        150
+      ],
+      "kind": "time_changed",
+      "ja": "あ、何言ってんだ。",
+      "ai": "那边有个我在嘲笑大雄呢。",
+      "final": "那边的\"我\"在说胖虎的坏话哦",
+      "item_id": 99
+    },
+    {
+      "ai_indices": [
+        106,
+        107
+      ],
+      "final_indices": [
+        151,
+        152
+      ],
+      "kind": "merge",
+      "ja": "今は自分がスネをだろ。あ、そっか。 あっちで僕がジャヤをバカにしてたぞ。",
+      "ai": "说些让人听不懂的话的家伙， 现在就躲起来！",
+      "final": "哦？ 胡说八道的家伙我现在就揍扁他",
+      "item_id": 100
+    },
+    {
+      "ai_indices": [
+        108
+      ],
+      "final_indices": [
+        153
+      ],
+      "kind": "time_changed",
+      "ja": "無訳のわかんないことを言うやつは、",
+      "ai": "所以不是这边，而是那边的对面。",
+      "final": "所以说不是这边 是那边那个小夫啦",
+      "item_id": 101
+    },
+    {
+      "ai_indices": [
+        109
+      ],
+      "final_indices": [
+        154
+      ],
+      "kind": "time_changed",
+      "ja": "今すぐ隠れてやる！",
+      "ai": "胖虎。",
+      "final": "吵死了",
+      "item_id": 102
+    },
+    {
+      "ai_indices": [
+        110,
+        111,
+        112
+      ],
+      "final_indices": [
+        155,
+        156,
+        157
+      ],
+      "kind": "merge",
+      "ja": "だからこっちじゃなくてあっちの向こうだよ。 ブルシ。 ええ何？スネ夫が二人？ああどういうこと？",
+      "ai": "嗯？两个胖虎？啊，怎么回事？ 算了， 反正打谁都一样。真是的。",
+      "final": "什么 有两个小夫 怎么回事 算了 两个都揍一顿就行了",
+      "item_id": 103
+    },
+    {
+      "ai_indices": [
+        113
+      ],
+      "final_indices": [
+        158
+      ],
+      "kind": "time_changed",
+      "ja": "まあいいや、",
+      "ai": "别乱动！",
+      "final": "叫你乱说话",
+      "item_id": 104
+    },
+    {
+      "ai_indices": [
+        114
+      ],
+      "final_indices": [
+        159
+      ],
+      "kind": "time_changed",
+      "ja": "どっちも殴ればいいだけのことだからな。こんな。",
+      "ai": "好，一起把胖虎揍个稀巴烂吧。",
+      "final": "好，一起把小夫揍个稀巴烂吧",
+      "item_id": 105
+    },
+    {
+      "ai_indices": [
+        115
+      ],
+      "final_indices": [
+        160
+      ],
+      "kind": "time_changed",
+      "ja": "ジタバ出すんじゃねえ！",
+      "ai": "如果要说的话，那就把大雄揍个稀巴烂吧。",
+      "final": "要说也该说\"稀里哗啦\"吧",
+      "item_id": 106
+    },
+    {
+      "ai_indices": [
+        116
+      ],
+      "final_indices": [
+        161
+      ],
+      "kind": "time_changed",
+      "ja": "よし、一緒にスネをガタガタにしてやろう。",
+      "ai": "咦？两个大雄。",
+      "final": "咦 有两个胖虎",
+      "item_id": 107
+    },
+    {
+      "ai_indices": [
+        117
+      ],
+      "final_indices": [
+        162
+      ],
+      "kind": "time_changed",
+      "ja": "それを言うならギッタギタだろう。",
+      "ai": "真的假的。",
+      "final": "别跑！*2",
+      "item_id": 108
+    },
+    {
+      "ai_indices": [
+        118
+      ],
+      "final_indices": [
+        163,
+        164
+      ],
+      "kind": "split",
+      "ja": "イ？ジャイアンが二人。",
+      "ai": "作业也不做，胖虎到底在哪边？",
+      "final": "作业也不写…… 小夫往哪边跑了",
+      "item_id": 109
+    },
+    {
+      "ai_indices": [
+        119
+      ],
+      "final_indices": [
+        165
+      ],
+      "kind": "time_changed",
+      "ja": "マジで。",
+      "ai": "那就拜托那边了，这边我来。",
+      "final": "那 那边就拜托你了",
+      "item_id": 110
+    },
+    {
+      "ai_indices": [
+        120
+      ],
+      "final_indices": [
+        166,
+        167,
+        168
+      ],
+      "kind": "split",
+      "ja": "宿題もやらないで。スネ夫はどっちにた。",
+      "ai": "不，这边交给我。好。",
+      "final": "这边交给我 不 交给本大爷 OK",
+      "item_id": 111
+    },
+    {
+      "ai_indices": [
+        121,
+        122
+      ],
+      "final_indices": [
+        169
+      ],
+      "kind": "merge",
+      "ja": "じゃあそっちを頼むよ。こっちは僕が。 いや、俺様が。オッケー。",
+      "ai": "虽然不知道怎么回事， 但这种时候有两个人在身边就轻松多了。",
+      "final": "虽然搞不清怎么回事 这种时候有两个人真轻松啊",
+      "item_id": 112
+    },
+    {
+      "ai_indices": [
+        123
+      ],
+      "final_indices": [
+        170
+      ],
+      "kind": "time_changed",
+      "ja": "どういうわけだかわかんねえけど、",
+      "ai": "到了。",
+      "final": "找到了",
+      "item_id": 113
+    },
+    {
+      "ai_indices": [
+        124,
+        125
+      ],
+      "final_indices": [
+        171,
+        172,
+        173
+      ],
+      "kind": "split",
+      "ja": "こういうとき二人いると楽だな。 いた。",
+      "ai": "在这种地方偷懒，那跑腿的活怎么办？ 跑腿？",
+      "final": "别跑！ 痛痛痛... 居然在这里偷懒 交代你的跑腿呢",
+      "item_id": 114
+    },
+    {
+      "ai_indices": [
+        126,
+        127
+      ],
+      "final_indices": [
+        174,
+        175
+      ],
+      "kind": "merge",
+      "ja": "待って。 こんなところで油うってお使いはどうしたんだい？",
+      "ai": "应该是去隔壁镇给奶奶送东西吧。 马上去。是。",
+      "final": "跑腿? 不是让你去邻镇阿姨家拿东西吗 现在马上去",
+      "item_id": 115
+    },
+    {
+      "ai_indices": [
+        128
+      ],
+      "final_indices": [
+        176
+      ],
+      "kind": "time_changed",
+      "ja": "お使い？",
+      "ai": "路远、容易迷路、东西还重，不行了。",
+      "final": "又远 又迷路 又重 我不行了",
+      "item_id": 116
+    },
+    {
+      "ai_indices": [
+        129,
+        130
+      ],
+      "final_indices": [
+        177
+      ],
+      "kind": "merge",
+      "ja": "隣町のおばさんから荷物をもらってくるんだろう。 今すぐ行っておいで。はい。",
+      "ai": "嗯，那个。 这家伙是奶奶家的。哎呀，回来了。",
+      "final": "咦 这不是阿姨家的……",
+      "item_id": 117
+    },
+    {
+      "ai_indices": [
+        131
+      ],
+      "final_indices": [
+        178
+      ],
+      "kind": "time_changed",
+      "ja": "遠いし道に迷うし重いしもうダメ。",
+      "ai": "辛苦了。",
+      "final": "哎呀回来啦 辛苦了",
+      "item_id": 118
+    },
+    {
+      "ai_indices": [
+        132
+      ],
+      "final_indices": [
+        179
+      ],
+      "kind": "time_changed",
+      "ja": "うん、あれ。",
+      "ai": "西瓜已经冰镇好了，快吃吧。哇。",
+      "final": "蜜瓜冰着呢 快吃吧",
+      "item_id": 119
+    },
+    {
+      "ai_indices": [
+        133
+      ],
+      "final_indices": [
+        180,
+        181
+      ],
+      "kind": "split",
+      "ja": "こいつおばさんとこの。おや、おかえり。",
+      "ai": "我的西瓜。哎，这孩子到底是谁？",
+      "final": "我、我也要 蜜、蜜瓜 哎呀 这孩子到底是谁呀",
+      "item_id": 120
+    },
+    {
+      "ai_indices": [
+        134
+      ],
+      "final_indices": [
+        182,
+        183
+      ],
+      "kind": "split",
+      "ja": "ご苦労さん。",
+      "ai": "没见过呢。",
+      "final": "嗯？ 没见过呢",
+      "item_id": 121
+    },
+    {
+      "ai_indices": [
+        135
+      ],
+      "final_indices": [
+        184
+      ],
+      "kind": "time_changed",
+      "ja": "メロンが冷えてるからお食べ。いおお。",
+      "ai": "再不回去天就要黑了。",
+      "final": "不早点回去天就要黑了",
+      "item_id": 122
+    },
+    {
+      "ai_indices": [
+        136
+      ],
+      "final_indices": [
+        185
+      ],
+      "kind": "time_changed",
+      "ja": "僕のメメロン。あら、この子一体誰だい？",
+      "ai": "是啊。",
+      "final": "哟 我说",
+      "item_id": 123
+    },
+    {
+      "ai_indices": [
+        137
+      ],
+      "final_indices": [
+        186,
+        187
+      ],
+      "kind": "split",
+      "ja": "見たことないな。",
+      "ai": "从刚才开始，就有一个没见过的小孩在我们家门口转悠。",
+      "final": "啊 刚才有没见过的孩子在我家门前转来转去",
+      "item_id": 124
+    },
+    {
+      "ai_indices": [
+        138,
+        139,
+        140
+      ],
+      "final_indices": [
+        188
+      ],
+      "kind": "merge",
+      "ja": "早く帰らないと日が暮れてしまうよ。 よね。 さっきから見たこともない子がうちの前ウロウロして",
+      "ai": "啊，不行了。 又累又得写作业， 肚子也饿了。",
+      "final": "我不行了 又累 还得写作业 肚子也饿了",
+      "item_id": 125
+    },
+    {
+      "ai_indices": [
+        141
+      ],
+      "final_indices": [
+        189
+      ],
+      "kind": "time_changed",
+      "ja": "るのよ。だ、もうダメだ。",
+      "ai": "不过看我这副样子，进不去家门。",
+      "final": "可是 这张脸连家都进不去",
+      "item_id": 126
+    },
+    {
+      "ai_indices": [
+        142
+      ],
+      "final_indices": [
+        190
+      ],
+      "kind": "time_changed",
+      "ja": "疲れとし、宿題もしなくちゃいけないし。",
+      "ai": "至少得吃点东西，不然回不去原来的河了。",
+      "final": "至少得吃点什么 不然没法变回原来的脸",
+      "item_id": 127
+    },
+    {
+      "ai_indices": [
+        143
+      ],
+      "final_indices": [
+        191
+      ],
+      "kind": "time_changed",
+      "ja": "お腹も空いたし。",
+      "ai": "对了，要是静香的话一定很温柔。静香。",
+      "final": "对了 静香的话一定很温柔",
+      "item_id": 128
+    },
+    {
+      "ai_indices": [
+        144
+      ],
+      "final_indices": [
+        192,
+        193
+      ],
+      "kind": "split",
+      "ja": "でもこの顔じゃうちにも入れない。",
+      "ai": "对不起。",
+      "final": "静香 对不起",
+      "item_id": 129
+    },
+    {
+      "ai_indices": [
+        145
+      ],
+      "final_indices": [
+        194,
+        195
+      ],
+      "kind": "split",
+      "ja": "せめて何か食べないと元の川に戻れないよ。",
+      "ai": "请问是哪位？是我。能给我点吃的吗？",
+      "final": "您是哪位 是我啊 求你给我点吃的",
+      "item_id": 130
+    },
+    {
+      "ai_indices": [
+        146
+      ],
+      "final_indices": [
+        196
+      ],
+      "kind": "time_changed",
+      "ja": "そうだ、静香ちゃんならきっと優しいから。静香。",
+      "ai": "现在妈妈也不在，对不起。",
+      "final": "妈妈现在也不在 对不起",
+      "item_id": 131
+    },
+    {
+      "ai_indices": [
+        147
+      ],
+      "final_indices": [
+        197
+      ],
+      "kind": "time_changed",
+      "ja": "ごめんなさい。",
+      "ai": "你是谁啊？好不知羞耻。小竹。",
+      "final": "你谁啊 套什么近乎",
+      "item_id": 132
+    },
+    {
+      "ai_indices": [
+        148
+      ],
+      "final_indices": [
+        198
+      ],
+      "kind": "time_changed",
+      "ja": "どちら様ですか。僕だよ。何か食べるものをお願い。",
+      "ai": "吃过了。",
+      "final": "不行了",
+      "item_id": 133
+    },
+    {
+      "ai_indices": [
+        149
+      ],
+      "final_indices": [
+        199
+      ],
+      "kind": "time_changed",
+      "ja": "今ママもいないし、ごめんなさい。",
+      "ai": "谁都不相信我是野比。",
+      "final": "谁都不相信我是大雄",
+      "item_id": 134
+    },
+    {
+      "ai_indices": [
+        150
+      ],
+      "final_indices": [
+        200
+      ],
+      "kind": "time_changed",
+      "ja": "誰だよ君、なれなれしいな。シシ。",
+      "ai": "只要把变身复制器摘下来，就能轻易变回原样，",
+      "final": "虽然摘下变身复印机就能轻松变回去",
+      "item_id": 135
+    },
+    {
+      "ai_indices": [
+        151
+      ],
+      "final_indices": [
+        201
+      ],
+      "kind": "time_changed",
+      "ja": "食べた。",
+      "ai": "还是再留一会儿吧。",
+      "final": "要不要再保持这样呢",
+      "item_id": 136
+    },
+    {
+      "ai_indices": [
+        152,
+        153
+      ],
+      "final_indices": [
+        202
+      ],
+      "kind": "merge",
+      "ja": "誰も僕がノビタだって思ってくれない。 変身レプリンターを外せば簡単に元に戻れるんだけど、",
+      "ai": "就这样吧。 拜托了。",
+      "final": "要是一直这样谁都没认出我来 该怎么办啊",
+      "item_id": 137
+    }
+  ]
+}

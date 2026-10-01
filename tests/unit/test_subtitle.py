@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from creator_agent.asr.subtitle import parse_srt, segments_to_srt, write_srt
+from creator_agent.asr.subtitle import is_filler_cue, parse_srt, segments_to_srt, write_srt
 from creator_agent.models.transcript import TranscriptSegment
 
 
@@ -14,13 +14,13 @@ def test_basic_srt_format():
 
 
 def test_hours_and_millis_rounding():
-    srt = segments_to_srt([_seg(3661.2345, 3662.0, "x")])
+    srt = segments_to_srt([_seg(3661.2345, 3662.0, "テスト")])
     assert "01:01:01,234 --> 01:01:02,000" in srt  # .2345 rounds down (banker's)
     assert "01:01:01," in srt
 
 
 def test_negative_start_clamped_to_zero():
-    srt = segments_to_srt([_seg(-0.5, 1.0, "x")])
+    srt = segments_to_srt([_seg(-0.5, 1.0, "テスト")])
     assert "00:00:00,000 --> 00:00:01,000" in srt
 
 
@@ -35,15 +35,27 @@ def test_empty_input_returns_empty_string():
     assert segments_to_srt([]) == ""
 
 
-def test_speaker_prefix_added():
+def test_speaker_not_rendered_in_srt():
+    # Speaker labels stay in .txt / .transcript.json; subtitles never show them.
     seg = TranscriptSegment(start=1.0, end=2.0, text="おはよう", speaker="話者A")
     srt = segments_to_srt([seg])
-    assert "\n話者A: おはよう\n" in srt
-
-
-def test_no_speaker_no_prefix():
-    srt = segments_to_srt([_seg(1.0, 2.0, "おはよう")])
+    assert "話者" not in srt
     assert "\nおはよう\n" in srt
+
+
+def test_filler_cues_dropped_and_renumbered():
+    srt = segments_to_srt([_seg(0, 1, "うん。"), _seg(1, 2, "ある"), _seg(2, 3, "はい。"), _seg(3, 4, "いる")])
+    assert srt.startswith("1\n00:00:01,000 --> 00:00:02,000\nある")
+    assert "2\n00:00:03,000 --> 00:00:04,000\nいる" in srt
+    assert "うん" not in srt
+    assert "はい" not in srt
+
+
+def test_is_filler_cue():
+    for filler in ("うん。", "はい", "ああ", "ええ!", "あっ", "え、", "うーん", "はいはい", "ん?", "あ"):
+        assert is_filler_cue(filler), filler
+    for keep in ("おはよう", "そうですね", "猫が好き", "行くぞ。", "なにこれ"):
+        assert not is_filler_cue(keep), keep
 
 
 def test_parse_srt_roundtrip(tmp_path):

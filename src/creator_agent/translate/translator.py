@@ -52,6 +52,16 @@ SYSTEM_PROMPT = """你是一名专业日中字幕翻译。
 10. 只输出翻译结果，不添加解释"""
 
 _LINE = re.compile(r"^\s*(\d+)\s*[.、．:：]\s*(.+?)\s*$")
+_KANA = re.compile(r"[぀-ヿ]")
+
+
+def _mostly_japanese(texts: list[str]) -> bool:
+    """True when over half the translated cues still contain kana — i.e. the
+    model paraphrased/echoed Japanese instead of translating. A stray kana in
+    one cue (a kept loanword) does not trip this."""
+    if len(texts) < 2:
+        return False
+    return sum(1 for t in texts if _KANA.search(t)) > len(texts) / 2
 
 
 class TranslationMismatchError(ValueError):
@@ -74,17 +84,27 @@ def build_prompt(
 ) -> str:
     """User message for one batch: optional learned-memory section, up to
     ``context_cues`` preceding cues as reference-only context, then the
-    numbered cues to translate."""
+    numbered cues to translate.
+
+    Prompt shape matters: the 9B model echoes Japanese when the context block
+    reads like "here is text, don't translate it". What works (verified
+    against llama.cpp Qwen3.5-9B): an explicit "forbidden to translate/output"
+    context header, a to-translate header demanding Chinese output, and a
+    closing instruction line after the cues."""
     lines: list[str] = []
     if memory_note:
         lines += [memory_note, ""]
     ctx = segments[max(0, start - context_cues) : start]
     if ctx:
-        lines.append("【上文参考，仅供理解语气与上下文，不要翻译这部分】")
+        lines.append("【背景参考】以下日语原文仅供理解上下文，严禁翻译、严禁输出：")
         lines += [f"{i + 1}. {_one_line(s.text)}" for i, s in enumerate(ctx, start - len(ctx))]
         lines.append("")
-    lines.append(f"【待翻译，共 {end - start} 条，严格按编号逐条输出「编号. 译文」】")
+    lines.append(
+        f"【待翻译，共 {end - start} 条】把下面日文字幕翻译成中文，"
+        "严格按编号逐条输出「编号. 中文译文」，译文必须是中文："
+    )
     lines += [f"{i + 1}. {_one_line(segments[i].text)}" for i in range(start, end)]
+    lines += ["", "现在只输出上述编号的中文翻译："]
     return "\n".join(lines)
 
 
@@ -161,9 +181,12 @@ class SrtTranslator:
         for attempt in range(2):
             try:
                 if attempt > 0:
-                    prompt += "\n\n（上次输出编号不完整，请重新输出全部编号）"
+                    prompt += "\n\n（上次输出编号不完整或仍是日文，请重新输出全部编号的中文翻译）"
                 reply = self._chat(prompt)
-                zh[start:end] = parse_translation(reply, start, end)
+                translated = parse_translation(reply, start, end)
+                if _mostly_japanese(translated):
+                    raise TranslationMismatchError("reply is still Japanese, not translated")
+                zh[start:end] = translated
                 return
             except (TranslationMismatchError, httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
                 last_err = e

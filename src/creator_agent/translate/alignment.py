@@ -35,20 +35,30 @@ def align_cues(ai: list[TranscriptSegment], final: list[TranscriptSegment], tol:
             break
         ga, gf = [i], [j]
         a_end, f_end = ai[i].end, final[j].end
-        # Expand the side whose span ends earlier until both spans match.
+        # Expand the side whose span ends earlier — but only while doing so
+        # brings the two block ends closer together. A human pass may shift
+        # EVERY cue by more than tol, so demanding an exact end-match would
+        # snowball whole scenes into one giant block; stopping at the closest
+        # local match keeps blocks at 1:1 / 1:2 granularity instead.
         while abs(a_end - f_end) > tol:
             if a_end < f_end:
+                if i + 1 >= len(ai):
+                    break
+                new_end = max(a_end, ai[i + 1].end)
+                if abs(new_end - f_end) >= abs(a_end - f_end):
+                    break
                 i += 1
-                if i >= len(ai):
-                    break
                 ga.append(i)
-                a_end = max(a_end, ai[i].end)
+                a_end = new_end
             else:
-                j += 1
-                if j >= len(final):
+                if j + 1 >= len(final):
                     break
+                new_end = max(f_end, final[j + 1].end)
+                if abs(new_end - a_end) >= abs(a_end - f_end):
+                    break
+                j += 1
                 gf.append(j)
-                f_end = max(f_end, final[j].end)
+                f_end = new_end
         out.append(_block(ai, ga, final, gf, tol))
         i, j = ga[-1] + 1, gf[-1] + 1
     return out

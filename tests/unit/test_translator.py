@@ -38,7 +38,7 @@ def test_make_batches():
 def test_build_prompt_numbers_and_context():
     segs = [_seg(f"文{i}") for i in range(6)]
     prompt = build_prompt(segs, 2, 5, context_cues=2)
-    assert "上文参考" in prompt
+    assert "背景参考" in prompt
     assert "1. 文0" in prompt and "2. 文1" in prompt  # context keeps cue numbers
     assert "3. 文2" in prompt and "5. 文4" in prompt
     assert "6. 文5" not in prompt
@@ -47,7 +47,7 @@ def test_build_prompt_numbers_and_context():
 
 def test_build_prompt_first_batch_has_no_context():
     prompt = build_prompt([_seg("あ"), _seg("い")], 0, 2)
-    assert "上文参考" not in prompt
+    assert "背景参考" not in prompt
     assert "1. あ" in prompt and "2. い" in prompt
 
 
@@ -113,6 +113,15 @@ def test_translate_segments_retry_on_mismatch():
     replies = iter(["1. 只有一条", "1. 甲\n2. 乙"])
     with mock.patch.object(SrtTranslator, "_chat", side_effect=lambda _: next(replies)):
         assert t.translate_segments(segs) == ["甲", "乙"]
+
+
+def test_translate_segments_retries_japanese_echo():
+    # A reply that is still Japanese counts as a failure and is retried.
+    segs = [_seg("a"), _seg("b"), _seg("c")]
+    t = _translator()
+    replies = iter(["1. あああ\n2. いいい\n3. ううう", "1. 甲\n2. 乙\n3. 丙"])
+    with mock.patch.object(SrtTranslator, "_chat", side_effect=lambda _: next(replies)):
+        assert t.translate_segments(segs) == ["甲", "乙", "丙"]
 
 
 def test_translate_segments_recursive_split_then_original_fallback():

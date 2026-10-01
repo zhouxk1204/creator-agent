@@ -152,11 +152,20 @@ def analyze_episode(ep_dir: Path, settings: TranslateSettings, batch_size: int =
     for bi in range(n_batches):
         batch = items[bi * batch_size : (bi + 1) * batch_size]
         _progress(f"[{ep_dir.name}] 审校批次 {bi + 1}/{n_batches}（{len(batch)} 条）…")
-        try:
-            data = parse_learning_json(chat(settings, CLASSIFY_SYSTEM, build_classify_prompt(batch)))
-        except Exception as e:
-            logger.warning("classify failed for %s batch %d: %s", ep_dir.name, bi + 1, e)
-            _progress(f"[{ep_dir.name}]   ! 批次 {bi + 1} 分类失败（{e}），该批仅记录结构差异")
+        # The 9B model occasionally emits malformed JSON (unescaped quotes in
+        # notes); one retry with a nudge recovers most of those batches.
+        data = None
+        for attempt in range(2):
+            try:
+                prompt = build_classify_prompt(batch)
+                if attempt > 0:
+                    prompt += "\n\n（上次输出不是合法 JSON，请只输出一个 JSON 对象，字符串内不要出现未转义的引号）"
+                data = parse_learning_json(chat(settings, CLASSIFY_SYSTEM, prompt))
+                break
+            except Exception as e:
+                logger.warning("classify failed for %s batch %d attempt %d: %s", ep_dir.name, bi + 1, attempt + 1, e)
+        if data is None:
+            _progress(f"[{ep_dir.name}]   ! 批次 {bi + 1} 分类失败，该批仅记录结构差异")
             continue
         by_id = {it["id"]: it for it in batch}
         for c in data["cases"]:

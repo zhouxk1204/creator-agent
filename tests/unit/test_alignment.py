@@ -56,6 +56,29 @@ def test_tail_only_on_one_side():
     assert als[-1].ai == [1] and als[-1].final == []
 
 
+def test_global_retime_stays_per_cue_not_megablock():
+    # Human nudged every boundary by ~0.1-0.2s (beyond tol): blocks must stay
+    # 1:1 (time_changed) instead of snowballing into one giant split block.
+    a = [_seg(6.5, 7.6), _seg(8.2, 9.0), _seg(10.0, 11.8)]
+    b = [_seg(6.6, 7.4), _seg(8.2, 9.3), _seg(10.0, 12.1)]
+    als = align_cues(a, b)
+    assert len(als) == 3
+    assert all(al.kind == "time_changed" for al in als)
+    assert [al.ai for al in als] == [[0], [1], [2]]
+    assert [al.final for al in als] == [[0], [1], [2]]
+
+
+def test_true_split_still_groups_when_closer():
+    # 1 AI cue genuinely split into 2 final cues (with slight drift): the
+    # extension brings the ends closer, so the block must still group.
+    a = [_seg(0, 8, "ab")]
+    b = [_seg(0, 4.2, "a"), _seg(4.2, 7.9, "b")]
+    als = align_cues(a, b)
+    assert len(als) == 1
+    assert als[0].kind == "split"
+    assert als[0].ai == [0] and als[0].final == [0, 1]
+
+
 def test_join_text_normalizes_whitespace():
     segs = [_seg(0, 1, " 多  行\n文本 "), _seg(1, 2, "次")]
     assert join_text(segs, [0, 1]) == "多 行 文本 次"
