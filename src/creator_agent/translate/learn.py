@@ -6,12 +6,21 @@ Per episode directory under ``<project_dir>/episodes/<ep>/``:
     02_ai_zh.srt         our AI translation
     03_final_zh.srt      human-corrected final
     04_analysis.json     (written by this tool)
+    05_summary.md        (written by this tool; Obsidian-friendly digest)
+
+Optional episode synopsis lives at ``<project_dir>/简介/<ep>.md`` — a
+markdown note whose first-level heading is the story title and whose body
+is the synopsis (legacy '# 标题' + '## 简介' notes are still parsed). When
+present it is injected into the classification prompt as story context and
+quoted in the episode summary.
 
 Pipeline: align 02 vs 03 by time span (code) -> batches of changed blocks +
 the JA original go to the local LLM for error classification (the user's
 taxonomy) -> per-episode ``04_analysis.json`` -> merge into
 ``knowledge/`` (error cases / terminology / segmentation findings / rules)
--> reports (CSV + HTML). Re-running is idempotent (store updates dedupe).
+-> reports (CSV + HTML). Episodes whose inputs haven't changed since the
+last learn are skipped (``knowledge/learned_episodes.json``); ``force``
+re-analyzes everything. Merges dedupe, so forced re-runs stay idempotent.
 """
 
 from __future__ import annotations
@@ -33,12 +42,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-JA_FILE, AI_FILE, FINAL_FILE, ANALYSIS_FILE = (
+JA_FILE, AI_FILE, FINAL_FILE, ANALYSIS_FILE, SUMMARY_FILE = (
     "01_original_ja.srt",
     "02_ai_zh.srt",
     "03_final_zh.srt",
     "04_analysis.json",
+    "05_summary.md",
 )
+SYNOPSIS_DIR = "简介"  # <project_dir>/简介/<ep>.md
+LEARNED_FILE = "learned_episodes.json"  # under knowledge/, episode -> input mtime
 
 CLASSIFY_SYSTEM = """你是日中字幕翻译审校专家。给你若干条「日文原文 / AI译文 / 人工修改后译文」，
 分析 AI 译文相对于人工译文的差异并分类。
@@ -57,6 +69,7 @@ CLASSIFY_SYSTEM = """你是日中字幕翻译审校专家。给你若干条「�
 AI 译文与人工译文一致的条目不要放进 cases。"""
 
 _KIND_LABEL = {"time_changed": "时间轴有修改", "split": "AI 1 条被拆成多条", "merge": "AI 多条被合并成 1 条"}
+_SUMMARY_KIND_LABEL = {"same": "一致", "time_changed": "时间轴修改", "split": "拆分", "merge": "合并"}
 
 
 def _progress(msg: str) -> None:
@@ -69,9 +82,67 @@ def _progress(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_classify_prompt(items: list[dict]) -> str:
+def parse_synopsis_md(text: str) -> dict:
+    """Parse a 简介 note -> {title, synopsis}.
+
+    Canonical format (written by scripts/fetch_doraemon.py): the first-level
+    heading IS the title and the body under it is the synopsis::
+
+        # 変身レプリンター
+
+        学校から帰るなり、…
+
+    The legacy format ('# 标题 xxx' + a '## 简介 xxx' section) is still
+    accepted. Tolerant of missing space after '#', a leading 标题/简介 label
+    on the heading line, and a multi-line synopsis. A '##' section other than
+    简介 ends the synopsis capture.
+    """
+    title, synopsis_lines = "", []
+    section = None
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.startswith("##"):
+            head = s.lstrip("#").strip()
+            section = "synopsis" if head.startswith("简介") else None
+            rest = head.removeprefix("简介").lstrip(" ：:").strip()
+            if section and rest:
+                synopsis_lines.append(rest)
+        elif s.startswith("#"):
+            if not title:
+                title = s.lstrip("#").strip().removeprefix("标题").lstrip(" ：:").strip()
+            # Body directly under the title is the synopsis (canonical format).
+            section = "synopsis"
+        elif section == "synopsis" and s:
+            synopsis_lines.append(s)
+    return {"title": title, "synopsis": "\n".join(synopsis_lines)}
+
+
+def load_synopsis(ep_dir: Path) -> dict | None:
+    """<project_dir>/简介/<ep>.md -> {title, synopsis}; None when absent."""
+    ep_dir = Path(ep_dir)
+    path = ep_dir.parent.parent / SYNOPSIS_DIR / f"{ep_dir.name}.md"
+    if not path.is_file():
+        return None
+    try:
+        info = parse_synopsis_md(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return info if (info["title"] or info["synopsis"]) else None
+
+
+def build_classify_prompt(items: list[dict], synopsis: dict | None = None, ep_name: str = "") -> str:
     """items: [{id, ja, ai, final, flag}] — one classify batch."""
-    lines = ["请审校以下条目：", ""]
+    lines: list[str] = []
+    if synopsis:
+        ctx = f"剧集：{ep_name}" if ep_name else ""
+        if synopsis.get("title"):
+            ctx += f"《{synopsis['title']}》"
+        if ctx:
+            lines += [ctx]
+        if synopsis.get("synopsis"):
+            lines += [f"剧情简介：{synopsis['synopsis']}"]
+        lines.append("")
+    lines += ["请审校以下条目：", ""]
     for it in items:
         flag = f"（{it['flag']}）" if it.get("flag") else ""
         lines.append(f"#{it['id']}{flag}\n日文: {it['ja']}\nAI: {it['ai']}\n人工: {it['final']}\n")
@@ -98,12 +169,16 @@ def parse_learning_json(reply: str) -> dict:
 
 def analyze_episode(ep_dir: Path, settings: TranslateSettings, batch_size: int = 20) -> dict:
     """Analyze one episode dir -> the 04_analysis.json payload (also written
-    to disk). Raises RuntimeError when required files are missing/empty."""
+    to disk, plus a 05_summary.md digest). Raises RuntimeError when required
+    files are missing/empty."""
     ep_dir = Path(ep_dir)
     ja_path, ai_path, final_path = (ep_dir / f for f in (JA_FILE, AI_FILE, FINAL_FILE))
     for p in (ja_path, ai_path, final_path):
         if not p.exists():
             raise RuntimeError(f"missing {p.name} in {ep_dir}")
+    synopsis = load_synopsis(ep_dir)
+    if synopsis:
+        _progress(f"[{ep_dir.name}] 已加载简介：{synopsis.get('title') or '(无标题)'}")
     ja, ai, final = parse_srt(ja_path), parse_srt(ai_path), parse_srt(final_path)
     if not ai or not final:
         raise RuntimeError(f"empty subtitle in {ep_dir}")
@@ -157,7 +232,7 @@ def analyze_episode(ep_dir: Path, settings: TranslateSettings, batch_size: int =
         data = None
         for attempt in range(2):
             try:
-                prompt = build_classify_prompt(batch)
+                prompt = build_classify_prompt(batch, synopsis=synopsis, ep_name=ep_dir.name)
                 if attempt > 0:
                     prompt += "\n\n（上次输出不是合法 JSON，请只输出一个 JSON 对象，字符串内不要出现未转义的引号）"
                 data = parse_learning_json(chat(settings, CLASSIFY_SYSTEM, prompt))
@@ -199,8 +274,67 @@ def analyze_episode(ep_dir: Path, settings: TranslateSettings, batch_size: int =
         "records": records,
     }
     (ep_dir / ANALYSIS_FILE).write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+    result = {"analysis": analysis, "cases": cases, "terms": terms, "rules": rules, "findings": findings}
+    write_episode_summary(ep_dir, result, synopsis)
     _progress(f"[{ep_dir.name}] 分析完成：{summary}；错误案例 {len(cases)}、术语 {len(terms)}、规则 {len(rules)}")
-    return {"analysis": analysis, "cases": cases, "terms": terms, "rules": rules, "findings": findings}
+    return result
+
+
+def write_episode_summary(ep_dir: Path, result: dict, synopsis: dict | None) -> Path:
+    """Obsidian-friendly per-episode digest: episodes/<ep>/05_summary.md."""
+    ep_dir = Path(ep_dir)
+    analysis = result["analysis"]
+    cues, summary = analysis["cues"], analysis["summary"]
+    lines = [f"# 学习总结：{analysis['episode']}", ""]
+    if synopsis:
+        if synopsis.get("title"):
+            lines += [f"**标题**：{synopsis['title']}", ""]
+        if synopsis.get("synopsis"):
+            lines += ["> " + synopsis["synopsis"].replace("\n", "\n> "), ""]
+    lines.append(f"- 字幕条数：日文 {cues['ja']} / AI {cues['ai']} / 人工 {cues['final']}")
+    kinds = " ｜ ".join(
+        f"{_SUMMARY_KIND_LABEL.get(k, k)} {n}" for k, n in sorted(summary.items()) if k != "text_changed"
+    )
+    lines.append(f"- 对齐结果：{kinds}（其中文本被修改 {summary.get('text_changed', 0)} 块）")
+    lines += [
+        "- 知识库：[[knowledge/translation_rules|翻译规则]] ｜ "
+        "[[knowledge/terminology|术语库]] ｜ [[knowledge/error_cases|错误案例]]",
+        "",
+    ]
+
+    if result["cases"]:
+        lines += ["## 错误案例", "", "| 类别 | 日文 | AI | 人工 | 说明 |", "|---|---|---|---|---|"]
+        for c in result["cases"]:
+            row = [
+                ",".join(c.get("categories", [])),
+                c.get("ja", ""),
+                c.get("ai", ""),
+                c.get("final", ""),
+                c.get("note", ""),
+            ]
+            lines.append("| " + " | ".join(str(x).replace("|", "\\|").replace("\n", " ") for x in row) + " |")
+        lines.append("")
+    if result["terms"]:
+        lines += ["## 本集术语", ""]
+        lines += [
+            f"- {t.get('ja', '')} → {t.get('zh', '')}" + (f"（{t['note']}）" if t.get("note") else "")
+            for t in result["terms"]
+        ]
+        lines.append("")
+    if result["rules"]:
+        lines += ["## 本集提取的规则", ""]
+        lines += [f"- {r}" for r in result["rules"]]
+        lines.append("")
+    if result["findings"]:
+        lines += ["## 结构/时间轴差异", ""]
+        for f_ in result["findings"]:
+            kind = _KIND_LABEL.get(f_.get("kind"), f_.get("kind"))
+            lines.append(f"- **{kind}**：{f_.get('ja', '')} ｜ AI: {f_.get('ai', '')} → 人工: {f_.get('final', '')}")
+        lines.append("")
+
+    out = ep_dir / SUMMARY_FILE
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +349,33 @@ def scan_episodes(project_dir: Path) -> list[Path]:
     return sorted(d for d in ep_root.iterdir() if d.is_dir() and (d / AI_FILE).exists())
 
 
-def learn_project(project_dir: Path, settings: TranslateSettings) -> tuple[int, list[tuple[str, str]]]:
-    """Analyze every episode, merge into knowledge/, refresh reports.
+def episode_inputs_mtime(ep_dir: Path) -> float:
+    """Newest mtime among the episode's input srt files (0 when none)."""
+    ep_dir = Path(ep_dir)
+    mtimes = [(ep_dir / f).stat().st_mtime for f in (JA_FILE, AI_FILE, FINAL_FILE) if (ep_dir / f).exists()]
+    return max(mtimes, default=0.0)
+
+
+def _load_learned(project_dir: Path) -> dict[str, float]:
+    """knowledge/learned_episodes.json -> {episode: inputs mtime at learn time}."""
+    try:
+        data = json.loads((Path(project_dir) / "knowledge" / LEARNED_FILE).read_text(encoding="utf-8"))
+        return {str(k): float(v) for k, v in data.get("episodes", {}).items()}
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return {}
+
+
+def _save_learned(project_dir: Path, learned: dict[str, float]) -> None:
+    kdir = Path(project_dir) / "knowledge"
+    kdir.mkdir(parents=True, exist_ok=True)
+    (kdir / LEARNED_FILE).write_text(json.dumps({"episodes": learned}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def learn_project(
+    project_dir: Path, settings: TranslateSettings, force: bool = False
+) -> tuple[int, list[tuple[str, str]]]:
+    """Analyze new/changed episodes, merge into knowledge/, refresh reports.
+    Episodes already learned (inputs unchanged) are skipped unless ``force``.
     Returns (episodes_done, [(episode, error)])."""
     project_dir = Path(project_dir)
     episodes = scan_episodes(project_dir)
@@ -225,9 +384,15 @@ def learn_project(project_dir: Path, settings: TranslateSettings) -> tuple[int, 
         return 0, []
 
     store = MemoryStore.load_or_empty(project_dir)
-    done = 0
+    learned = _load_learned(project_dir)
+    done, skipped = 0, 0
     failed: list[tuple[str, str]] = []
     for i, ep_dir in enumerate(episodes):
+        inputs_mtime = episode_inputs_mtime(ep_dir)
+        if not force and ep_dir.name in learned and inputs_mtime <= learned[ep_dir.name]:
+            skipped += 1
+            _progress(f"===== 剧集 {i + 1}/{len(episodes)}：{ep_dir.name}（已学习，跳过；--force 重学）=====")
+            continue
         _progress(f"===== 剧集 {i + 1}/{len(episodes)}：{ep_dir.name} =====")
         try:
             result = analyze_episode(ep_dir, settings)
@@ -235,15 +400,18 @@ def learn_project(project_dir: Path, settings: TranslateSettings) -> tuple[int, 
             store.add_terms(result["terms"])
             store.add_rules(result["rules"])
             store.add_findings(result["findings"])
+            learned[ep_dir.name] = inputs_mtime
             done += 1
         except Exception as e:
             logger.exception("learn failed for %s", ep_dir)
             failed.append((ep_dir.name, str(e)))
 
     store.save()
+    _save_learned(project_dir, learned)
     _progress(
         f"知识库已更新：案例 {len(store.cases)}、术语 {len(store.terms)}、"
         f"规则 {len(store.rules)}、结构发现 {len(store.findings)}"
+        f"（本次新学 {done}、跳过 {skipped}、失败 {len(failed)}）"
     )
     write_reports(project_dir, store, episodes)
     return done, failed

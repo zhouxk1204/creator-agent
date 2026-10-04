@@ -8,6 +8,13 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
     ├── story.md        # human-readable titles + synopses (Markdown)
     └── story_1.jpg, story_2.jpg, ...
 
+Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
+    <vault>/简介/{ep}_{i}.md   # '# <title>' + synopsis body, for `creator-agent learn`
+    ~/Desktop/{ep}_{i}_4k.jpg  # cover upscaled by executing the user's ComfyUI
+                               # workflow (doraemonn_cover.json); a headless
+                               # server is auto-started when none is running.
+                               # Plain {ep}_{i}.jpg copy as fallback.
+
 Usage:
     uv run python scripts/fetch_doraemon.py 934
 """
@@ -16,8 +23,12 @@ from __future__ import annotations
 
 import html as html_mod
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -28,6 +39,25 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "doraemon"
+# Per-story outputs: synopsis notes go to the Obsidian vault (consumed by
+# `creator-agent learn`, see translate/learn.py), covers go to the Desktop.
+VAULT_SYNOPSIS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\简介")
+DESKTOP_DIR = Path.home() / "Desktop"
+# ComfyUI upscales covers to "4K" by executing the user's own workflow file
+# (COMFYUI_WORKFLOW, UI format -> converted to an API prompt here). Discovery
+# order: $COMFYUI_URL if set, then a running Desktop app (:8000), then a
+# manually started server (:8188); if none answers we boot our own headless
+# server from the cloned core (COMFYUI_CORE) with the Desktop venv's python
+# and shut it down again at the end.
+COMFYUI_WORKFLOW = Path(
+    r"C:\Users\34696\Documents\ComfyUI\user\default\workflows\doraemonn_cover.json"
+)
+COMFYUI_CORE = Path(r"C:\agents\ComfyUI")  # git clone of comfyanonymous/ComfyUI
+COMFYUI_VENV_PY = Path(r"C:\Users\34696\Documents\ComfyUI\.venv\Scripts\python.exe")
+COMFYUI_BASE = Path(r"C:\Users\34696\Documents\ComfyUI")
+COMFYUI_EXTRA_MODELS = Path(os.environ.get("APPDATA", "")) / "ComfyUI" / "extra_models_config.yaml"
+COMFYUI_OWN_URL = "http://127.0.0.1:8188"
+COMFYUI_CANDIDATE_URLS = ["http://127.0.0.1:8000", COMFYUI_OWN_URL]  # 8000 = Desktop app
 
 # Make non-ASCII print correctly on the Windows console.
 try:
@@ -52,7 +82,8 @@ def parse_page(page: str) -> dict:
     stories = []
     # Each story: <h2 class="story-title">...</h2><div class="read-box">...</div>
     blocks = re.findall(
-        r'<h2 class="story-title">(.*?)</h2>\s*<div class="read-box">(.*?)(?=<h2 class="story-title">|<!-- /?\.?read-box|</section>)',
+        r'<h2 class="story-title">(.*?)</h2>\s*<div class="read-box">(.*?)'
+        r'(?=<h2 class="story-title">|<!-- /?\.?read-box|</section>)',
         page,
         re.S,
     )
@@ -74,6 +105,147 @@ def parse_page(page: str) -> dict:
         "episode_title": _clean_text(h1_m.group(1)) if h1_m else "",
         "stories": stories,
     }
+
+
+# Widget name per node type, in widgets_values order, for UI->API conversion.
+# Add an entry here if doraemonn_cover.json gains a node type with widgets.
+_UI_WIDGET_INPUTS = {
+    "UpscaleModelLoader": ["model_name"],
+    "LoadImage": ["image"],  # 2nd widget ('upload') is UI-only, not an API input
+}
+
+
+def ui_to_api_prompt(wf: dict, image_name: str) -> dict:
+    """Convert a UI-format ComfyUI workflow to an API prompt.
+
+    Links are resolved through the workflow's links array; widget values are
+    mapped to input names via _UI_WIDGET_INPUTS. The LoadImage node's image is
+    replaced with image_name (the file we uploaded). Raises ValueError on
+    unsupported node types so a silently wrong prompt is never submitted.
+    """
+    # links array: [id, src node, src slot, dst node, dst slot, type]
+    links = {link[0]: (str(link[1]), link[2]) for link in wf.get("links", [])}
+    prompt = {}
+    for node in wf.get("nodes", []):
+        if node.get("mode", 0) in (2, 4):  # muted / bypassed
+            continue
+        ntype = node["type"]
+        widgets = node.get("widgets_values") or []
+        names = _UI_WIDGET_INPUTS.get(ntype)
+        if names is None and widgets:
+            raise ValueError(
+                f"workflow node type {ntype!r} has widgets but no entry in "
+                "_UI_WIDGET_INPUTS; add it in fetch_doraemon.py"
+            )
+        inputs = {name: val for name, val in zip(names or [], widgets)}
+        for inp in node.get("inputs", []):
+            if inp.get("link") is not None:
+                inputs[inp["name"]] = list(links[inp["link"]])
+        if ntype == "LoadImage":
+            inputs["image"] = image_name
+        prompt[str(node["id"])] = {"class_type": ntype, "inputs": inputs}
+    if not prompt:
+        raise ValueError("workflow contains no executable nodes")
+    return prompt
+
+
+def _server_up(client: httpx.Client, url: str) -> bool:
+    try:
+        return client.get(f"{url}/system_stats", timeout=3).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def ensure_comfyui(client: httpx.Client, boot_timeout: int = 240) -> tuple[str | None, subprocess.Popen | None]:
+    """Find a running ComfyUI server, or boot a headless one from COMFYUI_CORE.
+
+    Returns (base_url, proc); proc is None when the server was already running
+    (caller must NOT terminate it) or when no server could be started (then
+    base_url is None too and the caller falls back to plain copies).
+    """
+    candidates = [os.environ["COMFYUI_URL"]] if os.environ.get("COMFYUI_URL") else COMFYUI_CANDIDATE_URLS
+    for url in candidates:
+        if _server_up(client, url):
+            return url, None
+
+    if not (COMFYUI_CORE / "main.py").is_file() or not COMFYUI_VENV_PY.is_file():
+        print("  comfyui   : no server running and cloned core/venv not found")
+        return None, None
+    print("  comfyui   : no server running - starting headless ComfyUI (may take ~30-60s)...")
+    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    log_path = OUT_ROOT / "comfyui_server.log"
+    cmd = [
+        str(COMFYUI_VENV_PY),
+        str(COMFYUI_CORE / "main.py"),
+        "--base-directory", str(COMFYUI_BASE),  # models/, custom_nodes/ etc. live here
+        "--user-directory", str(COMFYUI_BASE / "user"),
+        "--input-directory", str(COMFYUI_BASE / "input"),
+        "--output-directory", str(COMFYUI_BASE / "output"),
+        "--extra-model-paths-config", str(COMFYUI_EXTRA_MODELS),
+        "--disable-auto-launch",
+        "--disable-all-custom-nodes",
+        "--listen", "127.0.0.1",
+        "--port", COMFYUI_OWN_URL.rsplit(":", 1)[1],
+    ]
+    with log_path.open("wb") as log:
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(COMFYUI_CORE))
+        deadline = time.monotonic() + boot_timeout
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                print(f"  comfyui   : server exited early (code {proc.returncode}) - see {log_path}")
+                return None, None
+            if _server_up(client, COMFYUI_OWN_URL):
+                return COMFYUI_OWN_URL, proc
+            time.sleep(2)
+    proc.terminate()
+    print(f"  comfyui   : server did not come up in {boot_timeout}s - see {log_path}")
+    return None, None
+
+
+def comfy_upscale(client: httpx.Client, base_url: str, img_path: Path, dest: Path, timeout: int = 300) -> bool:
+    """Run img_path through the user's doraemonn_cover workflow -> dest.
+
+    Returns False when the run fails/times out, so the caller can fall back
+    to a plain copy.
+    """
+    try:
+        up = client.post(
+            f"{base_url}/upload/image",
+            files={"image": (img_path.name, img_path.read_bytes(), "image/jpeg")},
+            data={"overwrite": "true"},
+        )
+        up.raise_for_status()
+        uploaded = up.json()["name"]
+
+        wf = json.loads(COMFYUI_WORKFLOW.read_text(encoding="utf-8"))
+        resp = client.post(f"{base_url}/prompt", json={"prompt": ui_to_api_prompt(wf, uploaded)})
+        resp.raise_for_status()
+        pid = resp.json()["prompt_id"]
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(1)
+            hist = client.get(f"{base_url}/history/{pid}").json()
+            if pid not in hist:
+                continue
+            for node_out in hist[pid].get("outputs", {}).values():
+                for img in node_out.get("images", []):
+                    view = client.get(
+                        f"{base_url}/view",
+                        params={
+                            "filename": img["filename"],
+                            "subfolder": img.get("subfolder", ""),
+                            "type": img.get("type", "temp"),
+                        },
+                    )
+                    view.raise_for_status()
+                    dest.write_bytes(view.content)
+                    return True
+            return False  # finished but produced no image
+    except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+        print(f"  cover(4k) : upscale failed ({exc})")
+        return False
+    return False  # timed out
 
 
 def main(episode: str) -> None:
@@ -132,6 +304,36 @@ def main(episode: str) -> None:
             if story["copyright"]:
                 lines += [f"> {story['copyright']}", ""]
         (out_dir / "story.md").write_text("\n".join(lines), encoding="utf-8")
+
+        # Split per-story: <ep>_<i>.md synopsis notes for the vault (named to
+        # match episodes/<ep>_<i>/ dirs, e.g. 935_1.md) and covers to Desktop.
+        ep_short = str(int(episode))
+        VAULT_SYNOPSIS_DIR.mkdir(parents=True, exist_ok=True)
+        comfy_url, comfy_proc = ensure_comfyui(client)
+        try:
+            for i, story in enumerate(data["stories"], 1):
+                # '# <title>' heading + synopsis body (see learn.parse_synopsis_md);
+                # strip the site's 「」 brackets so the heading is the bare title.
+                note_lines = [f"# {story['title'].strip('「」')}", ""]
+                note_lines += story["synopsis"].splitlines()
+                note_path = VAULT_SYNOPSIS_DIR / f"{ep_short}_{i}.md"
+                note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
+                print(f"  synopsis  : {note_path}")
+
+                if story.get("image_file"):
+                    src_img = out_dir / story["image_file"]
+                    dst_4k = DESKTOP_DIR / f"{ep_short}_{i}_4k{src_img.suffix}"
+                    if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
+                        print(f"  cover(4k) : {dst_4k}")
+                    else:
+                        if not comfy_url:
+                            print("  cover(4k) : ComfyUI unavailable - copying original instead")
+                        dst_img = DESKTOP_DIR / f"{ep_short}_{i}{src_img.suffix}"
+                        shutil.copy2(src_img, dst_img)
+                        print(f"  cover     : {dst_img}")
+        finally:
+            if comfy_proc is not None:  # only stop the server WE started
+                comfy_proc.terminate()
 
     print(f"\n第{ep}话 {data['episode_title']}")
     print(f"  broadcast : {data['broadcast_date']}")

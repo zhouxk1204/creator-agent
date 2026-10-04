@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest import mock
 
 import pytest
@@ -11,7 +12,9 @@ from creator_agent.translate.learn import (
     analyze_episode,
     build_classify_prompt,
     learn_project,
+    load_synopsis,
     parse_learning_json,
+    parse_synopsis_md,
 )
 from creator_agent.translate.memory import MemoryStore
 
@@ -56,6 +59,37 @@ def test_build_classify_prompt_includes_flag():
     prompt = build_classify_prompt([{"id": 1, "ja": "日", "ai": "中", "final": "中2", "flag": "时间轴有修改"}])
     assert "#1（时间轴有修改）" in prompt
     assert "日文: 日" in prompt and "AI: 中" in prompt and "人工: 中2" in prompt
+
+
+def test_parse_synopsis_md_basic():
+    info = parse_synopsis_md("#标题 大雄的恐龙\n##简介 大雄捡到一个蛋。\n孵出了恐龙。\n##备注 其他")
+    assert info["title"] == "大雄的恐龙"
+    assert info["synopsis"] == "大雄捡到一个蛋。\n孵出了恐龙。"
+
+
+def test_parse_synopsis_md_tolerant_spacing_and_labels():
+    info = parse_synopsis_md("# 标题：带回音的山\n\n## 简介: 大家去山里玩\n")
+    assert info["title"] == "带回音的山"
+    assert info["synopsis"] == "大家去山里玩"
+    assert parse_synopsis_md("没有标题行") == {"title": "", "synopsis": ""}
+
+
+def test_parse_synopsis_md_title_heading_with_body():
+    # Canonical format written by scripts/fetch_doraemon.py: '# <title>' +
+    # synopsis body, no '## 简介' section.
+    text = "# 変身レプリンター\n\n学校から帰るなり、宿題を始めるのび太。\nその時、つくえの引き出しが開き…\n"
+    info = parse_synopsis_md(text)
+    assert info["title"] == "変身レプリンター"
+    assert info["synopsis"] == "学校から帰るなり、宿題を始めるのび太。\nその時、つくえの引き出しが開き…"
+
+
+def test_load_synopsis(tmp_path):
+    ep = _make_episode(tmp_path)
+    assert load_synopsis(ep) is None  # no 简介 dir yet
+    syn_dir = tmp_path / "简介"
+    syn_dir.mkdir()
+    (syn_dir / "935#1.md").write_text("#标题 测试集\n##简介 剧情在此", encoding="utf-8")
+    assert load_synopsis(ep) == {"title": "测试集", "synopsis": "剧情在此"}
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +154,24 @@ def test_analyze_episode_structure_only_change(tmp_path):
     assert result["analysis"]["summary"]["merge"] == 1
 
 
+def test_analyze_episode_synopsis_injected_and_summary_md(tmp_path):
+    ep = _make_episode(tmp_path)
+    syn_dir = tmp_path / "简介"
+    syn_dir.mkdir()
+    (syn_dir / "935#1.md").write_text("#标题 大雄的恐龙\n##简介 大雄捡到蛋", encoding="utf-8")
+
+    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY) as chat_mock:
+        analyze_episode(ep, TranslateSettings())
+    prompt = chat_mock.call_args.args[2]
+    assert "剧情简介：大雄捡到蛋" in prompt and "《大雄的恐龙》" in prompt
+
+    summary = (ep / learn.SUMMARY_FILE).read_text(encoding="utf-8")
+    assert summary.startswith("# 学习总结：935#1")
+    assert "**标题**：大雄的恐龙" in summary and "> 大雄捡到蛋" in summary
+    assert "のび太 → 大雄" in summary and "专有名词错误" in summary
+    assert "[[knowledge/translation_rules|翻译规则]]" in summary
+
+
 # ---------------------------------------------------------------------------
 # project level
 # ---------------------------------------------------------------------------
@@ -150,11 +202,48 @@ def test_learn_project_end_to_end_and_idempotent(tmp_path):
     html = (proj / "reports" / "project_report.html").read_text(encoding="utf-8")
     assert "专有名词错误" in html and "大雄" in html
 
-    # re-learn: no duplicates
-    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY):
-        learn_project(proj, settings)
+    # re-learn: unchanged episodes are skipped (chat never called), knowledge intact
+    with mock.patch("creator_agent.translate.learn.chat", side_effect=AssertionError("should be skipped")):
+        done, failed = learn_project(proj, settings)
+    assert done == 0 and failed == []
     store2 = MemoryStore.load(proj)
     assert len(store2.cases) == 2 and len(store2.terms) == 1
+
+    # --force re-analyzes despite the cache
+    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY):
+        done, _ = learn_project(proj, settings, force=True)
+    assert done == 2
+    store3 = MemoryStore.load(proj)
+    assert len(store3.cases) == 2 and len(store3.terms) == 1  # dedupe still holds
+
+
+def test_learn_project_relearns_changed_episode(tmp_path):
+    proj = tmp_path
+    ep = _make_episode(proj, "935#1")
+    settings = TranslateSettings()
+    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY):
+        learn_project(proj, settings)
+
+    # touch one input srt -> only that episode is re-analyzed
+    target = ep / learn.FINAL_FILE
+    os.utime(target, (target.stat().st_mtime + 10, target.stat().st_mtime + 10))
+    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY) as chat_mock:
+        done, failed = learn_project(proj, settings)
+    assert done == 1 and failed == [] and chat_mock.called
+
+
+def test_learn_project_writes_obsidian_knowledge_md(tmp_path):
+    proj = tmp_path
+    _make_episode(proj, "935#1")
+    with mock.patch("creator_agent.translate.learn.chat", return_value=_LLM_REPLY):
+        learn_project(proj, TranslateSettings())
+
+    terms_md = (proj / "knowledge" / "terminology.md").read_text(encoding="utf-8")
+    assert "| のび太 | 大雄 | 人名译错 |" in terms_md
+    cases_md = (proj / "knowledge" / "error_cases.md").read_text(encoding="utf-8")
+    assert "## 专有名词错误（1）" in cases_md
+    # episode names with '#' must be URL-encoded in the summary link
+    assert "[935#1](../episodes/935%231/05_summary.md)" in cases_md
 
 
 def test_learn_project_no_episodes(tmp_path):

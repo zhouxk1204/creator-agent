@@ -602,6 +602,7 @@ def learn_cmd(
     ),
     model: str | None = typer.Option(None, "--model", help="Override translate.model."),
     base_url: str | None = typer.Option(None, "--base-url", help="Override translate.base_url."),
+    force: bool = typer.Option(False, "--force", help="Re-learn all episodes, ignoring cached analysis."),
 ):
     from creator_agent.translate.learn import learn_project
 
@@ -613,7 +614,7 @@ def learn_cmd(
 
     pdir = Path(project_dir) if project_dir else Path(ts.project_dir)
     typer.echo(f"Learning from {pdir}/episodes/ via {ts.model} ...")
-    done, failed = learn_project(pdir, ts)
+    done, failed = learn_project(pdir, ts, force=force)
     typer.echo(f"Done: {done} episode(s) learned, {len(failed)} failed.")
     for name, err in failed:
         typer.echo(f"  {name}: {err}")

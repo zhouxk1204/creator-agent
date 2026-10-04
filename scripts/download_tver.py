@@ -33,7 +33,8 @@ import httpx
 API_BASE = "https://service-api.tver.jp/api/v1"
 API_HEADERS = {"x-tver-platform-type": "web", "User-Agent": "Mozilla/5.0"}
 DEFAULT_SERIES = "srtsxzl3si"  # ドラえもん — the TVer link on tv-asahi.co.jp/doraemon
-OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "tver"
+# Fixed download location: desktop raw-video folder (per-series subdir below it).
+OUT_ROOT = Path("C:/Users/34696/Desktop/哆啦a梦生肉")
 
 # Make non-ASCII print correctly on the Windows console.
 for _stream in (sys.stdout, sys.stderr):
@@ -124,7 +125,9 @@ def main() -> None:
     args = parser.parse_args()
 
     series_id = _series_id(args.series)
-    out_dir = OUT_ROOT / series_id
+    # The default Doraemon series lands directly in the fixed folder; any other
+    # series gets its own subdir under it to keep files from mixing.
+    out_dir = OUT_ROOT if series_id == DEFAULT_SERIES else OUT_ROOT / series_id
 
     if args.episode:
         download(args.episode, out_dir)
