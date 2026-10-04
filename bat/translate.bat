@@ -12,7 +12,7 @@ echo ========================================
 echo   JA -^> ZH subtitle translation (local LLM)
 echo ========================================
 echo.
-echo  Double-click = translate every .srt under storage\ja_inbox\
+echo  Double-click = translate every .srt under C:\test\temps\
 echo  (already-translated ones are skipped; --force to redo).
 echo  Or: translate.bat ^<video.mp4 ^| sub.srt^> [more ...] / drag files onto this file.
 echo  Add --burn to also burn Chinese subs into ^<name^>.zh.mp4.

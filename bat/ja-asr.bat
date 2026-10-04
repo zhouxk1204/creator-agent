@@ -44,7 +44,7 @@ if "%~1"=="" echo   + translate  [JA srt + ZH srt]
 echo ========================================
 echo.
 if "%~1"=="" (
-    echo  Double-click = ASR + translate every video in storage\ja_inbox\
+    echo  Double-click = ASR + translate every video in C:\test\temps\
     echo  ^(-^> ^<name^>.srt 日文 + ^<name^>.zh.srt 中文; no burn by default^).
     echo  Already-done videos are skipped automatically.
 ) else (

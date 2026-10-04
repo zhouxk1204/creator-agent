@@ -63,7 +63,7 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
 - **`bat/ja-asr.bat`** —— 日语视频去背景音 + ASR + 说话人分离 + 词级对齐字幕 + 翻译（需要 creator-asr-ja 环境，见下文）：
-  - **双击运行 = 处理 `storage\ja_inbox\` 里的所有视频**：ASR → 日文 `<名字>.srt` → 中文 `<名字>.zh.srt`（各步已完成会自动跳过；默认不烧录，要烧录自己加 `--burn`）
+  - **双击运行 = 处理 `C:\test\temps\` 里的所有视频**：ASR → 日文 `<名字>.srt` → 中文 `<名字>.zh.srt`（各步已完成会自动跳过；默认不烧录，要烧录自己加 `--burn`）
   - 双击会自动检测并启动翻译服务（llama.cpp，见 `bat/translate-server.bat`），无需手动先起服务
   - 或 `bat\ja-asr.bat video.mp4`（仅 ASR）/ `... --burn`（额外烧录 `.zh.mp4`），也可把 mp4 拖到 bat 上
   - 输出 `<名字>.txt` / `<名字>.srt` / `<名字>.zh.srt` / `<名字>.transcript.json`
@@ -95,7 +95,7 @@ pip install torch "transformers>=5.13" accelerate audio-separator silero-vad sou
 ```yaml
 ja_asr:
   env_python: "C:/Users/<你>/.conda/envs/creator-asr-ja/python.exe"  # macOS: ~/miniconda3/envs/creator-asr-ja/bin/python
-  input_dir: "./storage/ja_inbox"   # 视频丢进这个目录即可
+  input_dir: "C:/test/temps"   # 视频丢进这个目录即可
   model: "Qwen/Qwen3-ASR-1.7B-hf"   # 想快速验证可换 Qwen/Qwen3-ASR-0.6B-hf
   device: "cuda:0"                  # Mac 调试用 mps / cpu
   language: "Japanese"
@@ -103,10 +103,10 @@ ja_asr:
 
 ### 用法
 
-日常用法就一步：**把视频丢进 `storage/ja_inbox/`，然后跑 `uv run creator-agent ja-asr`**（不带参数自动扫目录，递归，支持 mp4/mkv/mov/webm/ts/flv/avi；已有 `.srt` 的跳过，`--force` 重跑）。产物写在视频旁边。
+日常用法就一步：**把视频丢进 `C:/test/temps/`，然后跑 `uv run creator-agent ja-asr`**（不带参数自动扫目录，递归，支持 mp4/mkv/mov/webm/ts/flv/avi；已有 `.srt` 的跳过，`--force` 重跑）。产物写在视频旁边。
 
 ```bash
-uv run creator-agent ja-asr                            # 处理 ja_inbox 里的新视频
+uv run creator-agent ja-asr                            # 处理 C:/test/temps 里的新视频
 uv run creator-agent ja-asr --force                    # 全部重跑
 uv run creator-agent ja-asr video.mp4 [more.mp4 ...]   # 指定文件 / glob
 uv run creator-agent ja-asr "storage/tver/**/*.mp4" -o out/

@@ -22,7 +22,7 @@ MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad �
     → <名>.txt + <名>.srt + <名>.transcript.json
 ```
 
-用法不变：视频丢进 `storage/ja_inbox/` → `uv run creator-agent ja-asr`（或 `bat/ja-asr.bat`）。
+用法不变：视频丢进 `C:/test/temps/` → `uv run creator-agent ja-asr`（或 `bat/ja-asr.bat`）。
 已有 `.srt` 的跳过，`--force` 重跑。
 
 **双环境**：主流程（分离/VAD/分人/ASR）跑在 `creator-asr-ja`（transformers 5.17）；

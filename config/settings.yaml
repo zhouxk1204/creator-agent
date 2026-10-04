@@ -30,7 +30,7 @@ ja_asr:
   # Dedicated conda env (creator-asr-ja) - separate from creator-asr (FunASR)
   # because Qwen3-ASR needs transformers>=5.13. See README "日语 ASR" section.
   env_python: C:/Users/34696/miniconda3/envs/creator-asr-ja/python.exe
-  input_dir: ./storage/ja_inbox   # 把视频放进这个目录，ja-asr 不带参数时全量处理
+  input_dir: C:/test/temps   # 把视频放进这个目录，ja-asr 不带参数时全量处理
   model: C:/models/Qwen3-ASR-1.7B-hf   # local dir (ModelScope); C:/models/Qwen3-ASR-0.6B-hf for speed
   sep_model: ""                   # blank -> audio-separator default BS-RoFormer
   device: cuda:0                  # cpu works too (slow); mps on Mac
