@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,7 +71,7 @@ _ALIGN_PAD_SEC = 0.8
 # Pure-policy modules shared with the main env via this sys.path shim (they
 # live in creator_agent, which is not installed here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cue_splitter import split_cues  # noqa: E402
+from cue_splitter import resolve_overlaps, split_cues  # noqa: E402
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
 from vad_chunker import merge_speech_intervals  # noqa: E402
 
@@ -146,8 +147,13 @@ def _load_speaker(model_id: str):
 # ---------------------------------------------------------------------------
 
 
-def _separate_vocals(separator, audio_path: Path, out_dir: Path) -> Path:
-    """Isolate the vocal stem; returns the vocals WAV path."""
+def _separate_vocals(separator, audio_path: Path, out_dir: Path) -> tuple[Path, list[Path]]:
+    """Isolate the vocal stem; returns (vocals 16k WAV, [other raw stems]).
+
+    The other stems (e.g. the instrumental) are the separator's raw outputs,
+    kept only when the caller passes a keep dir — they let a human verify
+    what the separation removed.
+    """
     # Redirect separator output into the per-job temp dir; otherwise
     # audio-separator writes <name>_(Vocals)_*.wav into the process CWD.
     # The model instance captured output_dir at load_model time, so set both
@@ -163,7 +169,7 @@ def _separate_vocals(separator, audio_path: Path, out_dir: Path) -> Path:
     if not vocals:
         raise RuntimeError(f"separator produced no vocal stem: {outputs}")
     # Normalize to 16kHz mono (separation models usually output 44.1kHz).
-    return _to_16k_mono(vocals[0], out_dir / "vocals_16k.wav")
+    return _to_16k_mono(vocals[0], out_dir / "vocals_16k.wav"), [p for p in paths if p != vocals[0]]
 
 
 def _to_16k_mono(wav_path: Path, out_path: Path) -> Path:
@@ -376,7 +382,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         work = Path(tmp)
         t0 = time.monotonic()
         _progress(vid, "人声分离中…（BS-RoFormer，长视频可能要几分钟）")
-        vocals = _separate_vocals(separator, audio_path, work)
+        vocals, other_stems = _separate_vocals(separator, audio_path, work)
         _progress(vid, f"人声分离完成（{time.monotonic() - t0:.0f}s）→ VAD 检测语音段…")
 
         intervals = _speech_intervals(vad_model, vocals)
@@ -448,6 +454,12 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                     seg["speaker"] = c["speaker"]
                 segments.append(seg)
 
+        # Word-timed cues may spill past their chunk (the aligner's window is
+        # padded beyond it), and diarized speakers can genuinely talk over
+        # each other — split every cross-chunk overlap at its midpoint so the
+        # final subtitle timeline never overlaps.
+        segments = resolve_overlaps(segments)
+
         _progress(vid, f"完成：{len(segments)} 条字幕（共 {time.monotonic() - t0:.0f}s）")
 
         vocals_out = None
@@ -455,6 +467,11 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             keep_dir.mkdir(parents=True, exist_ok=True)
             vocals_out = keep_dir / f"{job['video_id']}.vocals.wav"
             vocals_out.write_bytes(vocals.read_bytes())
+            # Keep the non-vocal stems too (e.g. the instrumental) so the
+            # separation quality can be audited by ear afterwards.
+            for stem in other_stems:
+                kind = "instrumental" if "instrument" in stem.stem.lower() else "other"
+                shutil.copy2(stem, keep_dir / f"{job['video_id']}.{kind}{stem.suffix}")
 
     return {
         "text": "".join(s["text"] for s in segments),

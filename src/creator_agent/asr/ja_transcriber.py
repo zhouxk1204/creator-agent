@@ -88,12 +88,22 @@ class JaTranscriber:
                 "Point it at the dedicated creator-asr-ja env's python."
             )
 
-        # 1. Extract audio for each video into a temp dir.
+        # 1. Extract audio for each video. With ja_asr.work_dir set, audio and
+        # the separated stems persist there for auditing; otherwise everything
+        # intermediate lives in a temp dir that is deleted after the run.
         failed: list[tuple[str, str]] = []
         jobs: list[dict] = []
         extracted: list[tuple[Path, str]] = []  # (video_path, job video_id)
-        with tempfile.TemporaryDirectory(prefix="ja-asr-") as tmp:
-            audio_dir = Path(tmp)
+        work_root = Path(self._settings.work_dir) if self._settings.work_dir else None
+        tmp: tempfile.TemporaryDirectory | None = None
+        if work_root:
+            work_root.mkdir(parents=True, exist_ok=True)
+            audio_dir = work_root
+            _progress(f"中间产物保留在 {work_root}（原始音频 + 人声/伴奏 stems）")
+        else:
+            tmp = tempfile.TemporaryDirectory(prefix="ja-asr-")
+            audio_dir = Path(tmp.name)
+        try:
             used_ids: set[str] = set()
             for idx, vpath in enumerate(video_paths):
                 vpath = Path(vpath)
@@ -114,6 +124,9 @@ class JaTranscriber:
 
             # 2. Invoke the worker (models load once for the whole batch).
             results = self._run_worker(jobs, out_dir)
+        finally:
+            if tmp is not None:
+                tmp.cleanup()
 
         # 3. Write transcript.json + txt + srt per video.
         transcribed = 0
@@ -172,7 +185,11 @@ class JaTranscriber:
                     cmd += ["--aligner-python", s.aligner_env_python]
             if s.speaker_model:
                 cmd += ["--speaker-model", s.speaker_model]
-            if self._settings.keep_vocals and out_dir:
+            # work_dir keeps every intermediate per video (mix + vocal +
+            # instrumental stems); keep_vocals is the older out_dir-only path.
+            if s.work_dir:
+                cmd += ["--keep-vocals-dir", s.work_dir]
+            elif s.keep_vocals and out_dir:
                 cmd += ["--keep-vocals-dir", str(out_dir)]
             # Same rationale as Transcriber: force UTF-8 in the worker and
             # decode bytes with errors="replace" (Windows gbk pipe safety).

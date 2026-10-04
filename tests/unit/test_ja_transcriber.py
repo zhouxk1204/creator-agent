@@ -115,6 +115,30 @@ def test_transcribe_files_out_dir_overrides_output_location(tmp_path):
     assert not (tmp_path / "ep01.srt").exists()
 
 
+def test_transcribe_files_work_dir_keeps_intermediates(tmp_path):
+    video = tmp_path / "ep01.mp4"
+    video.write_bytes(b"fake")
+    work = tmp_path / "work"
+    settings = _settings()
+    settings.work_dir = str(work)
+
+    t = JaTranscriber(settings=settings)
+    with (
+        mock.patch("creator_agent.asr.ja_transcriber.extract_audio") as extract,
+        _popen_patch([_ok_result("ep01")]) as popen,
+    ):
+        done, failed = t.transcribe_files([video])
+
+    assert done == 1 and failed == []
+    # Audio is extracted INTO the work dir (and not deleted after the run)...
+    assert extract.call_args.args[1] == work / "ep01.wav"
+    # ...and the worker is told to keep the separated stems there too.
+    cmd = popen.call_args.args[0]
+    assert "--keep-vocals-dir" in cmd
+    assert cmd[cmd.index("--keep-vocals-dir") + 1] == str(work)
+    assert work.is_dir()
+
+
 def test_transcribe_files_worker_failure_isolated_per_video(tmp_path):
     v1, v2 = tmp_path / "a.mp4", tmp_path / "b.mp4"
     v1.write_bytes(b"fake")

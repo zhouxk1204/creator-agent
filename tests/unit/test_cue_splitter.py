@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from creator_agent.asr.cue_splitter import split_cues
+from creator_agent.asr.cue_splitter import resolve_overlaps, split_cues
 
 
 def test_empty_and_invalid_input():
@@ -122,3 +122,75 @@ def test_cue_times_monotonic_and_clamped():
         assert cur["start"] >= prev["start"]
     assert all(c["end"] > c["start"] for c in cues)
     assert all(0.0 <= c["start"] <= 100.0 for c in cues)
+
+
+# ---------------------------------------------------------------------------
+# resolve_overlaps (cross-chunk de-overlap)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_overlaps_splits_at_midpoint():
+    # Word-timed cue edges can spill past their chunk into the next one.
+    segs = [
+        {"start": 0.0, "end": 9.0, "text": "a"},
+        {"start": 8.0, "end": 12.0, "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert out[0]["end"] == 8.5 and out[1]["start"] == 8.5
+    assert out[0]["start"] == 0.0 and out[1]["end"] == 12.0
+
+
+def test_resolve_overlaps_untouched_when_clean():
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "a"},
+        {"start": 2.0, "end": 3.0, "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert [(s["start"], s["end"]) for s in out] == [(0.0, 1.0), (2.0, 3.0)]
+
+
+def test_resolve_overlaps_sorts_and_handles_chains():
+    segs = [
+        {"start": 5.0, "end": 6.0, "text": "c"},
+        {"start": 0.0, "end": 4.5, "text": "a"},
+        {"start": 4.0, "end": 5.5, "text": "b"},
+    ]
+    out = resolve_overlaps([dict(s) for s in segs])
+    assert [s["text"] for s in out] == ["a", "b", "c"]
+    for prev, cur in zip(out, out[1:]):
+        assert cur["start"] >= prev["end"] - 1e-9
+        assert cur["end"] > cur["start"]
+
+
+def test_resolve_overlaps_contained_cue_shares_at_boundary():
+    # The later cue sits fully inside the earlier one; the overlap is still
+    # split so both keep at least min_dur.
+    segs = [
+        {"start": 0.0, "end": 1.06, "text": "a"},
+        {"start": 1.0, "end": 1.05, "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert out[0]["end"] == out[1]["start"]
+    assert out[1]["end"] > out[1]["start"]
+
+
+def test_resolve_overlaps_too_short_to_share():
+    # Both cues together are shorter than 2*min_dur — the later cue is
+    # pushed to start where the previous one ends.
+    segs = [
+        {"start": 0.0, "end": 0.09, "text": "a"},
+        {"start": 0.05, "end": 0.1, "text": "b"},
+    ]
+    out = resolve_overlaps(segs)
+    assert out[0]["end"] == 0.09
+    assert out[1]["start"] == 0.09 and out[1]["end"] > out[1]["start"]
+
+
+def test_resolve_overlaps_keeps_speaker_field():
+    segs = [
+        {"start": 0.0, "end": 2.0, "text": "a", "speaker": "話者1"},
+        {"start": 1.5, "end": 3.0, "text": "b", "speaker": "話者2"},
+    ]
+    out = resolve_overlaps(segs)
+    assert out[0]["speaker"] == "話者1" and out[1]["speaker"] == "話者2"
+    assert out[0]["end"] == out[1]["start"]

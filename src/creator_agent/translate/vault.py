@@ -98,12 +98,18 @@ def export_subtitles(project_dir: str | Path, stem: str, files: list[Path]) -> P
     Returns the target dir, or None when ``project_dir`` is blank."""
     if not project_dir:
         return None
-    target_dir = Path(project_dir) / stem
+    proj = Path(project_dir)
+    target_dir = proj / stem
     copied: list[str] = []
     for f in files:
         f = Path(f)
         if not f.is_file():
             continue
+        try:  # outputs may already live inside the vault (e.g. episodes/)
+            if f.resolve().is_relative_to(proj.resolve()):
+                continue
+        except OSError:
+            pass
         target = target_dir / f.name
         if target.exists() and target.stat().st_mtime >= f.stat().st_mtime:
             continue

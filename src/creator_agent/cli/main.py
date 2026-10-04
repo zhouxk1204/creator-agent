@@ -441,7 +441,7 @@ def ja_asr(
     videos: list[str] | None = typer.Argument(
         None, help="Video paths / globs. Omit to process everything in ja_asr.input_dir."
     ),
-    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: next to each video)."),
+    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: ja_asr.out_dir)."),
     language: str | None = typer.Option(None, "--language", "-l", help="ASR language (default: config, Japanese)."),
     device: str | None = typer.Option(None, "--device", help="Override device (cuda:0 / mps / cpu)."),
     model: str | None = typer.Option(None, "--model", help="Override ASR model (e.g. Qwen/Qwen3-ASR-0.6B-hf)."),
@@ -459,7 +459,9 @@ def ja_asr(
     if overrides:
         ja = ja.model_copy(update=overrides)
 
-    out = Path(out_dir) if out_dir else None
+    out = Path(out_dir) if out_dir else (Path(ja.out_dir) if ja.out_dir else None)
+    if out:
+        typer.echo(f"Output dir: {out}")
     if videos:
         # Expand globs ourselves (Windows cmd does no glob expansion).
         paths: list[Path] = []
@@ -546,7 +548,7 @@ def translate_cmd(
     paths: list[str] | None = typer.Argument(
         None, help="Video or .srt paths / globs. Omit to scan ja_asr.input_dir for videos."
     ),
-    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: next to each file)."),
+    out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: ja_asr.out_dir)."),
     burn: bool = typer.Option(False, "--burn", "-b", help="Burn translated subs into <name>.zh.mp4."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-translate files that already have a .zh.srt."),
     model: str | None = typer.Option(None, "--model", help="Override translate.model."),
@@ -581,7 +583,7 @@ def translate_cmd(
         typer.echo("Nothing to translate (no videos or .srt files found).")
         return
 
-    out = Path(out_dir) if out_dir else None
+    out = Path(out_dir) if out_dir else (Path(settings.ja_asr.out_dir) if settings.ja_asr.out_dir else None)
     typer.echo(f"Translating {len(targets)} file(s) via {ts.model} @ {ts.base_url} ...")
     done, failed = process_translations(targets, ts, out_dir=out, burn=burn, force=force)
     typer.echo(f"Done: {done} translated, {len(failed)} failed.")

@@ -293,6 +293,12 @@ def translate_video_srt(
 
     p = Path(video_or_srt)
     srt = p if p.suffix.lower() == ".srt" else p.with_suffix(".srt")
+    if not srt.exists() and out_dir:
+        # Outputs may live in a separate out dir (e.g. ja_asr.out_dir) rather
+        # than next to the source video.
+        cand = Path(out_dir) / srt.name
+        if cand.exists():
+            srt = cand
     if not srt.exists():
         return None, f"subtitle not found: {srt}"
     target_dir = Path(out_dir) if out_dir else srt.parent

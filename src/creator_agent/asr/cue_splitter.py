@@ -96,6 +96,34 @@ def split_cues(
     return cues
 
 
+def resolve_overlaps(segments: list[dict], min_dur: float = 0.05) -> list[dict]:
+    """De-overlap cue time ranges ACROSS chunks; returns cues sorted by time.
+
+    split_cues() keeps cues within one ASR chunk monotonic, but word-timed
+    cue edges may fall outside their chunk (the aligner sees a window padded
+    beyond the chunk), so the last cue of chunk N can overlap the first cue
+    of chunk N+1 — diarized simultaneous speech does the same. Walk the cues
+    in time order and split each overlap at its midpoint, keeping every cue
+    at least ``min_dur`` long; when two cues are too short to share, the
+    later one starts where the previous ends (any new collision that creates
+    is resolved by the next loop iteration).
+    """
+    segs = sorted(segments, key=lambda s: (s["start"], s["end"]))
+    for i in range(1, len(segs)):
+        prev, cur = segs[i - 1], segs[i]
+        if prev["end"] <= cur["start"]:
+            continue
+        lo, hi = prev["start"] + min_dur, cur["end"] - min_dur
+        if lo < hi:
+            boundary = min(max((prev["end"] + cur["start"]) / 2, lo), hi)
+            prev["end"] = cur["start"] = round(boundary, 3)
+        else:
+            cur["start"] = prev["end"]
+            if cur["end"] < cur["start"] + min_dur:
+                cur["end"] = cur["start"] + min_dur
+    return segs
+
+
 def _dur(timeline: _Timeline, off0: float, off1: float) -> float:
     start_at, end_at = timeline
     return end_at(off1) - start_at(off0)

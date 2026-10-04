@@ -45,7 +45,8 @@ echo ========================================
 echo.
 if "%~1"=="" (
     echo  Double-click = ASR + translate every video in C:\test\temps\
-    echo  ^(-^> ^<name^>.srt 日文 + ^<name^>.zh.srt 中文; no burn by default^).
+    echo  Subtitles -^> vault episodes dir ^(ja_asr.out_dir in config\settings.yaml^).
+    echo  Intermediates ^(mix + vocals + instrumental^) kept in C:\test\temps\_work.
     echo  Already-done videos are skipped automatically.
 ) else (
     echo  Running: ja-asr %ARGS%

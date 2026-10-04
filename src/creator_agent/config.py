@@ -42,11 +42,16 @@ class JaAsrSettings(BaseModel):
     # with the FunASR env, so keep them separate. File-based tool, offline.
     env_python: str = ""  # path to the creator-asr-ja env's python
     input_dir: str = "C:/test/temps"  # drop videos here; `ja-asr` with no args scans it
+    out_dir: str = ""  # default output dir for .srt/.txt/.transcript.json; blank = next to each video
+    # Intermediates (extracted mix WAV + separated vocal/instrumental stems)
+    # are kept here per video when set, so separation quality can be audited;
+    # blank = everything intermediate is discarded after the run.
+    work_dir: str = ""
     model: str = "Qwen/Qwen3-ASR-1.7B-hf"  # or Qwen/Qwen3-ASR-0.6B-hf for speed
     sep_model: str = ""  # audio-separator model filename; blank = default BS-RoFormer
     device: str = "cuda:0"  # "mps" / "cpu" for Mac debugging
     language: str = "Japanese"
-    keep_vocals: bool = False  # keep isolated vocals.wav (only with --out-dir)
+    keep_vocals: bool = False  # keep isolated vocals.wav into out_dir (superseded by work_dir)
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")
     # Word-level alignment (Qwen3-ForcedAligner-0.6B, HF id or local path).
     # Runs in a SEPARATE env (aligner_env_python) because qwen-asr pins

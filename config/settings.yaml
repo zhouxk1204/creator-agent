@@ -31,6 +31,11 @@ ja_asr:
   # because Qwen3-ASR needs transformers>=5.13. See README "日语 ASR" section.
   env_python: C:/Users/34696/miniconda3/envs/creator-asr-ja/python.exe
   input_dir: C:/test/temps   # 把视频放进这个目录，ja-asr 不带参数时全量处理
+  # 字幕产物（.srt/.zh.srt/.txt/.transcript.json）默认输出到 vault 的 episodes 目录
+  out_dir: "C:/Users/34696/Documents/Obsidian Vault/doraemon_subtitle/episodes"
+  # 中间产物保留目录：提取的原始音频 <vid>.wav + 分离后人声 <vid>.vocals.wav
+  # + 伴奏/背景音 <vid>.instrumental.wav，用于检查背景音是否去除干净
+  work_dir: C:/test/temps/_work
   model: C:/models/Qwen3-ASR-1.7B-hf   # local dir (ModelScope); C:/models/Qwen3-ASR-0.6B-hf for speed
   sep_model: ""                   # blank -> audio-separator default BS-RoFormer
   device: cuda:0                  # cpu works too (slow); mps on Mac
