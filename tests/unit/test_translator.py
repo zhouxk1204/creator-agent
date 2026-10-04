@@ -51,6 +51,19 @@ def test_build_prompt_first_batch_has_no_context():
     assert "1. あ" in prompt and "2. い" in prompt
 
 
+def test_build_prompt_with_synopsis():
+    segs = [_seg(f"文{i}") for i in range(3)]
+    synopsis = {"title": "スケスケ望遠鏡でさがしもの", "synopsis": "のび太は万年筆をなくした。"}
+    prompt = build_prompt(segs, 0, 3, synopsis=synopsis)
+    assert "剧情背景" in prompt
+    assert "《スケスケ望遠鏡でさがしもの》" in prompt
+    assert "のび太は万年筆をなくした。" in prompt
+    assert "严禁翻译、严禁输出" in prompt  # same anti-echo framing as the context block
+    assert prompt.rstrip().endswith("现在只输出上述编号的中文翻译：")  # closing line still last
+    # Empty synopsis adds nothing.
+    assert "剧情背景" not in build_prompt(segs, 0, 3, synopsis={"title": "", "synopsis": ""})
+
+
 def test_parse_translation_happy():
     reply = "1. 你好\n2. 世界\n3. 再见"
     assert parse_translation(reply, 0, 3) == ["你好", "世界", "再见"]

@@ -81,10 +81,11 @@ def build_prompt(
     end: int,
     context_cues: int = 5,
     memory_note: str = "",
+    synopsis: dict | None = None,
 ) -> str:
-    """User message for one batch: optional learned-memory section, up to
-    ``context_cues`` preceding cues as reference-only context, then the
-    numbered cues to translate.
+    """User message for one batch: optional learned-memory section, optional
+    episode synopsis (story context), up to ``context_cues`` preceding cues
+    as reference-only context, then the numbered cues to translate.
 
     Prompt shape matters: the 9B model echoes Japanese when the context block
     reads like "here is text, don't translate it". What works (verified
@@ -94,6 +95,12 @@ def build_prompt(
     lines: list[str] = []
     if memory_note:
         lines += [memory_note, ""]
+    if synopsis and (synopsis.get("title") or synopsis.get("synopsis")):
+        head = f"【剧情背景】本集《{synopsis['title']}》" if synopsis.get("title") else "【剧情背景】本集"
+        lines.append(f"{head}故事简介，仅供理解上下文，严禁翻译、严禁输出：")
+        if synopsis.get("synopsis"):
+            lines.append(synopsis["synopsis"])
+        lines.append("")
     ctx = segments[max(0, start - context_cues) : start]
     if ctx:
         lines.append("【背景参考】以下日语原文仅供理解上下文，严禁翻译、严禁输出：")
@@ -158,25 +165,35 @@ class SrtTranslator:
             self._store = MemoryStore.load(self._s.project_dir)
         return self._store
 
-    def translate_segments(self, segments: list[TranscriptSegment], tag: str = "") -> list[str]:
+    def translate_segments(
+        self, segments: list[TranscriptSegment], tag: str = "", synopsis: dict | None = None
+    ) -> list[str]:
         """Translate every segment's text; returns a parallel list of Chinese
-        strings. Indices/timestamps are the caller's business."""
+        strings. Indices/timestamps are the caller's business. ``synopsis``
+        (from ``vault.load_synopsis``) is injected into every batch's prompt
+        as story context."""
         zh = [""] * len(segments)
         batches = make_batches(len(segments), self._s.batch_size)
         for bi, (start, end) in enumerate(batches):
             _progress(f"{tag}批次 {bi + 1}/{len(batches)}：字幕 {start + 1}~{end} 翻译中…")
-            self._translate_batch(segments, start, end, zh, tag)
+            self._translate_batch(segments, start, end, zh, tag, synopsis)
         return zh
 
     def _translate_batch(
-        self, segments: list[TranscriptSegment], start: int, end: int, zh: list[str], tag: str
+        self,
+        segments: list[TranscriptSegment],
+        start: int,
+        end: int,
+        zh: list[str],
+        tag: str,
+        synopsis: dict | None = None,
     ) -> None:
         memory_note = ""
         store = self._memory()
         if store is not None:
             batch_text = " ".join(_one_line(segments[i].text) for i in range(start, end))
             memory_note = store.prompt_section(batch_text, max_cases=self._s.memory_cases)
-        prompt = build_prompt(segments, start, end, self._s.context_cues, memory_note=memory_note)
+        prompt = build_prompt(segments, start, end, self._s.context_cues, memory_note=memory_note, synopsis=synopsis)
         last_err: Exception | None = None
         for attempt in range(2):
             try:
@@ -194,8 +211,8 @@ class SrtTranslator:
         if end - start > 1:
             mid = (start + end) // 2
             _progress(f"{tag}  批次 {start + 1}~{end} 解析失败（{last_err}），拆半重试")
-            self._translate_batch(segments, start, mid, zh, tag)
-            self._translate_batch(segments, mid, end, zh, tag)
+            self._translate_batch(segments, start, mid, zh, tag, synopsis)
+            self._translate_batch(segments, mid, end, zh, tag, synopsis)
         else:
             logger.warning("cue %d keeps original text: %s", start + 1, last_err)
             _progress(f"{tag}  ! 第 {start + 1} 条翻译失败，保留原文（{last_err}）")
@@ -204,10 +221,15 @@ class SrtTranslator:
     # -- file level -----------------------------------------------------------
 
     def translate_srt(self, srt_path: Path, out_path: Path) -> Path:
+        from creator_agent.translate.vault import load_synopsis
+
         segments = parse_srt(srt_path)
         if not segments:
             raise RuntimeError(f"no cues parsed from {srt_path}")
-        zh = self.translate_segments(segments, tag=f"[{srt_path.stem}] ")
+        synopsis = load_synopsis(self._s.project_dir, srt_path.stem)
+        if synopsis:
+            _progress(f"[{srt_path.stem}] 参考简介：《{synopsis['title']}》")
+        zh = self.translate_segments(segments, tag=f"[{srt_path.stem}] ", synopsis=synopsis)
         zh_segments = [TranscriptSegment(start=s.start, end=s.end, text=t) for s, t in zip(segments, zh)]
         return write_srt(zh_segments, out_path)
 
@@ -264,7 +286,11 @@ def translate_video_srt(
 ) -> tuple[Path | None, str | None]:
     """Translate the ``<stem>.srt`` belonging to a video (or a given .srt)
     into ``<stem>.zh.srt``. Returns ``(zh_srt_path, None)`` or ``(None, error)``;
-    an up-to-date existing .zh.srt is returned as-is unless ``force``."""
+    an up-to-date existing .zh.srt is returned as-is unless ``force``.
+    When ``settings.export_subtitles`` is on, the JA/ZH srts are also mirrored
+    into ``<project_dir>/<stem>/`` (copy-if-newer)."""
+    from creator_agent.translate.vault import export_subtitles
+
     p = Path(video_or_srt)
     srt = p if p.suffix.lower() == ".srt" else p.with_suffix(".srt")
     if not srt.exists():
@@ -273,10 +299,14 @@ def translate_video_srt(
     zh_srt = target_dir / f"{srt.stem}.zh.srt"
     if zh_srt.exists() and not force:
         _progress(f"[{srt.stem}] 已有 {zh_srt.name}，跳过（--force 重翻）")
+        if settings.export_subtitles:
+            export_subtitles(settings.project_dir, srt.stem, [srt, zh_srt])
         return zh_srt, None
     try:
         SrtTranslator(settings).translate_srt(srt, zh_srt)
         _progress(f"[{srt.stem}] 翻译完成 → {zh_srt.name}")
+        if settings.export_subtitles:
+            export_subtitles(settings.project_dir, srt.stem, [srt, zh_srt])
         return zh_srt, None
     except Exception as e:
         logger.exception("translation failed for %s", srt)

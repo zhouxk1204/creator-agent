@@ -62,5 +62,9 @@ translate:
   burn_font: Microsoft YaHei
   burn_fontsize: 16
   # 二次学习：人工修正字幕 → 记忆库 → 注入下次翻译
-  project_dir: ./subtitle-project   # episodes/<剧集>/{01,02,03}.srt + knowledge/ + reports/
+  # Obsidian vault：episodes/<剧集>/{01,02,03}.srt + 简介/<剧集>.md + knowledge/ + reports/
+  project_dir: "C:/Users/34696/Documents/Obsidian Vault/doraemon_subtitle"
   memory_cases: 10                  # 每批翻译注入的历史相似案例上限
+  # 简介/<视频名>.md 存在时自动作为剧情背景注入翻译 prompt（'#' 会尝试 '_'，如 936#1 → 936_1.md）
+  # export_subtitles: 生成的 <视频名>.srt/.zh.srt 同步到 <project_dir>/<视频名>/（仅在源文件更新时覆盖，保护 vault 里的手改）
+  export_subtitles: true

@@ -83,6 +83,11 @@ class TranslateSettings(BaseModel):
     #               knowledge/*.json+md, reports/*}
     project_dir: str = "./subtitle-project"
     memory_cases: int = 10  # max similar past cases injected per translation batch
+    # Vault integration: <project_dir>/简介/<stem>.md is auto-injected into the
+    # translation prompt as story context when it exists; export_subtitles
+    # mirrors generated <stem>.srt/.zh.srt into <project_dir>/<stem>/
+    # (copy-if-newer, so Obsidian hand-edits survive).
+    export_subtitles: bool = False
 
 
 class LogSettings(BaseModel):
