@@ -9,7 +9,6 @@ at most ``max_chars`` / ``max_sec``, splitting at sentence punctuation first.
 
 from __future__ import annotations
 
-from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Sequence
 
 # Primary cue boundaries (sentence-ending punctuation, JA + ASCII).
@@ -21,10 +20,10 @@ _BREAK_CHARS = _SENT_END + _SOFT_BREAK
 # A word with its absolute time range, as produced by the forced aligner.
 Word = tuple[str, float, float]  # (text, start_sec, end_sec)
 
-# start_at / end_at: char offset (into the whitespace-stripped text) -> seconds.
-# They differ at word boundaries: a cue's start takes the *next* word's start,
-# a cue's end takes the *previous* word's end (silence gaps between words
-# belong to neither cue).
+# start_at / end_at: char offset (into the whitespace-stripped text) -> seconds,
+# plus a flag telling whether real word times back them. They differ at cue
+# boundaries: a cue's start takes its first word's start, a cue's end takes
+# its last word's end (silence gaps between words belong to neither cue).
 _Timeline = tuple[Callable[[float], float], Callable[[float], float]]
 
 
@@ -45,18 +44,23 @@ def split_cues(
     - Any cue still longer than ``max_sec`` is force-split near its middle.
     - ``words`` = word-level timestamps covering the same range (absolute
       seconds). When given and roughly consistent with ``text``, cue times
-      come from the real word times; otherwise time is allocated
+      come from the real word times (cue start = its first word's start,
+      cue end = its last word's end); otherwise time is allocated
       proportionally by character count over ``[start, end]``.
 
-    Returns ``[{"start", "end", "text"}, ...]`` with times clamped to
-    ``[max(0, start), end]`` and monotonically non-decreasing.
+    Returns ``[{"start", "end", "text"}, ...]``. Word-timed cues keep their
+    real word edges (they may fall slightly outside ``[start, end]`` when the
+    aligner saw a wider window than the ASR chunk); proportional cues are
+    clamped to ``[max(0, start), end]``. All cues are monotonically
+    non-overlapping.
     """
     t = "".join(str(text).split())
     if not t or end <= start:
         return []
     start, end = max(0.0, float(start)), float(end)
 
-    timeline = _make_timeline(t, start, end, words)
+    start_at, end_at, word_timed = _make_timeline(t, start, end, words)
+    timeline = (start_at, end_at)
 
     # Merge units into cues under the char/duration budgets, keeping each
     # piece's char offset for timing.
@@ -81,14 +85,14 @@ def split_cues(
     for ptext, poff in pieces:
         split_pieces.extend(_enforce_max_sec(ptext, poff, timeline, max_sec))
 
-    cues = [_cue(ptext, poff, timeline, start, end) for ptext, poff in split_pieces]
+    cues = [_cue(ptext, poff, timeline, start, end, clamp=not word_timed) for ptext, poff in split_pieces]
 
-    # Enforce monotonic, non-empty time ranges.
-    prev = start
+    # Enforce monotonic, non-overlapping, non-empty time ranges.
+    prev_end = 0.0
     for c in cues:
-        c["start"] = max(c["start"], prev)
+        c["start"] = max(c["start"], prev_end)
         c["end"] = max(c["end"], c["start"] + 0.05)
-        prev = c["start"]
+        prev_end = c["end"]
     return cues
 
 
@@ -97,10 +101,14 @@ def _dur(timeline: _Timeline, off0: float, off1: float) -> float:
     return end_at(off1) - start_at(off0)
 
 
-def _cue(text: str, off: int, timeline: _Timeline, lo: float, hi: float) -> dict:
+def _cue(text: str, off: int, timeline: _Timeline, lo: float, hi: float, clamp: bool) -> dict:
     start_at, end_at = timeline
-    s = min(max(start_at(off), lo), hi)
-    e = min(max(end_at(off + len(text)), lo), hi)
+    s, e = start_at(off), end_at(off + len(text))
+    if clamp:  # proportional times are only meaningful inside [lo, hi]
+        s = min(max(s, lo), hi)
+        e = min(max(e, lo), hi)
+    else:  # word times are real; keep edges that fall outside the chunk
+        s, e = max(s, 0.0), max(e, 0.0)
     return {"start": round(s, 3), "end": round(e, 3), "text": text}
 
 
@@ -157,11 +165,20 @@ def _wrap(s: str, max_chars: int) -> list[str]:
     return out
 
 
-def _make_timeline(text: str, start: float, end: float, words: Sequence[Word] | None) -> _Timeline:
-    """(start_at, end_at) over char offsets into whitespace-stripped ``text``.
+def _make_timeline(
+    text: str, start: float, end: float, words: Sequence[Word] | None
+) -> tuple[Callable[[float], float], Callable[[float], float], bool]:
+    """(start_at, end_at, word_timed) over char offsets into ``text``.
 
-    Uses word timestamps when they roughly cover the text (aligner output may
-    differ slightly from the ASR text); falls back to linear interpolation.
+    Aligner words, concatenated, reproduce the ASR text in order but usually
+    WITHOUT punctuation (and occasionally tokenized differently). So instead
+    of scaling char offsets (which drifts with every unmatched char and lands
+    cue boundaries inside the NEXT sentence's word), walk both sequences in
+    order and map each text char to the exact word that produced it: a cue's
+    start is its first word's start, its end is its last word's end.
+
+    Falls back to linear interpolation when there are no words or when too
+    little of the text could be matched to them.
     """
     n = len(text)
 
@@ -169,29 +186,44 @@ def _make_timeline(text: str, start: float, end: float, words: Sequence[Word] | 
         return start + (end - start) * min(max(off, 0.0), n) / n
 
     if not words:
-        return linear, linear
+        return linear, linear, False
 
-    wtexts = ["".join(str(w[0]).split()) for w in words]
-    total_w = sum(len(w) for w in wtexts)
-    if total_w < max(1, int(0.5 * n)):
-        return linear, linear  # word coverage too poor to be trusted
+    char_word: list[int | None] = [None] * n
+    cursor = 0
+    matched = 0
+    for wi, w in enumerate(words):
+        wt = "".join(str(w[0]).split())
+        if not wt:
+            continue
+        j = text.find(wt, cursor)
+        if j < 0:
+            continue  # ASR/aligner text mismatch on this word; skip it
+        for p in range(j, j + len(wt)):
+            char_word[p] = wi
+        cursor = j + len(wt)
+        matched += len(wt)
+    if matched < max(1, int(0.5 * n)):
+        return linear, linear, False  # word coverage too poor to be trusted
 
-    cums = [0]
-    for w in wtexts:
-        cums.append(cums[-1] + len(w))
-    scale = n / total_w if total_w else 1.0
+    covered = [wi for wi in char_word if wi is not None]
+    first_w, last_w = covered[0], covered[-1]
 
-    def word_time(off: float, boundary: Callable) -> float:
-        wo = min(max(off, 0.0), n) / scale
-        i = min(max(boundary(cums, wo) - 1, 0), len(words) - 1)
-        w0, w1 = cums[i], cums[i + 1]
-        ws, we = float(words[i][1]), float(words[i][2])
-        frac = 0.0 if w1 <= w0 else min(1.0, (wo - w0) / (w1 - w0))
-        return ws + frac * (we - ws)
+    def start_at(off: float) -> float:
+        # First word char at/after the offset; trailing punctuation-only
+        # tails take the last word's end.
+        for p in range(int(min(max(off, 0.0), n)), n):
+            wi = char_word[p]
+            if wi is not None:
+                return float(words[wi][1])
+        return float(words[last_w][2])
 
-    # start: at a char boundary the char begins a new word -> next word (bisect_right).
-    # end: the last char of the cue ends a word -> that word (bisect_left).
-    return (
-        lambda off: word_time(off, bisect_right),
-        lambda off: word_time(off, bisect_left),
-    )
+    def end_at(off: float) -> float:
+        # Last word char before the offset; leading punctuation-only heads
+        # take the first word's start.
+        for p in range(int(min(max(off, 0.0), n)) - 1, -1, -1):
+            wi = char_word[p]
+            if wi is not None:
+                return float(words[wi][2])
+        return float(words[first_w][1])
+
+    return start_at, end_at, True

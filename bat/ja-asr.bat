@@ -21,7 +21,10 @@ if "%~1"=="" set "ARGS=--translate"
 
 rem Translation needs the local LLM server (llama.cpp). Start it if it's down
 rem whenever the run involves --translate / --burn (including the no-arg default).
+rem If WE started it, we also stop it at the end to free VRAM/RAM; a server the
+rem user started themselves (translate-server.bat) is left running.
 set "NEED_SERVER=0"
+set "STARTED_SERVER=0"
 if "%~1"=="" set "NEED_SERVER=1"
 echo %ARGS% | findstr /c:"--translate" >nul && set "NEED_SERVER=1"
 echo %ARGS% | findstr /c:"--burn" >nul && set "NEED_SERVER=1"
@@ -50,6 +53,11 @@ if "%~1"=="" (
 echo.
 "%PY%" -m creator_agent.cli.main ja-asr %ARGS%
 set "RC=%ERRORLEVEL%"
+if "%STARTED_SERVER%"=="1" (
+    echo.
+    echo [server] stopping translation LLM to free VRAM/RAM...
+    taskkill /IM llama-server.exe /F >nul 2>&1
+)
 echo.
 echo ========================================
 if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
@@ -67,6 +75,7 @@ if not errorlevel 1 (
 )
 echo [server] starting translation LLM ^(llama.cpp^) in a separate window...
 start "translate-server" /min "%~dp0translate-server.bat"
+set "STARTED_SERVER=1"
 set /a TRIES=0
 :wait_server
 curl -s -m 3 http://127.0.0.1:8080/v1/models >nul 2>&1
@@ -77,6 +86,7 @@ if not errorlevel 1 (
 set /a TRIES+=1
 if %TRIES% GEQ 60 (
     echo [server] did not become ready in time.
+    taskkill /IM llama-server.exe /F >nul 2>&1
     exit /b 1
 )
 timeout /t 2 /nobreak >nul

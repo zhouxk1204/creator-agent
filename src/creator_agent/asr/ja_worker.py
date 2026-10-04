@@ -61,6 +61,11 @@ _RESULT_END = "===ASR_RESULTS_END==="
 
 _SAMPLE_RATE = 16000  # silero-vad + Qwen3-ASR both want 16 kHz mono
 _MIN_EMBED_SEC = 0.4  # intervals shorter than this give unreliable speaker embeddings
+# Extra audio given to the ALIGNER only (not the ASR) around each chunk: VAD
+# on the vocal stem often clips soft utterance onsets, and the aligner can
+# only place words inside the audio it sees. The wider window lets word times
+# recover the true onset/tail; ASR keeps the tight chunk so no text repeats.
+_ALIGN_PAD_SEC = 0.8
 
 # Pure-policy modules shared with the main env via this sys.path shim (they
 # live in creator_agent, which is not installed here).
@@ -266,14 +271,22 @@ _ALIGN_BEGIN = "===ALIGN_RESULTS_BEGIN==="
 _ALIGN_END = "===ALIGN_RESULTS_END==="
 
 
-def _align_batch(args, work: Path, asr_chunks: list[dict], vid: str) -> dict[int, list]:
+def _align_batch(
+    args, work: Path, asr_chunks: list[dict], vid: str, source_audio: Path, duration: float
+) -> dict[int, list]:
     """Word-level timestamps for ALL chunks of one video via the aligner
     subprocess (separate ``creator-asr-ja-aligner`` env). Returns
     ``{chunk_index: [(text, start, end), ...]}``; failed chunks are simply
     absent and the caller falls back to proportional cue times for them.
 
-    One subprocess per video -> the aligner model loads once per video. Never
-    raises: any config/subprocess/parse failure returns {} (proportional).
+    Alignment runs on the ORIGINAL mix (``source_audio``), not the vocal
+    stem: forced alignment tolerates BGM fine, while vocal separation eats
+    soft onsets the aligner would otherwise never see. Each chunk is aligned
+    on a window widened by ``_ALIGN_PAD_SEC`` on both sides so word times can
+    recover onsets/tails the VAD clipped; ASR text still comes from the
+    tight vocal chunk. One subprocess per video -> the aligner model loads
+    once per video. Never raises: any config/subprocess/parse failure
+    returns {} (proportional).
     """
     if not args.aligner_python:
         _warn("aligner_model set but aligner_python not configured; proportional cue times")
@@ -281,10 +294,16 @@ def _align_batch(args, work: Path, asr_chunks: list[dict], vid: str) -> dict[int
     if not Path(args.aligner_python).exists():
         _warn(f"aligner_python not found: {args.aligner_python}; proportional cue times")
         return {}
-    jobs = [
-        {"chunk_id": c["idx"], "wav": str(c["wav"]), "text": c["text"], "chunk_start": c["start"]}
-        for c in asr_chunks
-    ]
+    try:
+        jobs = []
+        for c in asr_chunks:
+            astart = max(0.0, c["start"] - _ALIGN_PAD_SEC)
+            aend = min(duration, c["end"] + _ALIGN_PAD_SEC)
+            awav = _slice_wav(source_audio, work / f"align_{c['idx']:04d}.wav", astart, aend)
+            jobs.append({"chunk_id": c["idx"], "wav": str(awav), "text": c["text"], "chunk_start": astart})
+    except Exception as e:
+        _warn(f"failed to slice alignment windows ({e}); proportional cue times")
+        return {}
     jobs_path = work / "align_jobs.json"
     jobs_path.write_text(json.dumps(jobs, ensure_ascii=False), encoding="utf-8")
     cmd = [
@@ -385,8 +404,8 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         step = "ASR（随后词级对齐）" if align_on else "ASR"
         _progress(vid, f"分块完成：{len(chunks)} 块 → 开始{step}…")
 
-        # Phase 1: ASR every chunk -> text. Chunk WAVs stay in `work` so the
-        # aligner subprocess (phase 2) can re-read them.
+        # Phase 1: ASR every chunk -> text (on the vocal stem; chunk WAVs stay
+        # in `work` only as scratch — phase 2 aligns on the original mix).
         asr_chunks: list[dict] = []
         for i, (start, end, speaker) in enumerate(chunks):
             tc = time.monotonic()
@@ -405,8 +424,12 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 f"{who}{text[:30]}{'…' if len(text) > 30 else ''}",
             )
 
-        # Phase 2: optional word-level alignment — one subprocess for all chunks.
-        words_by_idx = _align_batch(args, work, asr_chunks, vid) if align_on and asr_chunks else {}
+        # Phase 2: optional word-level alignment — one subprocess for all
+        # chunks, aligning on the ORIGINAL mix (window widened by
+        # _ALIGN_PAD_SEC) to recover onsets/tails the VAD/separator clipped.
+        words_by_idx = (
+            _align_batch(args, work, asr_chunks, vid, audio_path, duration) if align_on and asr_chunks else {}
+        )
 
         # Phase 3: split each chunk's text into subtitle cues.
         segments: list[dict] = []

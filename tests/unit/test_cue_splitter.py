@@ -66,6 +66,49 @@ def test_word_timestamps_fall_back_when_coverage_poor():
     assert cues[0]["end"] == 15.0
 
 
+def test_word_boundaries_ignore_punctuation_drift():
+    # Real aligner output drops punctuation — the char-offset scaling this
+    # replaces used to drift with every 。/？ and land cue boundaries inside
+    # the NEXT sentence's first word (936#1 regression). Cue edges must sit
+    # on real word edges, leaving the inter-sentence silence to neither cue.
+    text = "あなたまだなんですか？早くお礼状書かないとお相手の方に失礼ですよ。"
+    words = [
+        ("あなた", 0.48, 1.44),
+        ("まだ", 1.44, 1.84),
+        ("な", 1.84, 1.92),
+        ("ん", 1.92, 2.00),
+        ("です", 2.00, 2.16),
+        ("か", 2.16, 2.64),
+        # <-- 0.56s of silence here: か ends 2.64, 早く starts 3.20
+        ("早く", 3.20, 3.60),
+        ("お", 3.60, 3.68),
+        ("礼", 3.68, 3.84),
+        ("状", 3.84, 4.08),
+        ("書か", 4.08, 4.40),
+        ("ない", 4.40, 4.64),
+        ("と", 4.64, 5.04),
+        ("お", 5.36, 5.44),
+        ("相手", 5.44, 5.76),
+        ("の", 5.76, 5.84),
+        ("方", 5.84, 6.08),
+        ("に", 6.08, 6.24),
+        ("失礼", 6.24, 6.64),
+        ("です", 6.64, 6.96),
+        ("よ", 6.96, 7.12),
+    ]
+    cues = split_cues(text, 0.4, 7.2, words=words, max_chars=24)
+    assert [c["text"] for c in cues] == ["あなたまだなんですか？", "早くお礼状書かないとお相手の方に失礼ですよ。"]
+    assert cues[0]["start"] == 0.48 and cues[0]["end"] == 2.64
+    assert cues[1]["start"] == 3.20 and cues[1]["end"] == 7.12
+
+
+def test_word_times_outside_chunk_are_kept():
+    # The aligner runs on a window wider than the ASR chunk (to recover
+    # VAD-clipped onsets): word edges outside [start, end] must survive.
+    cues = split_cues("雨です。", 10.0, 10.6, words=[("雨", 9.6, 10.0), ("です", 10.0, 10.9)], max_chars=24)
+    assert cues[0]["start"] == 9.6 and cues[0]["end"] == 10.9
+
+
 def test_max_sec_forces_split():
     # One sentence, no punctuation; proportional 20s over 20 chars, max 8s.
     cues = split_cues("あ" * 20, 0.0, 20.0, max_chars=24, max_sec=8.0)
