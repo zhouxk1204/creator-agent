@@ -17,6 +17,9 @@ dependencies = [
     "pycryptodomex>=3.20",
     # Lets scripts/comfyui_run.py listen to ComfyUI progress events in real time.
     "websocket-client>=1.8,<2",
+    # Frame-stable title-card detection for scripts/split_episode.py.
+    "opencv-python-headless>=4.9,<5",
+    "numpy>=1.26,<3",
 ]
 
 [project.scripts]

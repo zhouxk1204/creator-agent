@@ -26,3 +26,7 @@ Thumbs.db
 
 # Test databases
 *.db
+
+# Episode splitter scratch dirs (scripts/split_episode.py)
+/input/
+/output/
