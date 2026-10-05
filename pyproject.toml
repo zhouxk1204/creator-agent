@@ -20,6 +20,7 @@ dependencies = [
     # Frame-stable title-card detection for scripts/split_episode.py.
     "opencv-python-headless>=4.9,<5",
     "numpy>=1.26,<3",
+    "scenedetect[opencv-headless]>=0.6,<0.7",
 ]
 
 [project.scripts]
