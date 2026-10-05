@@ -69,7 +69,10 @@ exit /b %RC%
 
 rem ---------------------------------------------------------------------------
 :ensure_server
-curl -s -m 3 http://127.0.0.1:8080/v1/models >nul 2>&1
+rem NOTE: must be -sf (fail on HTTP error) against /health - llama-server
+rem returns 503 on /health while the model is still loading, and /v1/models
+rem answers 200 the moment the HTTP listener is up, long before inference works.
+curl -sf -m 3 http://127.0.0.1:8080/health >nul 2>&1
 if not errorlevel 1 (
     echo [server] translation LLM already running.
     exit /b 0
@@ -79,7 +82,7 @@ start "translate-server" /min "%~dp0translate-server.bat"
 set "STARTED_SERVER=1"
 set /a TRIES=0
 :wait_server
-curl -s -m 3 http://127.0.0.1:8080/v1/models >nul 2>&1
+curl -sf -m 3 http://127.0.0.1:8080/health >nul 2>&1
 if not errorlevel 1 (
     echo [server] ready.
     exit /b 0

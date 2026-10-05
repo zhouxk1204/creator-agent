@@ -1,10 +1,10 @@
 """Translate Doraemon episode notes (title + synopsis) JA -> ZH.
 
 Reads the per-story notes written by ``fetch_doraemon.py``
-(``<vault>/简介/{ep}_{i}.md``, '# <title>' + synopsis body) and writes a
-Chinese sibling next to each one::
+(``<vault>/简介/{ep}/{ep}_{i}.md``, '# <title>' + cover embed + synopsis body)
+and writes a Chinese sibling next to each one::
 
-    <vault>/简介/{ep}_{i}_zh.md   # '# <中文标题>' + 中文简介
+    <vault>/简介/{ep}/{ep}_{i}_zh.md   # '# <中文标题>' + cover embed + 中文简介
 
 Uses the same local OpenAI-compatible LLM server as the subtitle translator
 (``translate`` section of config/settings.yaml — llama.cpp Qwen3.5-9B by
@@ -43,19 +43,42 @@ SYSTEM_PROMPT = """你是一名专业日中翻译，负责翻译动漫《哆啦A
 2. 不增添原文没有的信息，不遗漏信息
 3. 人名统一：ドラえもん→哆啦A梦、のび太→大雄、しずか→静香、ジャイアン→胖虎、スネ夫→小夫
 4. 秘密道具名翻译简洁统一
-5. 只输出翻译结果，不添加任何解释"""
+5. 拟声词、效果音也要翻译成中文拟声词（如 ハクション→阿嚏），译文中不要保留日文假名
+6. 只输出翻译结果，不添加任何解释"""
 
 _KANA = re.compile(r"[぀-ヿ]")
+_COVER_EMBED = re.compile(r"^\s*!\[\[.+\]\]\s*$")
+
+
+def _too_much_kana(text: str) -> bool:
+    """True when the reply is substantially Japanese (echoed, not translated).
+
+    A few kept kana — an onomatopoeia like ハクション quoted inside an
+    otherwise fully Chinese sentence — do not trip this.
+    """
+    kana = len(_KANA.findall(text))
+    return kana > 10 or (kana > 0 and kana / len(text) > 0.1)
 _TITLE_LINE = re.compile(r"^\s*标题\s*[:：]\s*(.+?)\s*$")
 _SYNOPSIS_LINE = re.compile(r"^\s*简介\s*[:：]\s*(.*)$")
 
 
-def parse_note(path: Path) -> tuple[str, str]:
-    """'# <title>' + body -> (title, synopsis)."""
+def parse_note(path: Path) -> tuple[str, str, str | None]:
+    """'# <title>' + optional '![[封面/...]]' + body -> (title, synopsis, cover).
+
+    The cover embed is pulled out of the body so it is never sent to the
+    model; the caller re-inserts it into the translated sibling.
+    """
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or not lines[0].startswith("# "):
         raise ValueError(f"{path.name}: expected '# <title>' on the first line")
-    return lines[0][2:].strip(), "\n".join(lines[1:]).strip()
+    cover: str | None = None
+    body_lines: list[str] = []
+    for line in lines[1:]:
+        if _COVER_EMBED.match(line):
+            cover = cover or line.strip()
+            continue
+        body_lines.append(line)
+    return lines[0][2:].strip(), "\n".join(body_lines).strip(), cover
 
 
 def build_user_prompt(title: str, synopsis: str) -> str:
@@ -97,8 +120,8 @@ def parse_reply(reply: str) -> tuple[str, str]:
     body = "\n".join(body_lines).strip()
     if not title or not body:
         raise ValueError("reply has an empty title or synopsis")
-    if _KANA.search(title) or _KANA.search(body):
-        raise ValueError("reply still contains Japanese kana (echoed, not translated)")
+    if _too_much_kana(title) or _too_much_kana(body):
+        raise ValueError("reply is still mostly Japanese (echoed, not translated)")
     return title, body
 
 
@@ -121,11 +144,10 @@ def main(episode: str) -> None:
         sys.exit(2)
     ep_short = str(int(episode))
 
-    notes = sorted(
-        p for p in VAULT_SYNOPSIS_DIR.glob(f"{ep_short}_*.md") if not p.stem.endswith("_zh")
-    )
+    note_dir = VAULT_SYNOPSIS_DIR / ep_short
+    notes = sorted(p for p in note_dir.glob(f"{ep_short}_*.md") if not p.stem.endswith("_zh"))
     if not notes:
-        print(f"No notes matching {ep_short}_*.md in {VAULT_SYNOPSIS_DIR}")
+        print(f"No notes matching {ep_short}_*.md in {note_dir}")
         print("Run scripts/fetch_doraemon.py first.")
         sys.exit(1)
 
@@ -134,20 +156,23 @@ def main(episode: str) -> None:
     for note in notes:
         zh_path = note.with_name(f"{note.stem}_zh.md")
         try:
-            title, synopsis = parse_note(note)
+            title, synopsis, cover = parse_note(note)
             zh_title, zh_synopsis = translate_story(settings, title, synopsis)
         except (ValueError, httpx.HTTPError) as exc:
             failed += 1
             print(f"  FAILED    : {note.name} ({exc})")
             continue
-        out_lines = [f"# {zh_title}", ""] + zh_synopsis.splitlines()
+        out_lines = [f"# {zh_title}", ""]
+        if cover:
+            out_lines += [cover, ""]
+        out_lines += zh_synopsis.splitlines()
         zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
         print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
 
     if failed:
         print(f"\n{failed}/{len(notes)} stories failed to translate.")
         sys.exit(1)
-    print(f"\nTranslated {len(notes)} stories into {VAULT_SYNOPSIS_DIR}")
+    print(f"\nTranslated {len(notes)} stories into {note_dir}")
 
 
 if __name__ == "__main__":

@@ -13,47 +13,6 @@ from creator_agent.models.transcript import TranscriptSegment
 
 _TS = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
-# Short interjection cues add nothing a viewer can't hear themselves — drop
-# them from subtitles (the full text stays in .txt / .transcript.json).
-# Match is on the text with punctuation/long-vowel marks stripped and repeated
-# chars collapsed, so ああ/ええ/うーん/はいはい all reduce to an entry below.
-_FILLER_STRIP = "。、！？!?.,…‥・「」『』\"' 　\t\n"
-_FILLERS = {
-    "うん",
-    "はい",
-    "おう",
-    "ふん",
-    "へえ",
-    "うわ",
-    "わあ",
-    "やあ",
-    "ほう",
-    "うんうん",
-    "はいはい",
-    "ん",
-    "あ",
-    "え",
-    "お",
-    "う",
-}
-
-
-def is_filler_cue(text: str) -> bool:
-    """True when a cue is just a short interjection (うん。/はい。/あっ …).
-
-    Single-character utterances and a small set of common acknowledgments are
-    considered filler; anything longer or content-bearing is kept.
-    """
-    t = text.strip().strip(_FILLER_STRIP)
-    t = t.replace("ー", "").replace("〜", "").replace("~", "")
-    t = t.rstrip("っッ")  # あっ/えっ -> あ/え
-    t = re.sub(r"(.)\1+", r"\1", t)  # collapse repeated chars: ああ -> あ
-    if not t:
-        return True
-    if len(t) == 1:
-        return True
-    return t in _FILLERS
-
 
 def _fmt_timestamp(sec: float) -> str:
     """Seconds -> SRT timestamp ``HH:MM:SS,mmm``."""
@@ -94,14 +53,15 @@ def parse_srt(path: Path) -> list[TranscriptSegment]:
 
 
 def segments_to_srt(segments: list[TranscriptSegment]) -> str:
-    """Build SRT content from segments. Empty-text and short-filler cues are
-    skipped and the remaining cues are renumbered sequentially. Speaker
-    labels are NOT rendered into subtitles (they stay in .txt /
+    """Build SRT content from segments. Every recognized cue is kept (short
+    interjections like うん。included — full recognition, no filler filter);
+    only empty-text cues are skipped, and cues are renumbered sequentially.
+    Speaker labels are NOT rendered into subtitles (they stay in .txt /
     .transcript.json only)."""
     cues: list[str] = []
     for seg in segments:
         text = seg.text.strip()
-        if not text or is_filler_cue(text):
+        if not text:
             continue
         cues.append(f"{len(cues) + 1}\n{_fmt_timestamp(seg.start)} --> {_fmt_timestamp(seg.end)}\n{text}\n")
     return "\n".join(cues)

@@ -447,6 +447,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 words=words_by_idx.get(c["idx"]),
                 max_chars=args.max_cue_chars,
                 max_sec=args.max_cue_sec,
+                pause_sec=args.pause_sec,
             )
             for cue in cues:
                 seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
@@ -521,6 +522,12 @@ def main() -> int:
     )
     parser.add_argument("--max-cue-chars", type=int, default=24)
     parser.add_argument("--max-cue-sec", type=float, default=8.0)
+    parser.add_argument(
+        "--pause-sec",
+        type=float,
+        default=0.6,
+        help="break subtitle cues at silence gaps of at least this length (needs word alignment)",
+    )
     parser.add_argument("--max-chunk", type=float, default=15.0, help="ASR chunk cap in seconds")
     args = parser.parse_args()
 

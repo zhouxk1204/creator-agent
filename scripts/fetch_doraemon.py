@@ -9,7 +9,10 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
     └── story_1.jpg, story_2.jpg, ...
 
 Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
-    <vault>/简介/{ep}_{i}.md   # '# <title>' + synopsis body, for `creator-agent learn`
+    <vault>/简介/{ep}/{ep}_{i}.md    # '# <title>' + '![[封面/{ep}/...]]' +
+                                    # synopsis body, for `creator-agent learn`
+    <vault>/封面/{ep}/{ep}_{i}_4k.jpg  # cover mirrored into the vault so the
+                                      # 简介 note can embed it (Obsidian wikilink)
     ~/Desktop/{ep}_{i}_4k.jpg  # cover upscaled by executing the user's ComfyUI
                                # workflow (doraemonn_cover.json); a headless
                                # server is auto-started when none is running.
@@ -39,9 +42,11 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "doraemon"
-# Per-story outputs: synopsis notes go to the Obsidian vault (consumed by
-# `creator-agent learn`, see translate/learn.py), covers go to the Desktop.
+# Per-story outputs: synopsis notes and covers go to the Obsidian vault
+# (notes are consumed by `creator-agent learn`, see translate/learn.py);
+# covers are ALSO copied to the Desktop for the user's publishing flow.
 VAULT_SYNOPSIS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\简介")
+VAULT_COVERS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\封面")
 DESKTOP_DIR = Path.home() / "Desktop"
 # ComfyUI upscales covers to "4K" by executing the user's own workflow file
 # (COMFYUI_WORKFLOW, UI format -> converted to an API prompt here). Discovery
@@ -305,32 +310,45 @@ def main(episode: str) -> None:
                 lines += [f"> {story['copyright']}", ""]
         (out_dir / "story.md").write_text("\n".join(lines), encoding="utf-8")
 
-        # Split per-story: <ep>_<i>.md synopsis notes for the vault (named to
-        # match episodes/<ep>_<i>/ dirs, e.g. 935_1.md) and covers to Desktop.
+        # Split per-story: <ep>_<i>.md synopsis notes under 简介/<ep>/ (named
+        # to match episodes/<ep>_<i>/ dirs, e.g. 935_1.md), covers to Desktop
+        # + 封面/<ep>/ so the note can embed them via an Obsidian wikilink.
         ep_short = str(int(episode))
-        VAULT_SYNOPSIS_DIR.mkdir(parents=True, exist_ok=True)
+        note_dir = VAULT_SYNOPSIS_DIR / ep_short
+        cover_dir = VAULT_COVERS_DIR / ep_short
+        note_dir.mkdir(parents=True, exist_ok=True)
+        cover_dir.mkdir(parents=True, exist_ok=True)
         comfy_url, comfy_proc = ensure_comfyui(client)
         try:
             for i, story in enumerate(data["stories"], 1):
-                # '# <title>' heading + synopsis body (see learn.parse_synopsis_md);
-                # strip the site's 「」 brackets so the heading is the bare title.
-                note_lines = [f"# {story['title'].strip('「」')}", ""]
-                note_lines += story["synopsis"].splitlines()
-                note_path = VAULT_SYNOPSIS_DIR / f"{ep_short}_{i}.md"
-                note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
-                print(f"  synopsis  : {note_path}")
-
+                cover_name: str | None = None
                 if story.get("image_file"):
                     src_img = out_dir / story["image_file"]
                     dst_4k = DESKTOP_DIR / f"{ep_short}_{i}_4k{src_img.suffix}"
                     if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
                         print(f"  cover(4k) : {dst_4k}")
+                        cover_name = dst_4k.name
                     else:
                         if not comfy_url:
                             print("  cover(4k) : ComfyUI unavailable - copying original instead")
                         dst_img = DESKTOP_DIR / f"{ep_short}_{i}{src_img.suffix}"
                         shutil.copy2(src_img, dst_img)
                         print(f"  cover     : {dst_img}")
+                        cover_name = dst_img.name
+                    # Mirror into the vault so 简介 notes can embed the cover.
+                    shutil.copy2(DESKTOP_DIR / cover_name, cover_dir / cover_name)
+                    print(f"  vault     : {cover_dir / cover_name}")
+
+                # '# <title>' heading + cover embed + synopsis body (see
+                # learn.parse_synopsis_md); strip the site's 「」 brackets so
+                # the heading is the bare title.
+                note_lines = [f"# {story['title'].strip('「」')}", ""]
+                if cover_name:
+                    note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
+                note_lines += story["synopsis"].splitlines()
+                note_path = note_dir / f"{ep_short}_{i}.md"
+                note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
+                print(f"  synopsis  : {note_path}")
         finally:
             if comfy_proc is not None:  # only stop the server WE started
                 comfy_proc.terminate()

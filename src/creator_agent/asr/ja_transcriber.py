@@ -176,6 +176,8 @@ class JaTranscriber:
                 str(s.max_cue_chars),
                 "--max-cue-sec",
                 str(s.max_cue_sec),
+                "--pause-sec",
+                str(s.pause_sec),
                 "--max-chunk",
                 str(s.max_chunk_sec),
             ]

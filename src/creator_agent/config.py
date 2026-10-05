@@ -67,6 +67,7 @@ class JaAsrSettings(BaseModel):
     # Subtitle cue shaping.
     max_cue_chars: int = 24  # split/merge cues to at most this many characters
     max_cue_sec: float = 8.0  # ... and at most this duration
+    pause_sec: float = 0.6  # hard cue break at silence gaps of at least this (needs word alignment)
     max_chunk_sec: float = 15.0  # ASR chunk cap (was hardcoded 30s)
 
 

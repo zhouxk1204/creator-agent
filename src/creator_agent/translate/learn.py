@@ -112,22 +112,31 @@ def parse_synopsis_md(text: str) -> dict:
                 title = s.lstrip("#").strip().removeprefix("标题").lstrip(" ：:").strip()
             # Body directly under the title is the synopsis (canonical format).
             section = "synopsis"
-        elif section == "synopsis" and s:
+        elif section == "synopsis" and s and not s.startswith("!["):
+            # Image embeds (e.g. the '![[封面/...]]' cover line) are display
+            # content, not story text — keep them out of the LLM context.
             synopsis_lines.append(s)
     return {"title": title, "synopsis": "\n".join(synopsis_lines)}
 
 
 def load_synopsis(ep_dir: Path) -> dict | None:
-    """<project_dir>/简介/<ep>.md -> {title, synopsis}; None when absent."""
+    """<project_dir>/简介/<ep>/<name>.md -> {title, synopsis}; None when absent.
+
+    New layout groups notes per episode (``简介/936/936_1.md``); the legacy
+    flat layout (``简介/936_1.md``) is still accepted as a fallback.
+    """
     ep_dir = Path(ep_dir)
-    path = ep_dir.parent.parent / SYNOPSIS_DIR / f"{ep_dir.name}.md"
-    if not path.is_file():
-        return None
-    try:
-        info = parse_synopsis_md(path.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-    return info if (info["title"] or info["synopsis"]) else None
+    base = ep_dir.parent.parent / SYNOPSIS_DIR
+    name = ep_dir.name
+    for path in (base / name.split("_")[0] / f"{name}.md", base / f"{name}.md"):
+        if not path.is_file():
+            continue
+        try:
+            info = parse_synopsis_md(path.read_text(encoding="utf-8"))
+        except OSError:
+            return None
+        return info if (info["title"] or info["synopsis"]) else None
+    return None
 
 
 def build_classify_prompt(items: list[dict], synopsis: dict | None = None, ep_name: str = "") -> str:

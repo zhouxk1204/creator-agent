@@ -34,11 +34,16 @@ def split_cues(
     words: Sequence[Word] | None = None,
     max_chars: int = 24,
     max_sec: float = 8.0,
+    pause_sec: float = 0.6,
 ) -> list[dict]:
     """Split ``text`` (recognized for ``[start, end]``) into cue dicts.
 
-    - Split at sentence-ending punctuation (。！？) first; short consecutive
-      sentences are re-merged up to ``max_chars`` / ``max_sec``.
+    - Long pauses (>= ``pause_sec`` of silence between consecutive words,
+      only knowable with word timestamps) are HARD cue boundaries: a cue
+      never straddles one, and a sentence containing one is cut there.
+    - Split at sentence-ending punctuation (。！？) next; short consecutive
+      sentences are re-merged up to ``max_chars`` / ``max_sec`` (never
+      across a pause boundary).
     - A sentence still longer than ``max_chars`` wraps at soft punctuation
       (、，…) near the limit, else hard-cuts at ``max_chars``.
     - Any cue still longer than ``max_sec`` is force-split near its middle.
@@ -59,21 +64,35 @@ def split_cues(
         return []
     start, end = max(0.0, float(start)), float(end)
 
-    start_at, end_at, word_timed = _make_timeline(t, start, end, words)
+    start_at, end_at, word_timed, pauses = _make_timeline(t, start, end, words, pause_sec)
     timeline = (start_at, end_at)
+    pause_set = set(pauses)
+
+    # Split text into units (sentence punctuation + wrapping), each tagged
+    # with its char offset; cut any unit that straddles a long pause at the
+    # pause boundary.
+    units: list[tuple[str, int]] = []  # (text, char offset)
+    off = 0
+    for u in _split_units(t, max_chars):
+        last = 0
+        for cut in (p - off for p in pauses if off < p < off + len(u)):
+            units.append((u[last:cut], off + last))
+            last = cut
+        units.append((u[last:], off + last))
+        off += len(u)
 
     # Merge units into cues under the char/duration budgets, keeping each
-    # piece's char offset for timing.
+    # piece's char offset for timing; never merge across a pause boundary.
     pieces: list[tuple[str, int]] = []  # (text, char offset)
     buf, buf_off = "", 0
-    for unit in _split_units(t, max_chars):
-        cand = buf + unit
+    for utext, uoff in units:
+        cand = buf + utext
         too_long = len(cand) > max_chars
         too_slow = bool(buf) and (_dur(timeline, buf_off, buf_off + len(cand)) > max_sec)
-        if buf and (too_long or too_slow):
+        pause_break = bool(buf) and (uoff in pause_set)
+        if buf and (too_long or too_slow or pause_break):
             pieces.append((buf, buf_off))
-            buf_off += len(buf)
-            buf = unit
+            buf, buf_off = utext, uoff
         else:
             buf = cand
     if buf:
@@ -194,9 +213,9 @@ def _wrap(s: str, max_chars: int) -> list[str]:
 
 
 def _make_timeline(
-    text: str, start: float, end: float, words: Sequence[Word] | None
-) -> tuple[Callable[[float], float], Callable[[float], float], bool]:
-    """(start_at, end_at, word_timed) over char offsets into ``text``.
+    text: str, start: float, end: float, words: Sequence[Word] | None, pause_sec: float = 0.6
+) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]]:
+    """(start_at, end_at, word_timed, pause_breaks) over char offsets into ``text``.
 
     Aligner words, concatenated, reproduce the ASR text in order but usually
     WITHOUT punctuation (and occasionally tokenized differently). So instead
@@ -205,8 +224,12 @@ def _make_timeline(
     order and map each text char to the exact word that produced it: a cue's
     start is its first word's start, its end is its last word's end.
 
-    Falls back to linear interpolation when there are no words or when too
-    little of the text could be matched to them.
+    ``pause_breaks`` = char offsets where the silence between two consecutive
+    matched words reaches ``pause_sec`` (offset = first char of the later
+    word, so leading punctuation stays with the left piece).
+
+    Falls back to linear interpolation (and no pause breaks) when there are
+    no words or when too little of the text could be matched to them.
     """
     n = len(text)
 
@@ -214,7 +237,7 @@ def _make_timeline(
         return start + (end - start) * min(max(off, 0.0), n) / n
 
     if not words:
-        return linear, linear, False
+        return linear, linear, False, []
 
     char_word: list[int | None] = [None] * n
     cursor = 0
@@ -231,7 +254,7 @@ def _make_timeline(
         cursor = j + len(wt)
         matched += len(wt)
     if matched < max(1, int(0.5 * n)):
-        return linear, linear, False  # word coverage too poor to be trusted
+        return linear, linear, False, []  # word coverage too poor to be trusted
 
     covered = [wi for wi in char_word if wi is not None]
     first_w, last_w = covered[0], covered[-1]
@@ -254,4 +277,13 @@ def _make_timeline(
                 return float(words[wi][2])
         return float(words[first_w][1])
 
-    return start_at, end_at, True
+    # Hard cue boundaries: silence >= pause_sec between consecutive matched
+    # words. The offset is the first char of the later word, so punctuation
+    # the aligner dropped stays attached to the left piece.
+    pauses: list[int] = []
+    seq = list(dict.fromkeys(covered))  # matched word indices, in order
+    for a, b in zip(seq, seq[1:]):
+        if float(words[b][1]) - float(words[a][2]) >= pause_sec:
+            pauses.append(char_word.index(b))
+
+    return start_at, end_at, True, pauses

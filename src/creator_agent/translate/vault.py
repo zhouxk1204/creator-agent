@@ -58,23 +58,29 @@ def parse_synopsis_md(text: str) -> dict:
                 title = s.lstrip("#").strip().removeprefix("标题").lstrip(" ：:").strip()
             # Body directly under the title is the synopsis (canonical format).
             section = "synopsis"
-        elif section == "synopsis" and s:
+        elif section == "synopsis" and s and not s.startswith("!["):
+            # Image embeds (e.g. the '![[封面/...]]' cover line) are display
+            # content, not story text — keep them out of the LLM context.
             synopsis_lines.append(s)
     return {"title": title, "synopsis": "\n".join(synopsis_lines)}
 
 
 def load_synopsis(project_dir: str | Path, stem: str) -> dict | None:
-    """``<project_dir>/简介/<stem>.md`` -> {title, synopsis}; None when absent.
+    """``<project_dir>/简介/<ep>/<stem>.md`` -> {title, synopsis}; None when absent.
 
     ``#`` in the stem is also tried as ``_`` (note names can't always carry
-    the video filename's '#').
+    the video filename's '#'). New layout groups notes per episode
+    (``简介/936/936_1.md``); the legacy flat layout (``简介/936_1.md``) is
+    still accepted as a fallback.
     """
     if not project_dir:
         return None
     base = Path(project_dir) / SYNOPSIS_DIR
     for name in dict.fromkeys((stem, stem.replace("#", "_"))):
-        path = base / f"{name}.md"
-        if path.is_file():
+        candidates = [base / name.split("_")[0] / f"{name}.md", base / f"{name}.md"]
+        for path in candidates:
+            if not path.is_file():
+                continue
             try:
                 info = parse_synopsis_md(path.read_text(encoding="utf-8"))
             except OSError:
