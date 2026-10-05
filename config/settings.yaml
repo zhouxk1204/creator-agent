@@ -48,10 +48,14 @@ ja_asr:
   aligner_model: C:/models/Qwen3-ForcedAligner-0.6B   # blank = proportional cue times
   aligner_env_python: C:/Users/34696/miniconda3/envs/creator-asr-ja-aligner/python.exe
   # Speaker diarization (CAM++ via ModelScope) -> split cues at speaker turns.
-  speaker_model: iic/speech_campplus_sv_zh-cn_16k-common   # blank = no diarization
+  # Disabled: on Doraemon it over-clusters (30+ bogus "speakers" per episode)
+  # and the interleaved speaker chunks worsen cue-time overlap. Cue splitting
+  # is pause-based instead (pause_sec below + word alignment).
+  speaker_model: ""               # blank = no diarization
   speaker_threshold: 0.5    # cosine distance; lower = more speakers (too many -> raise it)
   max_cue_chars: 24         # subtitle cue length cap
   max_cue_sec: 8.0          # subtitle cue duration cap
+  pause_sec: 0.6            # hard cue break at silence gaps >= this (needs word alignment)
   max_chunk_sec: 15.0       # ASR chunk cap (was 30)
 translate:
   # JA->ZH subtitle translation via local OpenAI-compatible server.
