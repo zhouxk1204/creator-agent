@@ -116,6 +116,48 @@ def test_max_sec_forces_split():
     assert "".join(c["text"] for c in cues) == "あ" * 20
 
 
+def test_long_pause_is_a_hard_cue_boundary():
+    # Two short sentences with a long silence between them: under the char
+    # budget they would merge, but a pause >= pause_sec must split them.
+    text = "行くよ。待って。"
+    words = [
+        ("行く", 0.0, 0.5),
+        ("よ", 0.5, 0.8),
+        ("待っ", 3.0, 3.4),
+        ("て", 3.4, 3.8),
+    ]
+    cues = split_cues(text, 0.0, 3.8, words=words, max_chars=24)
+    assert [c["text"] for c in cues] == ["行くよ。", "待って。"]
+    assert cues[0]["end"] == 0.8 and cues[1]["start"] == 3.0
+
+
+def test_pause_inside_sentence_splits_without_punctuation():
+    # No sentence punctuation at all; the pause alone decides the break.
+    text = "それはちょっと無理だと思う"
+    words = [
+        ("それは", 0.0, 0.6),
+        ("ちょっと", 0.6, 1.2),
+        ("無理", 2.5, 2.9),
+        ("だと", 2.9, 3.2),
+        ("思う", 3.2, 3.6),
+    ]
+    cues = split_cues(text, 0.0, 3.6, words=words, max_chars=24)
+    assert [c["text"] for c in cues] == ["それはちょっと", "無理だと思う"]
+    assert cues[0]["end"] == 1.2 and cues[1]["start"] == 2.5
+
+
+def test_short_pause_does_not_split():
+    text = "行くよ。待って。"
+    words = [
+        ("行く", 0.0, 0.5),
+        ("よ", 0.5, 0.8),
+        ("待っ", 1.0, 1.4),
+        ("て", 1.4, 1.8),
+    ]
+    cues = split_cues(text, 0.0, 1.8, words=words, max_chars=24)
+    assert [c["text"] for c in cues] == ["行くよ。待って。"]
+
+
 def test_cue_times_monotonic_and_clamped():
     cues = split_cues("a。b。c。", -1.0, 100.0, max_chars=2)
     for prev, cur in zip(cues, cues[1:]):

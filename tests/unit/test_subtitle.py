@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from creator_agent.asr.subtitle import is_filler_cue, parse_srt, segments_to_srt, write_srt
+from creator_agent.asr.subtitle import parse_srt, segments_to_srt, write_srt
 from creator_agent.models.transcript import TranscriptSegment
 
 
@@ -43,19 +43,14 @@ def test_speaker_not_rendered_in_srt():
     assert "\nおはよう\n" in srt
 
 
-def test_filler_cues_dropped_and_renumbered():
+def test_filler_cues_are_kept():
+    # Full recognition: short interjections (うん。/はい。/あっ …) stay in the
+    # subtitles — dropping them silently lost real lines (936#2 regression).
     srt = segments_to_srt([_seg(0, 1, "うん。"), _seg(1, 2, "ある"), _seg(2, 3, "はい。"), _seg(3, 4, "いる")])
-    assert srt.startswith("1\n00:00:01,000 --> 00:00:02,000\nある")
-    assert "2\n00:00:03,000 --> 00:00:04,000\nいる" in srt
-    assert "うん" not in srt
-    assert "はい" not in srt
-
-
-def test_is_filler_cue():
-    for filler in ("うん。", "はい", "ああ", "ええ!", "あっ", "え、", "うーん", "はいはい", "ん?", "あ"):
-        assert is_filler_cue(filler), filler
-    for keep in ("おはよう", "そうですね", "猫が好き", "行くぞ。", "なにこれ"):
-        assert not is_filler_cue(keep), keep
+    assert srt.startswith("1\n00:00:00,000 --> 00:00:01,000\nうん。")
+    assert "2\n00:00:01,000 --> 00:00:02,000\nある" in srt
+    assert "3\n00:00:02,000 --> 00:00:03,000\nはい。" in srt
+    assert "4\n00:00:03,000 --> 00:00:04,000\nいる" in srt
 
 
 def test_parse_srt_roundtrip(tmp_path):

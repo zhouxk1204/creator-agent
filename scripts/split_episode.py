@@ -6,8 +6,12 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
 
   1. Low-frequency scan (one sample every --interval seconds, default 0.5s),
      each sample reduced to a tiny grayscale signature.
-  2. Find runs where consecutive samples stay highly similar (a long static
-     shot) for at least --min-duration seconds.
+  2. Find runs where every sample matches the run's FIRST sample (the anchor)
+     at similarity >= --sim (default 0.999). A title card is a still image, so
+     every frame is near-identical to the anchor; ordinary "static" anime
+     shots (held cels, talking heads) still drift well below 0.999 over a
+     multi-second run and are rejected. Comparing consecutive samples instead
+     (the old approach) lets any slow-moving shot through.
   3. Reject runs that are black / near-solid color (fades, eyecatches).
   4. Check the run is entered/exited via an abrupt scene change.
   5. Refine each surviving run frame-by-frame (+-2s padding): the card's exact
@@ -48,11 +52,10 @@ import numpy as np
 
 # --- tuning knobs (all overridable / verified via --preview) -----------------
 SIG_SIZE = (96, 54)  # tiny grayscale signature for frame comparison
-STABLE_SIM = 0.98  # consecutive-sample similarity that counts as "static"
-MEAN_SIM = 0.978  # a qualifying run must average at least this
-DIP_SIM = 0.95  # flicker dips below STABLE_SIM are tolerated down to this floor
-MAX_DIP_RUN = 2  # ...for at most this many consecutive samples (x264 breathing)
-MIN_CARD_DURATION = 4.0  # title card holds ~6s; below this it's not a card
+ANCHOR_SIM = 0.999  # every sample in a card run matches the run's first frame this closely
+DIP_SIM = 0.995  # encoder "breathing" dips below ANCHOR_SIM tolerated down to this floor
+MAX_DIP_RUN = 2  # ...for at most this many consecutive samples
+MIN_CARD_DURATION = 5.0  # title card holds ~6s; ordinary static shots rarely hold 5s
 REFINE_PAD = 2.0  # seconds to scan on each side of a candidate run
 CUT_SIM = 0.9  # adjacent-frame sim below this at the boundary = hard scene cut
 BLACK_MEAN = 12.0  # below -> black screen, reject
@@ -75,7 +78,7 @@ class Candidate:
     start: float
     end: float
     duration: float
-    similarity: float  # mean consecutive-sample similarity inside the run
+    similarity: float  # min similarity vs the run's anchor frame
     abrupt_start: bool
     abrupt_end: bool
     ref_sig: np.ndarray = field(repr=False)  # signature at card middle
@@ -128,47 +131,51 @@ def scan_samples(cap: cv2.VideoCapture, fps: float, interval: float) -> list[Sam
     return samples
 
 
-def find_stable_runs(samples: list[Sample], stable_sim: float, min_duration: float) -> list[tuple[int, int, float]]:
-    """Return ``(start_idx, end_idx, mean_sim)`` runs of static samples.
+def find_stable_runs(
+    samples: list[Sample], anchor_sim: float, min_duration: float
+) -> list[tuple[int, int, float]]:
+    """Return ``(start_idx, end_idx, min_anchor_sim)`` runs of static samples.
 
-    Consecutive-sample similarity is the discriminator: a title card sits in
-    a tight high band (~0.99) while genuinely moving content varies more and
-    dips lower. x264 rate-control "breathing" on static frames causes
+    Every sample in a run is compared against the run's FIRST sample (the
+    anchor), not its predecessor: a title card is a still image, so all its
+    frames sit in a tight band (~0.9995+) against the anchor, while ordinary
+    static-looking anime shots (held cels, blinking characters, background
+    scroll) drift away from the anchor over seconds even though each
+    consecutive pair looks similar. x264 rate-control "breathing" causes
     isolated dips, so up to MAX_DIP_RUN consecutive samples in
-    [DIP_SIM, STABLE_SIM) are tolerated inside a run; anything below DIP_SIM
-    is a real scene change and ends the run. A run qualifies when it lasts
-    >= min_duration and averages >= MEAN_SIM.
+    [DIP_SIM, anchor_sim) are tolerated without ending the run (they just
+    don't count toward min_anchor_sim). A run qualifies when it lasts
+    >= min_duration.
     """
     runs: list[tuple[int, int, float]] = []
-
-    def close(a: int, b: int, run_sims: list[float]) -> None:
-        if not run_sims:
-            return
-        mean_sim = sum(run_sims) / len(run_sims)
-        if samples[b].t - samples[a].t >= min_duration and mean_sim >= MEAN_SIM:
-            runs.append((a, b, mean_sim))
-
     start: int | None = None
+    min_sim = 1.0
     dip_run = 0
-    run_sims: list[float] = []
+
+    def close(a: int, b: int) -> None:
+        if samples[b].t - samples[a].t >= min_duration:
+            runs.append((a, b, min_sim))
+
     for i in range(1, len(samples)):
-        sim = similarity(samples[i - 1].sig, samples[i].sig)
-        if sim >= stable_sim:
-            if start is None:
+        if start is None:
+            # a run opens on a near-identical consecutive pair
+            if similarity(samples[i - 1].sig, samples[i].sig) >= anchor_sim:
                 start = i - 1
-                run_sims = []
-            run_sims.append(sim)
+                min_sim = 1.0
+                dip_run = 0
+            continue
+        sim = similarity(samples[start].sig, samples[i].sig)
+        if sim >= anchor_sim:
+            min_sim = min(min_sim, sim)
             dip_run = 0
-        elif start is not None and sim >= DIP_SIM and dip_run < MAX_DIP_RUN:
-            run_sims.append(sim)  # tolerated flicker, run continues
-            dip_run += 1
+        elif sim >= DIP_SIM and dip_run < MAX_DIP_RUN:
+            dip_run += 1  # tolerated breathing; run continues
         else:
-            if start is not None:
-                close(start, i - 1, run_sims)
-                start = None
+            close(start, i - 1)
+            start = None
             dip_run = 0
     if start is not None:
-        close(start, len(samples) - 1, run_sims)
+        close(start, len(samples) - 1)
     return runs
 
 
@@ -216,7 +223,7 @@ def refine_candidate(
     samples: list[Sample],
     a: int,
     b: int,
-    mean_sim: float,
+    anchor_sim_min: float,
     pad: float,
     min_duration: float,
 ) -> Candidate | None:
@@ -247,14 +254,14 @@ def refine_candidate(
         start=start_f / fps,
         end=end_f / fps,
         duration=duration,
-        similarity=round(mean_sim, 4),
+        similarity=round(anchor_sim_min, 4),
         abrupt_start=abrupt_start,
         abrupt_end=abrupt_end,
         ref_sig=samples[(a + b) // 2].sig,
     )
 
 
-def detect_title_cards(video: Path, interval: float, stable_sim: float, min_duration: float, pad: float):
+def detect_title_cards(video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float):
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise SystemExit(f"无法打开视频: {video}")
@@ -266,8 +273,8 @@ def detect_title_cards(video: Path, interval: float, stable_sim: float, min_dura
     samples = scan_samples(cap, fps, interval)
     print(f"低频采样 {len(samples)} 点 (每 {interval}s)")
 
-    runs = find_stable_runs(samples, stable_sim, min_duration)
-    print(f"稳定区间 {len(runs)} 个 (≥{min_duration}s, 相似度≥{stable_sim})")
+    runs = find_stable_runs(samples, anchor_sim, min_duration)
+    print(f"稳定区间 {len(runs)} 个 (≥{min_duration}s, 锚定相似度≥{anchor_sim})")
 
     cards: list[Candidate] = []
     for a, b, min_sim in runs:
@@ -340,6 +347,22 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
     print(f"预览图已写入 {preview_dir}/ ({len(thumbs)} 张候选 + contact_sheet.jpg)")
 
 
+def find_ffmpeg() -> str | None:
+    """ffmpeg on PATH, else the one configured for ASR in settings.yaml."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        from creator_agent.config import load_settings
+
+        path = Path(load_settings().asr.ffmpeg_path)
+        if path.exists():
+            return str(path)
+    except Exception:
+        pass
+    return None
+
+
 def cut_episodes(
     video: Path, fps: float, duration: float, split_cards: list[Candidate], out_dir: Path, copy: bool
 ) -> list[dict]:
@@ -349,11 +372,12 @@ def cut_episodes(
     for i in range(len(bounds) - 1):
         name = f"{stem}#{i + 1}"
         episodes.append({"name": name, "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)})
-    if not shutil.which("ffmpeg"):
-        raise SystemExit("找不到 ffmpeg，无法切割。请先安装 ffmpeg。")
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise SystemExit("找不到 ffmpeg：PATH 上没有，settings.yaml 的 asr.ffmpeg_path 也未配置。请先安装 ffmpeg。")
     for ep in episodes:
         out = out_dir / f"{ep['name']}.mp4"
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ep['start']:.3f}", "-i", str(video)]
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ep['start']:.3f}", "-i", str(video)]
         if copy:
             cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", "-c", "copy"]
         else:
@@ -386,7 +410,7 @@ def main() -> int:
     p.add_argument("--preview", action="store_true", help="只检测并生成预览图/报告, 不切割")
     p.add_argument("--episodes", type=int, default=None, help="期望集数 (默认: 自动, 每个标题卡开新一集)")
     p.add_argument("--interval", type=float, default=0.5, help="低频扫描间隔秒 (默认 0.5)")
-    p.add_argument("--sim", type=float, default=STABLE_SIM, help=f"稳定判定相似度 (默认 {STABLE_SIM})")
+    p.add_argument("--sim", type=float, default=ANCHOR_SIM, help=f"锚定相似度: 区间内每帧与首帧的最低相似度 (默认 {ANCHOR_SIM})")
     p.add_argument(
         "--min-duration", type=float, default=MIN_CARD_DURATION, help=f"标题卡最短持续秒 (默认 {MIN_CARD_DURATION})"
     )
@@ -412,6 +436,7 @@ def main() -> int:
 
     if len(cards) < 2:
         print("\n⚠️ 检测到的标题卡不足 2 个, 无法分割。可降低 --sim / --min-duration 后用 --preview 重试。")
+        print("   例如: --sim 0.997 或 --min-duration 4")
         return 1
 
     split_cards = pick_split_cards(cards, args.episodes)

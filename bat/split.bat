@@ -64,8 +64,8 @@ echo.
 if errorlevel 1 (
     echo.
     echo  Detection failed or found too few title cards.
-    echo  Try: split.bat "%VIDEO%" --sim 0.975
-    echo  or : split.bat "%VIDEO%" --min-duration 3.5
+    echo  Try: split.bat "%VIDEO%" --sim 0.997
+    echo  or : split.bat "%VIDEO%" --min-duration 4
     pause >nul
     exit /b 1
 )
