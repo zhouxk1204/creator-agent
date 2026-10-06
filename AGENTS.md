@@ -4,9 +4,17 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Current State
 
-**No code is implemented yet.** The repo contains only the Phase 1 design spec at `docs/superpowers/specs/2026-07-09-creator-intelligence-agent-phase1-design.md`. That spec is the authoritative source of truth for architecture, models, interfaces, and scope — read it before making any non-trivial change.
+Phase 1 is **implemented and in daily use**: collect -> download -> ASR transcribe all work
+(Douyin + Xiaohongshu). The original Phase 1 design spec was deleted by the user
+(commit `088cc62`); the README is now the usage reference and this file is the
+architecture reference.
 
-The git repo has no commits yet on `main`.
+Beyond the sync pipeline, the repo also carries a standalone Doraemon JA->ZH subtitle
+toolchain (see `bat/doraemon/01`-`05`): TVer download -> episode info fetch -> episode
+splitting (`scripts/split_episode.py`) -> Japanese ASR with speaker diarization +
+word-level alignment (`asr/ja_worker.py`, dual conda envs) -> LLM translation/burn-in
+(`translate/`) -> a `learn` feedback loop that mines human corrections into a knowledge
+base injected into later translation prompts.
 
 ## What This Project Is
 
@@ -14,7 +22,7 @@ Creator Intelligence Agent — a daily sync pipeline that collects videos from s
 
 Phase 1 is **collection-only**: no AI analysis, just `collect → download` with state-machine-driven resumability.
 
-## Tech Stack & Commands (planned)
+## Tech Stack & Commands
 
 Python 3.12, managed with **uv**. Ruff for lint+format. pytest for tests.
 
@@ -66,9 +74,9 @@ src/creator_agent/
 
 ## Phase boundaries
 
-**Phase 1 (now)**: Tasks 1–7 + minimal scheduler + minimal CLI. Terminal status is `VIDEO_DOWNLOADED`.
+**Phase 1 (done)**: collect → download, scheduler + CLI. Terminal status for sync is `VIDEO_DOWNLOADED` (`run` / `transcribe` go further to ASR).
 
-**Phase 2 (later)**: ASR (FunASR), Vision (Qwen2.5-VL), StyleAnalyzer, ContentDNA Engine, Report, in-process APScheduler. Extending requires exactly 3 steps: add `VideoStatus` enum value, add module handler, hook into `PipelineRunner`. Don't add Phase 2 modules during Phase 1 work.
+**Phase 2 (later)**: ASR (FunASR), Vision (Qwen2.5-VL), StyleAnalyzer, ContentDNA Engine, Report, in-process APScheduler. Extending requires exactly 3 steps: add `VideoStatus` enum value, add module handler, hook into `PipelineRunner`.
 
 ## Things to watch out for
 
