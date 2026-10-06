@@ -14,7 +14,8 @@ rem Episode splitter: detect title cards -> cut directly (no confirmation).
 rem
 rem   03_split_episode.bat                          prompts for the video path
 rem   03_split_episode.bat C:\test\935.mp4          path given directly (or drag & drop)
-rem   03_split_episode.bat C:\test\935.mp4 --copy   extra args are passed through
+rem   03_split_episode.bat C:\test                  a directory: uses the FIRST video in it
+rem   03_split_episode.bat C:\test --copy           extra args are passed through
 rem
 rem Flow: split_episode.py detects title cards and cuts in one pass, writing
 rem output\935#1.mp4, 935#2.mp4, 935_split.json. If detection looks wrong
@@ -37,10 +38,11 @@ echo ========================================
 echo   Episode splitter (title card detect + cut)
 echo ========================================
 echo.
-echo  Drag the video file into this window and press Enter,
-echo  or paste its full path, e.g.  C:\test\935.mp4
+echo  Drag a video file OR a folder into this window and press Enter,
+echo  or paste a full path, e.g.  C:\test  or  C:\test\935.mp4
+echo  (a folder processes its first video automatically)
 echo.
-set /p "VIDEO=Video path: "
+set /p "VIDEO=Video path or folder: "
 rem strip surrounding quotes from a pasted path
 set "VIDEO=%VIDEO:"=%"
 
@@ -49,6 +51,24 @@ if "%VIDEO%"=="" (
     echo  No video given, aborting.
     pause >nul
     exit /b 1
+)
+rem If a directory was given, pick the first video file in it (by name).
+if exist "%VIDEO%\*" (
+    set "FOUND="
+    for %%E in (mp4 mkv ts mov avi flv webm) do (
+        if not defined FOUND (
+            for /f "delims=" %%F in ('dir /b /o:n "%VIDEO%\*.%%E" 2^>nul') do (
+                if not defined FOUND set "FOUND=%VIDEO%\%%F"
+            )
+        )
+    )
+    if not defined FOUND (
+        echo  No video found in folder: %VIDEO%
+        pause >nul
+        exit /b 1
+    )
+    set "VIDEO=%FOUND%"
+    echo  Using first video in folder: %VIDEO%
 )
 if not exist "%VIDEO%" (
     echo  File not found: %VIDEO%
