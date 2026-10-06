@@ -47,6 +47,13 @@ FFmpeg 使用系统安装版（**不要**用 pip 安装）。查找顺序：
 
 ## 3. 执行命令
 
+**Windows（推荐）**：双击 `split_scenes.bat`，按提示输入（或拖入）视频所在文件夹，
+自动取该文件夹下**第一个视频**进行切割；也可以直接把文件夹/视频文件拖到 bat 图标上。
+首次运行会自动创建 venv 并安装依赖。如需覆盖已有输出，把 bat 顶部的
+`EXTRA_ARGS=` 改为 `--overwrite`。
+
+**命令行**：
+
 ```bash
 python scripts/split_scenes.py "D:\videos\935#1.mp4"
 ```
