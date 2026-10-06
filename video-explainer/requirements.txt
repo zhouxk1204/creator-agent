@@ -1,0 +1,3 @@
+# scenedetect 0.7+ 不再有 [opencv] extra，OpenCV 需要单独安装
+scenedetect>=0.6
+opencv-python-headless>=4.8

@@ -1,0 +1,7 @@
+{
+  "detector": {
+    "type": "content",
+    "threshold": 27.0,
+    "min_scene_len_frames": 12
+  }
+}
