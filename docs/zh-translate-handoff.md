@@ -19,7 +19,7 @@
   RTX 5060 Ti 直接可用（`--list-devices` 显示 `Vulkan0: NVIDIA GeForce RTX 5060 Ti`）。
 - **llama.cpp**：`C:\tools\llama.cpp\`（构建 b11146 / v0.5.0，Vulkan x64 zip 解压即用）。
 - **模型**：`C:\models\Qwen3.5-9B-Q6_K.gguf`（7.36GB，Q6_K，全量上 GPU 约 14GB 显存内）。
-- **启动**：`bat\translate-server.bat`（双击即起，窗口需保持开着），或手动：
+- **启动**：`bat\start_translate_server.bat`（双击即起，窗口需保持开着），或手动：
   ```bat
   C:\tools\llama.cpp\llama-server.exe -m C:\models\Qwen3.5-9B-Q6_K.gguf ^
     --alias qwen3.5-9b --host 127.0.0.1 --port 8080 -c 8192 -ngl 99
@@ -64,19 +64,19 @@
 | `asr/subtitle.py` | 新增 `parse_srt`（解析回 TranscriptSegment，兼容 CRLF/多行/无序号行） |
 | `config.py::TranslateSettings` + `settings.yaml` | `base_url/api_key/model/batch_size/context_cues/timeout_sec/ffmpeg_path/burn_font/burn_fontsize` |
 | `cli/main.py` | 新命令 `translate`（独立翻译/烧录）；`ja-asr` 新增 `--translate` / `--burn` 链式执行 |
-| `bat/translate.bat`（新） | 双击批量翻译 inbox，支持拖文件、`--burn` |
+| `bat/translate_subtitles.bat`（新） | 双击批量翻译 inbox，支持拖文件、`--burn` |
 | `tests/unit/test_{translator,burner}.py`（新） | 18 个单测（分批/prompt/解析/重试/回退/时间轴保持/烧录命令构造） |
 | `translate/alignment.py`（新） | 02 vs 03 按时间轴对齐成块：same / time_changed / split / merge |
 | `translate/memory.py`（新） | `MemoryStore`：knowledge/ 读写、去重合并、`prompt_section` 检索注入 |
 | `translate/learn.py`（新） | `analyze_episode`（对齐 + LLM 分类 + 04_analysis.json）、`learn_project`、`write_reports` |
-| `cli/main.py` + `bat/learn.bat` | 新命令 `learn` |
+| `cli/main.py` + `bat/doraemon/05_learn_corrections.bat` | 新命令 `learn` |
 | `tests/unit/test_{alignment,memory,learn}.py`（新） | 对齐/去重/注入/端到端幂等 |
 
 ## 五、行为约定（要知道的）
 
 - **时间轴/编号永不变**：翻译只替换文本，`.zh.srt` 的时间戳逐条复制自日文 `.srt`（有单测锁定）。
 - **增量跳过**：已有 `.zh.srt` 的文件默认跳过（`--force` 重翻）；`--burn` 时若 `.zh.srt` 已存在则**不再调模型**直接烧。
-- **ja-asr --translate 会补译存量**：本轮新做 ASR 的视频强制重翻（force）；**已有 `.srt` 但缺 `.zh.srt` 的存量视频也会顺带翻译**（不 force，已有中文字幕不动，保护人工修改）。所以双击 `ja-asr.bat` 能让 inbox 里所有视频都有日+中字幕。（2026-10-01 起生效，此前只译本轮新做的）
+- **ja-asr --translate 会补译存量**：本轮新做 ASR 的视频强制重翻（force）；**已有 `.srt` 但缺 `.zh.srt` 的存量视频也会顺带翻译**（不 force，已有中文字幕不动，保护人工修改）。所以双击 `bat/doraemon/04_ja_asr.bat` 能让 inbox 里所有视频都有日+中字幕。（2026-10-01 起生效，此前只译本轮新做的）
 - **保底不中断**：单条翻译最终失败会保留日文原文并 WARNING，不会让整个文件失败（和 ASR 的 per-video 隔离原则一致）。
 - **温度 0.2**：翻译求稳不求活。
 - **说话人前缀**：`話者A:` 会作为文本一起被翻译（模型一般会翻成"说话人A："）。不想要的話先去掉前缀再翻，或在 prompt 里加规则。
@@ -112,7 +112,7 @@ subtitle-project/
 ### 使用
 
 ```bat
-bat\learn.bat                :: 扫描 project_dir/episodes/ 下所有剧集
+bat\doraemon\05_learn_corrections.bat                :: 扫描 project_dir/episodes/ 下所有剧集
 uv run creator-agent learn   :: 等价命令行（--model/--base-url 可覆盖配置）
 ```
 
@@ -141,7 +141,7 @@ uv run creator-agent learn   :: 等价命令行（--model/--base-url 可覆盖�
 
 | 症状 | 看哪里 |
 |---|---|
-| 连接 refused | llama-server 没启动（跑 `bat\translate-server.bat`）/ base_url 不对；`curl localhost:8080/v1/models` |
+| 连接 refused | llama-server 没启动（跑 `bat\start_translate_server.bat`）/ base_url 不对；`curl localhost:8080/v1/models` |
 | model not found | `translate.model` 与 llama-server `--alias` 不一致 |
 | 控制台大量"保留原文" | 模型输出格式不符合「编号. 译文」；手动 curl 看原始输出 |
 | .zh.srt 编号和 .srt 对不上 | 不可能（单测锁定）；除非是手工改过 .srt——以日文 .srt 为准 |

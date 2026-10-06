@@ -40,32 +40,32 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 
 ## Windows 快捷方式（bat/ 目录）
 
-- **`bat/download.bat`** —— 只下载单个抖音视频，不转录：
+- **`bat/douyin_download_only.bat`** —— 只下载单个抖音视频，不转录：
   - 双击运行 → 自动从剪贴板读取抖音链接下载
-  - 或命令行带参数：`bat\download.bat "https://v.douyin.com/xxxx"`（URL 含 `&` 时必须加双引号）
-- **`bat/transcribe.bat`** —— 下载 + ASR 转文字，用法同 `download.bat`（需要 creator-asr 环境，见 `asr` 命令说明）
-- **`bat/run.bat`** —— 交互式一键下载 + 转写（抖音 / 小红书自动识别）：
+  - 或命令行带参数：`bat\douyin_download_only.bat "https://v.douyin.com/xxxx"`（URL 含 `&` 时必须加双引号）
+- **`bat/douyin_download_transcribe.bat`** —— 抖音下载 + ASR 转文字，用法同上（需要 creator-asr 环境，见 `asr` 命令说明）
+- **`bat/any_link_download_transcribe.bat`** —— 交互式一键下载 + 转写（抖音 / 小红书自动识别）：
   - 双击运行 → 提示输入链接，粘贴（右键）后回车即可；直接回车则从剪贴板读
-  - 或命令行带参数：`bat\run.bat "<链接>"`（URL 含 `&` 时必须加双引号）
+  - 或命令行带参数：`bat\any_link_download_transcribe.bat "<链接>"`（URL 含 `&` 时必须加双引号）
   - 整段分享文案也能直接粘，会自动从中抽出链接
-- **`bat/xhs.bat`** —— 小红书笔记：下载视频 + ASR 转文字（见下方「小红书」一节）
-- **`bat/sync.bat`** —— 同步所有已注册博主的昨天视频，参数透传（如 `bat\sync.bat --days 3`）
-- **`bat/creator-agent.bat`** —— 交互菜单（doctor / sync / creator list）
-- **`bat/doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）：
+- **`bat/xhs_download_transcribe.bat`** —— 小红书笔记：下载视频 + ASR 转文字（见下方「小红书」一节）
+- **`bat/sync_creators.bat`** —— 同步所有已注册博主的昨天视频，参数透传（如 `bat\sync_creators.bat --days 3`）
+- **`bat/menu.bat`** —— 交互菜单（doctor / sync / creator list）
+- **`bat/doraemon/02_fetch_doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）：
   - 双击运行 → 输入集数（如 `934`）
-  - 或命令行带参数：`bat\doraemon.bat 934`
+  - 或命令行带参数：`bat\doraemon\02_fetch_doraemon.bat 934`
   - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，结果存到 `storage/doraemon/0934/`（`metadata.json` + `story.md` + 图片）
   - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
-- **`bat/tver.bat`** —— 下载 TVer 视频（默认最新一集哆啦A梦）：
+- **`bat/doraemon/01_download_tver.bat`** —— 下载 TVer 视频（默认最新一集哆啦A梦）：
   - 双击运行 → 下载最新一集到 `storage/tver/srtsxzl3si/`（含封面和 info-json）
   - `--list` 只列出在播剧集；`--all` 下载全部在播；`--episode epenb4xglc` 指定一集；`--series <id或URL>` 换其他节目
   - 原理：`service-api.tver.jp` 内部 API 列剧集 + yt-dlp 下载（无加密 HLS，最高 1080p）
   - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
-- **`bat/ja-asr.bat`** —— 日语视频去背景音 + ASR + 说话人分离 + 词级对齐字幕 + 翻译（需要 creator-asr-ja 环境，见下文）：
+- **`bat/doraemon/04_ja_asr.bat`** —— 日语视频去背景音 + ASR + 说话人分离 + 词级对齐字幕 + 翻译（需要 creator-asr-ja 环境，见下文）：
   - **双击运行 = 处理 `C:\test\temps\` 里的所有视频**：ASR → 日文 `<名字>.srt` → 中文 `<名字>.zh.srt`（各步已完成会自动跳过；默认不烧录，要烧录自己加 `--burn`）
-  - 双击会自动检测并启动翻译服务（llama.cpp，见 `bat/translate-server.bat`），无需手动先起服务
-  - 或 `bat\ja-asr.bat video.mp4`（仅 ASR）/ `... --burn`（额外烧录 `.zh.mp4`），也可把 mp4 拖到 bat 上
+  - 双击会自动检测并启动翻译服务（llama.cpp，见 `bat/start_translate_server.bat`），无需手动先起服务
+  - 或 `bat\doraemon\04_ja_asr.bat video.mp4`（仅 ASR）/ `... --burn`（额外烧录 `.zh.mp4`），也可把 mp4 拖到 bat 上
   - 输出 `<名字>.txt` / `<名字>.srt` / `<名字>.zh.srt` / `<名字>.transcript.json`
 
 ## 日语 ASR（去背景音 + Qwen3-ASR + 字幕）
@@ -125,7 +125,7 @@ uv run creator-agent run --no-asr "<分享链接>"                              
 uv run creator-agent run                                                                   # 不带参数 = 读剪贴板
 ```
 
-Windows 上双击 `bat\xhs.bat` 即可（无参数时从剪贴板读链接）。
+Windows 上双击 `bat\xhs_download_transcribe.bat` 即可（无参数时从剪贴板读链接）。
 
 **怎么拿到链接**：App 里「分享 → 复制链接」，粘贴整段分享文案也行（会自动从文字里抽出链接、
 丢掉 `apptime`/`track_code` 之类的统计参数，保留笔记页必需的 `xsec_token`）。

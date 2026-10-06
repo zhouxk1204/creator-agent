@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-call "%~dp0_bootstrap.bat"
+call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
     echo.
     echo Setup failed - see the message above.
@@ -12,9 +12,9 @@ call .venv\Scripts\activate.bat >nul 2>&1
 rem ---------------------------------------------------------------------------
 rem Episode splitter: detect title cards -> preview -> confirm -> cut.
 rem
-rem   split.bat                          prompts for the video path
-rem   split.bat C:\test\935.mp4          path given directly (or drag & drop)
-rem   split.bat C:\test\935.mp4 --copy   extra args are passed through
+rem   03_split_episode.bat                          prompts for the video path
+rem   03_split_episode.bat C:\test\935.mp4          path given directly (or drag & drop)
+rem   03_split_episode.bat C:\test\935.mp4 --copy   extra args are passed through
 rem
 rem Flow: runs --preview first and opens output\preview\contact_sheet.jpg.
 rem Check that every candidate really is a title card, then answer Y to cut
@@ -64,8 +64,8 @@ echo.
 if errorlevel 1 (
     echo.
     echo  Detection failed or found too few title cards.
-    echo  Try: split.bat "%VIDEO%" --sim 0.997
-    echo  or : split.bat "%VIDEO%" --min-duration 4
+    echo  Try: 03_split_episode.bat "%VIDEO%" --sim 0.997
+    echo  or : 03_split_episode.bat "%VIDEO%" --min-duration 4
     pause >nul
     exit /b 1
 )

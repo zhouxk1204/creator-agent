@@ -9,16 +9,16 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
-echo   TVer Download (default: Doraemon latest)
+echo   JA -^> ZH subtitle translation (local LLM)
 echo ========================================
 echo.
-echo  Usage: tver.bat             -^> download latest Doraemon episode
-echo         tver.bat --list      -^> list available episodes only
-echo         tver.bat --all       -^> download all available episodes
-echo         tver.bat --episode epenb4xglc
-echo         tver.bat --series ^<id_or_url^>
+echo  Double-click = translate every .srt under C:\test\temps\
+echo  (already-translated ones are skipped; --force to redo).
+echo  Or: translate_subtitles.bat ^<video.mp4 ^| sub.srt^> [more ...] / drag files onto this file.
+echo  Add --burn to also burn Chinese subs into ^<name^>.zh.mp4.
+echo  Needs the local LLM server running (see translate.* in config\settings.yaml).
 echo.
-"%PY%" scripts\download_tver.py %*
+"%PY%" -m creator_agent.cli.main translate %*
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================

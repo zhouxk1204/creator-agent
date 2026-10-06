@@ -9,15 +9,13 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
-echo   ComfyUI upscale run (live progress)
+echo   Douyin Download + Transcribe (ASR)
 echo ========================================
 echo.
-echo  Usage: comfyui.bat               -^> submit workflow + show progress
-echo         comfyui.bat --attach      -^> watch a job queued in the web UI
-echo         comfyui.bat --video x.mp4 -^> override input video
-echo         comfyui.bat --prefix name -^> override output prefix
+echo  Usage: douyin_download_transcribe.bat [url]
+echo  No arg = read Douyin link from clipboard.
 echo.
-"%PY%" scripts\comfyui_run.py %*
+"%PY%" -m creator_agent.cli.main run %*
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================

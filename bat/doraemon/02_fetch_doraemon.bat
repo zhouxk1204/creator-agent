@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-call "%~dp0_bootstrap.bat"
+call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
     echo.
     echo Setup failed - see the message above.
@@ -26,7 +26,7 @@ if not "%RC%"=="0" goto :done
 
 rem ---------------------------------------------------------------------------
 rem Step 2: translate the per-story notes ({ep}_{i}.md -> {ep}_{i}_zh.md).
-rem Needs the local LLM server (llama.cpp) - same one ja-asr.bat uses. Start
+rem Needs the local LLM server (llama.cpp) - same one 04_ja_asr.bat uses. Start
 rem it if it's down; if WE started it, stop it at the end to free VRAM/RAM.
 rem ---------------------------------------------------------------------------
 set "STARTED_SERVER=0"
@@ -63,7 +63,7 @@ if not errorlevel 1 (
     exit /b 0
 )
 echo [server] starting translation LLM ^(llama.cpp^) in a separate window...
-start "translate-server" /min "%~dp0translate-server.bat"
+start "translate-server" /min "%~dp0..\start_translate_server.bat"
 set "STARTED_SERVER=1"
 set /a TRIES=0
 :wait_server

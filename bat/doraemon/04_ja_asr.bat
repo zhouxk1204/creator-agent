@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-call "%~dp0_bootstrap.bat"
+call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
     echo.
     echo Setup failed - see the message above.
@@ -13,8 +13,8 @@ rem ---------------------------------------------------------------------------
 rem Double-click (no args) = Japanese ASR -> JA .srt -> translate -> ZH .srt.
 rem (No burn by default; add --burn yourself if you want a hardsubbed mp4.)
 rem Pass your own args to override, e.g.:
-rem   ja-asr.bat video.mp4                  (ASR only, JA .srt)
-rem   ja-asr.bat video.mp4 --burn           (also burn subs into .zh.mp4)
+rem   04_ja_asr.bat video.mp4                  (ASR only, JA .srt)
+rem   04_ja_asr.bat video.mp4 --burn           (also burn subs into .zh.mp4)
 rem ---------------------------------------------------------------------------
 set "ARGS=%*"
 if "%~1"=="" set "ARGS=--translate"
@@ -22,7 +22,7 @@ if "%~1"=="" set "ARGS=--translate"
 rem Translation needs the local LLM server (llama.cpp). Start it if it's down
 rem whenever the run involves --translate / --burn (including the no-arg default).
 rem If WE started it, we also stop it at the end to free VRAM/RAM; a server the
-rem user started themselves (translate-server.bat) is left running.
+rem user started themselves (start_translate_server.bat) is left running.
 set "NEED_SERVER=0"
 set "STARTED_SERVER=0"
 if "%~1"=="" set "NEED_SERVER=1"
@@ -78,7 +78,7 @@ if not errorlevel 1 (
     exit /b 0
 )
 echo [server] starting translation LLM ^(llama.cpp^) in a separate window...
-start "translate-server" /min "%~dp0translate-server.bat"
+start "translate-server" /min "%~dp0..\start_translate_server.bat"
 set "STARTED_SERVER=1"
 set /a TRIES=0
 :wait_server

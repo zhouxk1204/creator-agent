@@ -9,16 +9,14 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
-echo   JA -^> ZH subtitle translation (local LLM)
+echo   Xiaohongshu Download + Transcribe (ASR)
 echo ========================================
 echo.
-echo  Double-click = translate every .srt under C:\test\temps\
-echo  (already-translated ones are skipped; --force to redo).
-echo  Or: translate.bat ^<video.mp4 ^| sub.srt^> [more ...] / drag files onto this file.
-echo  Add --burn to also burn Chinese subs into ^<name^>.zh.mp4.
-echo  Needs the local LLM server running (see translate.* in config\settings.yaml).
+echo  Usage: xhs_download_transcribe.bat [url]
+echo  No arg = read Xiaohongshu link from clipboard.
+echo  (App: Share -^> Copy Link, then run this)
 echo.
-"%PY%" -m creator_agent.cli.main translate %*
+"%PY%" -m creator_agent.cli.main run %*
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================

@@ -24,7 +24,7 @@ uv sync          # 首次或更新后执行，安装 opencv / numpy
 
 ## 快速开始（Windows 推荐）
 
-双击 **`bat\split.bat`**：
+双击 **`bat\doraemon\03_split_episode.bat`**：
 
 1. 提示 `Video path:` 时，把视频文件**拖进窗口**（或粘贴完整路径）回车
 2. 自动执行预览检测，打印候选列表，并用看图软件打开
@@ -37,11 +37,11 @@ uv sync          # 首次或更新后执行，安装 opencv / numpy
 其他姿势：
 
 ```bat
-split.bat C:\test\935.mp4            跳过路径输入
-split.bat C:\test\935.mp4 --copy     快速模式（见下方说明）
+03_split_episode.bat C:\test\935.mp4            跳过路径输入
+03_split_episode.bat C:\test\935.mp4 --copy     快速模式（见下方说明）
 ```
 
-也可以直接把视频文件拖到 `split.bat` 图标上。
+也可以直接把视频文件拖到 `03_split_episode.bat` 图标上。
 
 ## 命令行用法（mac / linux / 进阶）
 

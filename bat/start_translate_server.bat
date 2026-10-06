@@ -1,8 +1,9 @@
 @echo off
 chcp 65001 >nul
 rem Start the local JA->ZH translation backend (llama.cpp llama-server, Vulkan).
-rem Double-click to launch; keep this window open while running translate.bat /
-rem ja-asr.bat --translate / learn.bat. Close the window (or Ctrl+C) to stop.
+rem Double-click to launch; keep this window open while running translate_subtitles.bat /
+rem doraemon\04_ja_asr.bat --translate / doraemon\05_learn_corrections.bat.
+rem Close the window (or Ctrl+C) to stop.
 rem
 rem Paths (override by setting the env var before running):
 if not defined LLAMA_SERVER set "LLAMA_SERVER=C:\tools\llama.cpp\llama-server.exe"

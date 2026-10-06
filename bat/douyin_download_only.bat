@@ -9,15 +9,13 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
-echo   Learn from corrected subtitles
+echo   Douyin Download Only (no ASR)
 echo ========================================
 echo.
-echo  Reads subtitle-project\episodes\^<ep^>\01_ja + 02_ai + 03_final .srt,
-echo  analyzes AI-vs-human diffs, updates knowledge\ memory and reports\.
-echo  Next translation run injects the memory automatically.
-echo  Needs the local LLM server running (translate.* in config\settings.yaml).
+echo  Usage: douyin_download_only.bat [url]
+echo  No arg = read Douyin link from clipboard.
 echo.
-"%PY%" -m creator_agent.cli.main learn %*
+"%PY%" -m creator_agent.cli.main run --no-asr %*
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================

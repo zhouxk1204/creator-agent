@@ -8,7 +8,7 @@ and writes a Chinese sibling next to each one::
 
 Uses the same local OpenAI-compatible LLM server as the subtitle translator
 (``translate`` section of config/settings.yaml — llama.cpp Qwen3.5-9B by
-default). The server must already be running; bat/doraemon.bat starts it via
+default). The server must already be running; bat/doraemon/02_fetch_doraemon.bat starts it via
 :ensure_server before invoking this script.
 
 Usage:
