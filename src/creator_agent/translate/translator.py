@@ -261,7 +261,8 @@ def process_translations(
                 failed.append((p.name, f"no video found next to {p.name} to burn into"))
                 continue
             try:
-                out_video = (Path(out_dir) if out_dir else video.parent) / f"{video.stem}.zh.mp4"
+                out_video = (Path(out_dir) / video.stem if out_dir else video.parent) / f"{video.stem}.zh.mp4"
+                out_video.parent.mkdir(parents=True, exist_ok=True)
                 burn_subtitles(video, zh_srt, out_video, settings)
             except Exception as e:
                 logger.exception("burn failed for %s", video)
@@ -288,20 +289,20 @@ def translate_video_srt(
     into ``<stem>.zh.srt``. Returns ``(zh_srt_path, None)`` or ``(None, error)``;
     an up-to-date existing .zh.srt is returned as-is unless ``force``.
     When ``settings.export_subtitles`` is on, the JA/ZH srts are also mirrored
-    into ``<project_dir>/<stem>/`` (copy-if-newer)."""
+    into ``<project_dir>/episodes/<stem>/`` (copy-if-newer)."""
     from creator_agent.translate.vault import export_subtitles
 
     p = Path(video_or_srt)
     srt = p if p.suffix.lower() == ".srt" else p.with_suffix(".srt")
     if not srt.exists() and out_dir:
         # Outputs may live in a separate out dir (e.g. ja_asr.out_dir) rather
-        # than next to the source video.
-        cand = Path(out_dir) / srt.name
+        # than next to the source video — one subdirectory per video stem.
+        cand = Path(out_dir) / srt.stem / srt.name
         if cand.exists():
             srt = cand
     if not srt.exists():
         return None, f"subtitle not found: {srt}"
-    target_dir = Path(out_dir) if out_dir else srt.parent
+    target_dir = Path(out_dir) / srt.stem if out_dir else srt.parent
     zh_srt = target_dir / f"{srt.stem}.zh.srt"
     if zh_srt.exists() and not force:
         _progress(f"[{srt.stem}] 已有 {zh_srt.name}，跳过（--force 重翻）")

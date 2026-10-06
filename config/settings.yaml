@@ -31,7 +31,8 @@ ja_asr:
   # because Qwen3-ASR needs transformers>=5.13. See README "日语 ASR" section.
   env_python: C:/Users/34696/miniconda3/envs/creator-asr-ja/python.exe
   input_dir: C:/test/temps   # 把视频放进这个目录，ja-asr 不带参数时全量处理
-  # 字幕产物（.srt/.zh.srt/.txt/.transcript.json）默认输出到 vault 的 episodes 目录
+  # 字幕产物（.srt/.zh.srt/.txt/.transcript.json）输出到 vault 的 episodes 目录，
+  # 每个视频一个子目录：episodes/<视频名>/<视频名>.srt ...
   out_dir: "C:/Users/34696/Documents/Obsidian Vault/doraemon_subtitle/episodes"
   # 中间产物保留目录：提取的原始音频 <vid>.wav + 分离后人声 <vid>.vocals.wav
   # + 伴奏/背景音 <vid>.instrumental.wav，用于检查背景音是否去除干净
@@ -87,5 +88,5 @@ translate:
   project_dir: "C:/Users/34696/Documents/Obsidian Vault/doraemon_subtitle"
   memory_cases: 10                  # 每批翻译注入的历史相似案例上限
   # 简介/<视频名>.md 存在时自动作为剧情背景注入翻译 prompt（'#' 会尝试 '_'，如 936#1 → 936_1.md）
-  # export_subtitles: 生成的 <视频名>.srt/.zh.srt 同步到 <project_dir>/<视频名>/（仅在源文件更新时覆盖，保护 vault 里的手改）
+  # export_subtitles: 生成的 <视频名>.srt/.zh.srt 同步到 <project_dir>/episodes/<视频名>/（仅在源文件更新时覆盖，保护 vault 里的手改）
   export_subtitles: true

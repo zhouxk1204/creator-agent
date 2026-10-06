@@ -49,7 +49,7 @@ def test_export_subtitles_creates_per_stem_dir_and_copies(tmp_path):
     ja.write_text("ja", encoding="utf-8")
     zh.write_text("zh", encoding="utf-8")
     out = export_subtitles(tmp_path / "vault", "936#1", [ja, zh, src / "missing.srt"])
-    assert out == tmp_path / "vault" / "936#1"
+    assert out == tmp_path / "vault" / "episodes" / "936#1"
     assert (out / "936#1.srt").read_text(encoding="utf-8") == "ja"
     assert (out / "936#1.zh.srt").read_text(encoding="utf-8") == "zh"
 
@@ -59,7 +59,7 @@ def test_export_subtitles_never_overwrites_newer_target(tmp_path):
     src.mkdir()
     ja = src / "a.srt"
     ja.write_text("old generated", encoding="utf-8")
-    target_dir = tmp_path / "vault" / "a"
+    target_dir = tmp_path / "vault" / "episodes" / "a"
     target_dir.mkdir(parents=True)
     hand_edit = target_dir / "a.srt"
     hand_edit.write_text("hand edit", encoding="utf-8")

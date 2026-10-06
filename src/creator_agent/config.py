@@ -42,7 +42,9 @@ class JaAsrSettings(BaseModel):
     # with the FunASR env, so keep them separate. File-based tool, offline.
     env_python: str = ""  # path to the creator-asr-ja env's python
     input_dir: str = "C:/test/temps"  # drop videos here; `ja-asr` with no args scans it
-    out_dir: str = ""  # default output dir for .srt/.txt/.transcript.json; blank = next to each video
+    # Default output dir for .srt/.txt/.transcript.json — one <stem>/ subdir
+    # per video inside it; blank = next to each video.
+    out_dir: str = ""
     # Intermediates (extracted mix WAV + separated vocal/instrumental stems)
     # are kept here per video when set, so separation quality can be audited;
     # blank = everything intermediate is discarded after the run.

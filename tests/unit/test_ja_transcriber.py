@@ -111,7 +111,8 @@ def test_transcribe_files_out_dir_overrides_output_location(tmp_path):
         done, failed = t.transcribe_files([video], out_dir=out_dir)
 
     assert done == 1 and failed == []
-    assert (out_dir / "ep01.srt").exists()
+    # Outputs land in a per-video subdirectory of out_dir.
+    assert (out_dir / "ep01" / "ep01.srt").exists()
     assert not (tmp_path / "ep01.srt").exists()
 
 
@@ -205,11 +206,12 @@ def test_split_pending_by_existing_srt(tmp_path):
     pending, done = split_pending([v1, v2])
     assert pending == [v2] and done == [v1]
 
-    # out_dir redirects where the .srt is looked for.
+    # out_dir redirects where the .srt is looked for (one <stem>/ subdir each).
     out = tmp_path / "out"
     out.mkdir()
     pending, done = split_pending([v1, v2], out)
     assert pending == [v1, v2] and done == []
-    (out / "done.srt").write_text("x")
+    (out / "done").mkdir()
+    (out / "done" / "done.srt").write_text("x")
     pending, done = split_pending([v1, v2], out)
     assert pending == [v2] and done == [v1]

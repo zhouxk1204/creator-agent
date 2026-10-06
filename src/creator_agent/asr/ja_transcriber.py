@@ -4,7 +4,8 @@ Standalone file-based tool, NOT wired into the sync pipeline: takes local
 video files, extracts audio (ffmpeg), invokes the ja worker (dedicated
 ``creator-asr-ja`` env) as a subprocess — vocal separation + silero-vad
 chunking + Qwen3-ASR — then writes ``<name>.transcript.json`` / ``<name>.txt``
-/ ``<name>.srt`` next to each video (or into ``--out-dir``). The worker loads
+/ ``<name>.srt`` next to each video (or into ``<out-dir>/<name>/`` — one
+subdirectory per video, matching the vault's ``episodes/<剧集>/`` layout). The worker loads
 all models once per batch, so pass all files in one call.
 """
 
@@ -52,10 +53,11 @@ def scan_videos(input_dir: Path) -> list[Path]:
 
 def split_pending(paths: list[Path], out_dir: Path | None = None) -> tuple[list[Path], list[Path]]:
     """Split ``paths`` into (pending, already-done). A video counts as done
-    when ``<stem>.srt`` exists in its target dir (out_dir, else next to it)."""
+    when ``<stem>.srt`` exists in its target dir (``<out_dir>/<stem>/``, else
+    next to the video)."""
     pending, done = [], []
     for p in paths:
-        target = (Path(out_dir) if out_dir else p.parent) / f"{p.stem}.srt"
+        target = (Path(out_dir) / p.stem if out_dir else p.parent) / f"{p.stem}.srt"
         (done if target.exists() else pending).append(p)
     return pending, done
 
@@ -76,9 +78,9 @@ class JaTranscriber:
         """Transcribe local video files with vocal separation + Qwen3-ASR.
 
         Returns ``(transcribed_count, [(name, error), ...])``. Per-file
-        failures never abort the batch. Outputs land in ``out_dir`` or next to
-        each source video. ``force`` re-extracts audio even when a valid cache
-        exists (algorithm changes, debugging).
+        failures never abort the batch. Outputs land in ``<out_dir>/<stem>/``
+        or next to each source video. ``force`` re-extracts audio even when a
+        valid cache exists (algorithm changes, debugging).
         """
         if not video_paths:
             return 0, []
@@ -256,7 +258,9 @@ class JaTranscriber:
             Path(jobs_path).unlink(missing_ok=True)
 
     def _write_outputs(self, vpath: Path, out_dir: Path | None, r: dict) -> None:
-        target_dir = Path(out_dir) if out_dir else vpath.parent
+        # One subdirectory per video, so a shared out_dir (the vault's
+        # episodes/ dir) doesn't fill up with loose files.
+        target_dir = Path(out_dir) / vpath.stem if out_dir else vpath.parent
         target_dir.mkdir(parents=True, exist_ok=True)
         stem = vpath.stem
 

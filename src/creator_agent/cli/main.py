@@ -535,12 +535,13 @@ def ja_asr(
                 typer.echo(f"  {name}: {err}")
 
     # Mirror generated subtitle files into the Obsidian vault
-    # (<project_dir>/<stem>/). No-op for files already exported up-to-date.
+    # (<project_dir>/episodes/<stem>/). No-op for files already exported
+    # up-to-date (and for files that already live inside the vault).
     if settings.translate.export_subtitles:
         from creator_agent.translate.vault import export_subtitles
 
         for p in [*ok_videos, *skipped]:
-            src = Path(out) if out else p.parent
+            src = Path(out) / p.stem if out else p.parent
             files = [f for f in (src / f"{p.stem}.srt", src / f"{p.stem}.zh.srt") if f.exists()]
             export_subtitles(settings.translate.project_dir, p.stem, files)
 

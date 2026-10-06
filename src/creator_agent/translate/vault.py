@@ -7,8 +7,8 @@ Two things live here:
   episode being translated. Lookup is by video stem, tolerant of the stem's
   ``#`` being written as ``_`` in the note name (``936#1`` -> ``936_1.md``).
 - **Subtitle export**: generated ``<stem>.srt`` / ``<stem>.zh.srt`` are
-  mirrored into ``<project_dir>/<stem>/`` so they can be read/edited in
-  Obsidian. Copies only when the source is newer, so hand-edits in the
+  mirrored into ``<project_dir>/episodes/<stem>/`` so they can be read/edited
+  in Obsidian. Copies only when the source is newer, so hand-edits in the
   vault survive re-exports.
 """
 
@@ -98,14 +98,15 @@ def _progress(msg: str) -> None:
 
 
 def export_subtitles(project_dir: str | Path, stem: str, files: list[Path]) -> Path | None:
-    """Copy subtitle ``files`` into ``<project_dir>/<stem>/`` (created as
-    needed). A file is copied only when the target is missing or older than
-    the source, so hand-edits made in the vault are never overwritten.
-    Returns the target dir, or None when ``project_dir`` is blank."""
+    """Copy subtitle ``files`` into ``<project_dir>/episodes/<stem>/``
+    (created as needed). A file is copied only when the target is missing or
+    older than the source, so hand-edits made in the vault are never
+    overwritten. Returns the target dir, or None when ``project_dir`` is
+    blank."""
     if not project_dir:
         return None
     proj = Path(project_dir)
-    target_dir = proj / stem
+    target_dir = proj / "episodes" / stem
     copied: list[str] = []
     for f in files:
         f = Path(f)
