@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from creator_agent.asr.audio_extractor import extract_audio, find_ffmpeg
+
+
+def _write_sidecar(video: Path, out: Path) -> None:
+    st = video.stat()
+    (out.parent / (out.name + ".src.json")).write_text(
+        json.dumps({"source": str(video), "size": st.st_size, "mtime_ns": st.st_mtime_ns}),
+        encoding="utf-8",
+    )
 
 
 def test_find_ffmpeg_uses_explicit_path():
@@ -23,15 +32,76 @@ def test_find_ffmpeg_raises_when_missing():
             find_ffmpeg()
 
 
-def test_extract_audio_skips_when_output_exists(tmp_path):
+def test_extract_audio_skips_when_cache_valid(tmp_path):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"")
     out = tmp_path / ".wav"
     out.write_bytes(b"existing")
+    _write_sidecar(video, out)
     with mock.patch("creator_agent.asr.audio_extractor.subprocess.run") as run:
         result = extract_audio(video, out)
-        run.assert_not_called()  # idempotent: no ffmpeg call
+        run.assert_not_called()  # cache hit: no ffmpeg call
     assert result == out
+
+
+def test_extract_audio_reextracts_without_sidecar(tmp_path):
+    # An output WAV with no sidecar is NOT a valid cache entry (it may come
+    # from a different, same-named video) -> must re-extract.
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"")
+    out = tmp_path / ".wav"
+    out.write_bytes(b"stale")
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"wav")
+        return mock.Mock(returncode=0, stderr="", stdout="")
+
+    with (
+        mock.patch("creator_agent.asr.audio_extractor.find_ffmpeg", return_value="ffmpeg"),
+        mock.patch("creator_agent.asr.audio_extractor.subprocess.run", side_effect=fake_run) as run,
+    ):
+        extract_audio(video, out)
+    run.assert_called_once()
+    assert out.read_bytes() == b"wav"
+
+
+def test_extract_audio_reextracts_when_source_changed(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"v1")
+    out = tmp_path / ".wav"
+    out.write_bytes(b"stale")
+    _write_sidecar(video, out)
+    video.write_bytes(b"v2-longer")  # same name, different content
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"wav")
+        return mock.Mock(returncode=0, stderr="", stdout="")
+
+    with (
+        mock.patch("creator_agent.asr.audio_extractor.find_ffmpeg", return_value="ffmpeg"),
+        mock.patch("creator_agent.asr.audio_extractor.subprocess.run", side_effect=fake_run) as run,
+    ):
+        extract_audio(video, out)
+    run.assert_called_once()
+
+
+def test_extract_audio_force_reextracts_even_with_valid_cache(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"")
+    out = tmp_path / ".wav"
+    out.write_bytes(b"existing")
+    _write_sidecar(video, out)
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"wav")
+        return mock.Mock(returncode=0, stderr="", stdout="")
+
+    with (
+        mock.patch("creator_agent.asr.audio_extractor.find_ffmpeg", return_value="ffmpeg"),
+        mock.patch("creator_agent.asr.audio_extractor.subprocess.run", side_effect=fake_run) as run,
+    ):
+        extract_audio(video, out, force=True)
+    run.assert_called_once()
 
 
 def test_extract_audio_raises_when_video_missing(tmp_path):

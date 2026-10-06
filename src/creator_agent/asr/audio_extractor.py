@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -20,19 +21,40 @@ def find_ffmpeg(ffmpeg_path: str = "") -> str:
     return found
 
 
-def extract_audio(video_path: Path, out_path: Path, ffmpeg_path: str = "") -> Path:
+def _sidecar_path(out_path: Path) -> Path:
+    return out_path.with_suffix(out_path.suffix + ".src.json")
+
+
+def _cache_hit(video_path: Path, out_path: Path) -> bool:
+    """Reusing a cached WAV is only safe when it was extracted from THIS
+    source file — a same-named replacement video must not silently reuse the
+    old audio (the whole subtitle timeline would be for the wrong content).
+    Validity = sidecar exists AND source size+mtime match."""
+    if not out_path.exists():
+        return False
+    try:
+        meta = json.loads(_sidecar_path(out_path).read_text(encoding="utf-8"))
+        st = video_path.stat()
+        return meta.get("size") == st.st_size and meta.get("mtime_ns") == st.st_mtime_ns
+    except Exception:
+        return False
+
+
+def extract_audio(video_path: Path, out_path: Path, ffmpeg_path: str = "", force: bool = False) -> Path:
     """Extract 16kHz mono PCM WAV from ``video_path`` into ``out_path``.
 
-    FunASR's paraformer expects 16kHz mono. Idempotent: returns immediately if
-    ``out_path`` already exists (re-runs / retries skip re-extraction).
+    FunASR's paraformer expects 16kHz mono. Idempotent via a sidecar
+    (``<out>.src.json`` recording the source's size+mtime): re-runs skip
+    re-extraction only when the source video is unchanged; ``force`` always
+    re-extracts.
     """
     video_path = Path(video_path)
     out_path = Path(out_path)
-    if out_path.exists():
-        logger.info("Audio already extracted, reusing: %s", out_path)
-        return out_path
     if not video_path.exists():
         raise RuntimeError(f"Video file not found: {video_path}")
+    if not force and _cache_hit(video_path, out_path):
+        logger.info("Audio already extracted, reusing: %s", out_path)
+        return out_path
 
     ffmpeg = find_ffmpeg(ffmpeg_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,4 +84,9 @@ def extract_audio(video_path: Path, out_path: Path, ffmpeg_path: str = "") -> Pa
         raise RuntimeError(f"ffmpeg failed (exit {result.returncode}): {tail}")
     if not out_path.exists():
         raise RuntimeError(f"ffmpeg produced no output file: {out_path}")
+    st = video_path.stat()
+    _sidecar_path(out_path).write_text(
+        json.dumps({"source": str(video_path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}),
+        encoding="utf-8",
+    )
     return out_path

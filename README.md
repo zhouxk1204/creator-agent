@@ -84,15 +84,23 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 针对 TVer / 哆啦A梦等日语视频的独立工具（与 sync 流水线无关，纯文件进文件出）：
 
 ```
-MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离 → silero-vad 语音段
-    → CAM++ 说话人嵌入聚类 → 按说话人切换点分块（≤15s）
-    → Qwen3-ASR 逐块识别 → [子进程] Qwen3-ForcedAligner 词级时间戳
+MP4 → ffmpeg 提取 16k WAV → audio-separator 人声分离（vocals.wav）
+    → silero-vad 语音段（全部跑在纯人声上，不再碰混音）
+    → CAM++ 说话人嵌入聚类 → 分块（目标 3~8s，硬上限 15s，超长先找自然停顿再硬切）
+    → Qwen3-ASR 逐块识别（max_new_tokens 1024）
+    → [子进程] Qwen3-ForcedAligner 词级时间戳（±0.3s 窗口，同样在纯人声上）
+    → 对齐质量门（词覆盖率/越界/时序异常 5 项检查，不过则按比例分摊并在日志写明原因）
     → 按标点+真实词时间切字幕（≤24 字 / ≤8s，标注 話者A/話者B）
     → <名>.txt + <名>.srt + <名>.transcript.json
 ```
 
+每个 chunk 都有流水线日志（`[CHUNK 023/120][ASR]/[ALIGN]/[CUE]`），结尾输出本视频的
+ASR SUMMARY 统计块；排查时间轴问题时把这段日志发回来即可定位是哪一步出的问题。
+`--verbose` 打开 DEBUG 级细节（VAD 段、词时间、切 cue 过程）。
+
 说话人分离（CAM++）和词级对齐（Qwen3-ForcedAligner）都是可选步骤，各自独立降级：
 模型没装/子进程失败只关掉自己那一步（不分人、时间轴退回按比例分摊），不影响 ASR 主流程。
+对齐降级**不会静默**——日志会写 `[ALIGN] FAIL reason=... fallback=PROPORTIONAL`。
 
 ### 一次性环境搭建（两个 conda 环境，与 creator-asr 的 FunASR 环境隔离）
 
@@ -139,15 +147,21 @@ ja_asr:
   # 可选：说话人分离（拆太碎就把 speaker_threshold 从 0.5 调大到 0.65）
   speaker_model: "iic/speech_campplus_sv_zh-cn_16k-common"
   speaker_threshold: 0.5
+  # 时间轴质量相关（默认值即推荐值，一般不用改）：
+  # vad_min_speech_ms: 120   # VAD 最小语音段，调低可保住「あっ」类短促词
+  # chunk_target_max_sec: 8  # 分块目标上限（硬上限 max_chunk_sec: 15）
+  # align_pad_sec: 0.3       # 对齐窗口（原来 ±0.8s 会把词锁到隔壁台词上）
+  # align_min_coverage: 0.5  # 词覆盖率低于此值判对齐失败，退回按比例分摊
 ```
 
 ### 用法
 
-日常用法就一步：**把视频丢进 `C:/test/temps/`，然后跑 `uv run creator-agent ja-asr`**（不带参数自动扫目录，递归，支持 mp4/mkv/mov/webm/ts/flv/avi；已有 `.srt` 的跳过，`--force` 重跑）。产物写在视频旁边。
+日常用法就一步：**把视频丢进 `C:/test/temps/`，然后跑 `uv run creator-agent ja-asr`**（不带参数自动扫目录，递归，支持 mp4/mkv/mov/webm/ts/flv/avi；已有 `.srt` 的跳过，`--force` 重跑）。产物写在视频旁边。提取的音频带缓存校验（按源文件 size+mtime 判断），同名换片不会误用旧音频；`--force` 会连缓存音频一起重新生成。
 
 ```bash
 uv run creator-agent ja-asr                            # 处理 C:/test/temps 里的新视频
-uv run creator-agent ja-asr --force                    # 全部重跑
+uv run creator-agent ja-asr --force                    # 全部重跑（忽略 .srt 和音频缓存）
+uv run creator-agent ja-asr --verbose                  # DEBUG 级日志（VAD 段/词时间/切 cue）
 uv run creator-agent ja-asr --translate                # ASR 后接着日译中（需翻译服务，见下节）
 uv run creator-agent ja-asr --translate --burn         # 再烧录成 <名>.zh.mp4
 uv run creator-agent ja-asr video.mp4 [more.mp4 ...]   # 指定文件 / glob

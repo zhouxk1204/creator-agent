@@ -71,12 +71,14 @@ class JaTranscriber:
         self,
         video_paths: list[Path],
         out_dir: Path | None = None,
+        force: bool = False,
     ) -> tuple[int, list[tuple[str, str]]]:
         """Transcribe local video files with vocal separation + Qwen3-ASR.
 
         Returns ``(transcribed_count, [(name, error), ...])``. Per-file
         failures never abort the batch. Outputs land in ``out_dir`` or next to
-        each source video.
+        each source video. ``force`` re-extracts audio even when a valid cache
+        exists (algorithm changes, debugging).
         """
         if not video_paths:
             return 0, []
@@ -111,7 +113,7 @@ class JaTranscriber:
                 _progress(f"提取音频 {idx + 1}/{len(video_paths)}：{vpath.name}")
                 try:
                     apath = audio_dir / f"{vid}.wav"
-                    extract_audio(vpath, apath, self._settings.ffmpeg_path)
+                    extract_audio(vpath, apath, self._settings.ffmpeg_path, force=force)
                     jobs.append({"video_id": vid, "audio_path": str(apath)})
                     extracted.append((vpath, vid))
                 except Exception as e:  # one bad video must not block the rest
@@ -180,7 +182,25 @@ class JaTranscriber:
                 str(s.pause_sec),
                 "--max-chunk",
                 str(s.max_chunk_sec),
+                "--vad-min-speech-ms",
+                str(s.vad_min_speech_ms),
+                "--vad-min-silence-ms",
+                str(s.vad_min_silence_ms),
+                "--vad-speech-pad-ms",
+                str(s.vad_speech_pad_ms),
+                "--chunk-target-min",
+                str(s.chunk_target_min_sec),
+                "--chunk-target-max",
+                str(s.chunk_target_max_sec),
+                "--max-new-tokens",
+                str(s.asr_max_new_tokens),
+                "--align-pad",
+                str(s.align_pad_sec),
+                "--align-min-coverage",
+                str(s.align_min_coverage),
             ]
+            if s.verbose:
+                cmd.append("--verbose")
             if s.aligner_model:
                 cmd += ["--aligner-model", s.aligner_model]
                 if s.aligner_env_python:

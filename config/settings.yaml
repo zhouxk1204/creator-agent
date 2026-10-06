@@ -42,7 +42,7 @@ ja_asr:
   language: Japanese
   keep_vocals: false
   ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
-  # Word-level alignment -> accurate subtitle cue times (see docs/ja-asr-handoff.md).
+  # Word-level alignment -> accurate subtitle cue times (see README 日语 ASR 一节).
   # Runs in a SEPARATE conda env (creator-asr-ja-aligner, transformers 4.57.6)
   # because qwen-asr conflicts with the ASR model's transformers>=5.13.
   aligner_model: C:/models/Qwen3-ForcedAligner-0.6B   # blank = proportional cue times
@@ -56,7 +56,19 @@ ja_asr:
   max_cue_chars: 24         # subtitle cue length cap
   max_cue_sec: 8.0          # subtitle cue duration cap
   pause_sec: 0.6            # hard cue break at silence gaps >= this (needs word alignment)
-  max_chunk_sec: 15.0       # ASR chunk cap (was 30)
+  # VAD：低 min_speech 保住「あっ」「えっ」类短叹词；speech_pad 防止 onset 被切
+  vad_min_speech_ms: 120
+  vad_min_silence_ms: 300
+  vad_speech_pad_ms: 150
+  # 分块：目标 3~8s，max_chunk_sec 是硬上限（超出在自然停顿处强拆，无停顿时硬切）
+  chunk_target_min_sec: 3.0
+  chunk_target_max_sec: 8.0
+  max_chunk_sec: 15.0       # ASR chunk 硬上限
+  asr_max_new_tokens: 1024  # ASR 生成上限（512 对长块有截断风险）
+  # 对齐质量门：窗口两侧 pad（也是词时间允许超出块边界的最大距离）+ 覆盖率下限
+  align_pad_sec: 0.3
+  align_min_coverage: 0.5
+  verbose: false            # true = worker 打 DEBUG 日志（VAD 段/词时间/cue 范围）
 translate:
   # JA->ZH subtitle translation via local OpenAI-compatible server.
   # llama.cpp llama-server (Vulkan, RTX 5060 Ti) serving Qwen3.5-9B GGUF.

@@ -68,7 +68,22 @@ class JaAsrSettings(BaseModel):
     max_cue_chars: int = 24  # split/merge cues to at most this many characters
     max_cue_sec: float = 8.0  # ... and at most this duration
     pause_sec: float = 0.6  # hard cue break at silence gaps of at least this (needs word alignment)
-    max_chunk_sec: float = 15.0  # ASR chunk cap (was hardcoded 30s)
+    # VAD (silero) — low min-speech keeps short interjections (「あっ」「えっ」),
+    # speech-pad keeps soft onsets from being clipped.
+    vad_min_speech_ms: int = 120
+    vad_min_silence_ms: int = 300
+    vad_speech_pad_ms: int = 150
+    # Chunking: aim for 3-8s chunks; max_chunk_sec is the HARD cap (oversized
+    # chunks are force-split at the nearest natural pause, else hard-cut).
+    chunk_target_min_sec: float = 3.0
+    chunk_target_max_sec: float = 8.0
+    max_chunk_sec: float = 15.0
+    asr_max_new_tokens: int = 1024  # ASR generation cap (512 could truncate long chunks)
+    # Alignment quality gate: window padding per side (also the max distance a
+    # word may spill outside its chunk) and the word-coverage floor.
+    align_pad_sec: float = 0.3
+    align_min_coverage: float = 0.5
+    verbose: bool = False  # debug logging in the worker (VAD segments, word times, cues)
 
 
 class TranslateSettings(BaseModel):

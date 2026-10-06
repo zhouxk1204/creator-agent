@@ -212,6 +212,31 @@ def _wrap(s: str, max_chars: int) -> list[str]:
     return out
 
 
+def match_words_to_text(text: str, words: Sequence[Word]) -> tuple[list[int | None], int]:
+    """Walk ``text`` and ``words`` in order, mapping each text char to the
+    index of the word that produced it. Returns ``(char_word, matched)``:
+    ``char_word[i]`` is the word index covering text char ``i`` (None for
+    unmatched chars like dropped punctuation), ``matched`` the total number
+    of matched chars. Shared by the cue timeline and the alignment quality
+    gate (coverage check) so both measure matchability identically."""
+    n = len(text)
+    char_word: list[int | None] = [None] * n
+    cursor = 0
+    matched = 0
+    for wi, w in enumerate(words):
+        wt = "".join(str(w[0]).split())
+        if not wt:
+            continue
+        j = text.find(wt, cursor)
+        if j < 0:
+            continue  # ASR/aligner text mismatch on this word; skip it
+        for p in range(j, j + len(wt)):
+            char_word[p] = wi
+        cursor = j + len(wt)
+        matched += len(wt)
+    return char_word, matched
+
+
 def _make_timeline(
     text: str, start: float, end: float, words: Sequence[Word] | None, pause_sec: float = 0.6
 ) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]]:
@@ -239,20 +264,7 @@ def _make_timeline(
     if not words:
         return linear, linear, False, []
 
-    char_word: list[int | None] = [None] * n
-    cursor = 0
-    matched = 0
-    for wi, w in enumerate(words):
-        wt = "".join(str(w[0]).split())
-        if not wt:
-            continue
-        j = text.find(wt, cursor)
-        if j < 0:
-            continue  # ASR/aligner text mismatch on this word; skip it
-        for p in range(j, j + len(wt)):
-            char_word[p] = wi
-        cursor = j + len(wt)
-        matched += len(wt)
+    char_word, matched = match_words_to_text(text, words)
     if matched < max(1, int(0.5 * n)):
         return linear, linear, False, []  # word coverage too poor to be trusted
 

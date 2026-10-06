@@ -30,6 +30,14 @@ Prints results wrapped in sentinel markers (same contract as ja_worker.py):
 
 Per-chunk failures set ok:false with words:null (caller falls back to
 proportional cue times for that chunk); they never abort the batch. Exit 0.
+
+In addition to the final sentinel block, each chunk's result is ALSO printed
+the moment it finishes as a single line::
+
+    ===ALIGN_CHUNK=== {"chunk_id": int, "ok": bool, "words": ...|null, ...}
+
+so the caller can run its quality gate + cue splitting per chunk as a
+pipeline instead of waiting for the whole video to align.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from pathlib import Path
 
 _RESULT_BEGIN = "===ALIGN_RESULTS_BEGIN==="
 _RESULT_END = "===ALIGN_RESULTS_END==="
+_CHUNK_MARKER = "===ALIGN_CHUNK=== "
 
 
 def _emit(results: list) -> None:
@@ -111,11 +120,15 @@ def main() -> int:
             words = _align_one(aligner, job, args.language)
             if words is None:
                 _warn(f"chunk {job['chunk_id']}: no words aligned; proportional timing")
-            results.append({"chunk_id": job["chunk_id"], "ok": words is not None, "words": words})
+            rec = {"chunk_id": job["chunk_id"], "ok": words is not None, "words": words}
             _progress(f"  对齐 {i + 1}/{n}（{time.monotonic() - t0:.1f}s）：{len(words) if words else 0} 词")
         except Exception as e:
             _warn(f"chunk {job['chunk_id']} align failed: {e}")
-            results.append({"chunk_id": job["chunk_id"], "ok": False, "words": None, "error": str(e)})
+            rec = {"chunk_id": job["chunk_id"], "ok": False, "words": None, "error": str(e)}
+        results.append(rec)
+        # Stream this chunk's result immediately: the caller quality-checks
+        # and cue-splits per chunk as the pipeline advances.
+        print(_CHUNK_MARKER + json.dumps(rec, ensure_ascii=False), flush=True)
 
     _emit(results)
     return 0

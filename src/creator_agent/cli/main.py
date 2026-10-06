@@ -445,9 +445,12 @@ def ja_asr(
     language: str | None = typer.Option(None, "--language", "-l", help="ASR language (default: config, Japanese)."),
     device: str | None = typer.Option(None, "--device", help="Override device (cuda:0 / mps / cpu)."),
     model: str | None = typer.Option(None, "--model", help="Override ASR model (e.g. Qwen/Qwen3-ASR-0.6B-hf)."),
-    force: bool = typer.Option(False, "--force", "-f", help="Reprocess videos that already have a .srt."),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Reprocess everything: ignore existing .srt AND cached audio."
+    ),
     translate: bool = typer.Option(False, "--translate", "-t", help="After ASR, translate .srt -> .zh.srt."),
     burn: bool = typer.Option(False, "--burn", "-b", help="After translating, burn zh subs into <name>.zh.mp4."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging (VAD segments, word times, cues)."),
 ):
     import glob as globmod
 
@@ -456,6 +459,8 @@ def ja_asr(
     settings = load_settings()
     ja = settings.ja_asr
     overrides = {k: v for k, v in {"language": language, "device": device, "model": model}.items() if v}
+    if verbose:
+        overrides["verbose"] = True
     if overrides:
         ja = ja.model_copy(update=overrides)
 
@@ -499,7 +504,7 @@ def ja_asr(
             raise typer.Exit(code=1)
         typer.echo(f"Transcribing {len(pending)} video(s) with vocal separation + {ja.model} ...")
         transcriber = JaTranscriber(settings=ja)
-        done, failed = transcriber.transcribe_files(pending, out)
+        done, failed = transcriber.transcribe_files(pending, out, force=force)
         typer.echo(f"Done: {done} transcribed, {len(failed)} failed.")
         for name, err in failed:
             typer.echo(f"  {name}: {err}")
