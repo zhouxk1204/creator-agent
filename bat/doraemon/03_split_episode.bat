@@ -10,15 +10,16 @@ if errorlevel 1 (
 call .venv\Scripts\activate.bat >nul 2>&1
 
 rem ---------------------------------------------------------------------------
-rem Episode splitter: detect title cards -> preview -> confirm -> cut.
+rem Episode splitter: detect title cards -> cut directly (no confirmation).
 rem
 rem   03_split_episode.bat                          prompts for the video path
 rem   03_split_episode.bat C:\test\935.mp4          path given directly (or drag & drop)
 rem   03_split_episode.bat C:\test\935.mp4 --copy   extra args are passed through
 rem
-rem Flow: runs --preview first and opens output\preview\contact_sheet.jpg.
-rem Check that every candidate really is a title card, then answer Y to cut
-rem (writes output\935#1.mp4, 935#2.mp4, 935_split.json) or N to abort.
+rem Flow: split_episode.py detects title cards and cuts in one pass, writing
+rem output\935#1.mp4, 935#2.mp4, 935_split.json. If detection looks wrong
+rem (>3 episodes) the script refuses to cut; then run it manually with
+rem --preview to inspect:  scripts\split_episode.py "%VIDEO%" --preview
 rem ---------------------------------------------------------------------------
 
 set "VIDEO=%~1"
@@ -57,42 +58,21 @@ if not exist "%VIDEO%" (
 
 echo.
 echo ========================================
-echo   [1/2] Preview detection: %VIDEO%
-echo ========================================
-echo.
-"%PY%" scripts\split_episode.py "%VIDEO%" --preview%EXTRA%
-if errorlevel 1 (
-    echo.
-    echo  Detection failed or found too few title cards.
-    echo  Try: 03_split_episode.bat "%VIDEO%" --sim 0.997
-    echo  or : 03_split_episode.bat "%VIDEO%" --min-duration 4
-    pause >nul
-    exit /b 1
-)
-
-set "SHEET=%REPO_ROOT%\output\preview\contact_sheet.jpg"
-if exist "%SHEET%" start "" "%SHEET%"
-echo.
-echo  Contact sheet opened: output\preview\contact_sheet.jpg
-echo  Check that every candidate IS a title card.
-echo.
-set /p "OK=Cut the video at the suggested split points? [Y/N]: "
-if /i not "%OK%"=="Y" (
-    echo  Aborted, nothing was cut.
-    pause >nul
-    exit /b 0
-)
-
-echo.
-echo ========================================
-echo   [2/2] Cutting: %VIDEO%
+echo   Splitting: %VIDEO%
 echo ========================================
 echo.
 "%PY%" scripts\split_episode.py "%VIDEO%"%EXTRA%
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
-if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
+if not "%RC%"=="0" (
+    echo  FAILED ^(exit code %RC%^) - see the error above.
+    echo  If detection found too few cards, try:
+    echo    03_split_episode.bat "%VIDEO%" --sim 0.997
+    echo    03_split_episode.bat "%VIDEO%" --min-duration 4
+    echo  To eyeball candidates before cutting, run manually:
+    echo    "%PY%" scripts\split_episode.py "%VIDEO%" --preview
+)
 if "%RC%"=="0" (
     echo  Done! Episodes + split JSON are in output\
     explorer "%REPO_ROOT%\output"
