@@ -53,8 +53,8 @@ ja_asr:
   # is pause-based instead (pause_sec below + word alignment).
   speaker_model: ""               # blank = no diarization
   speaker_threshold: 0.5    # cosine distance; lower = more speakers (too many -> raise it)
-  max_cue_chars: 24         # subtitle cue length cap
-  max_cue_sec: 8.0          # subtitle cue duration cap
+  max_cue_chars: 16         # subtitle cue length cap
+  max_cue_sec: 5.0          # subtitle cue duration cap
   pause_sec: 0.6            # hard cue break at silence gaps >= this (needs word alignment)
   # VAD：低 min_speech 保住「あっ」「えっ」类短叹词；speech_pad 防止 onset 被切
   vad_min_speech_ms: 120
