@@ -67,9 +67,10 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 翻译需要本地 LLM 服务，bat 会自动检测并启动（见 `bat/start_translate_server.bat`）
   - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
 - **`03_split_episode.bat`** —— 把一集视频里的多个小故事切成独立单集（纯视觉检测标题封面，不用 OCR/AI）：
-  - 双击运行 → 拖入视频或粘贴路径 → 先预览检测（打开 `output\preview\contact_sheet.jpg`）→ 确认 Y 才切割
-  - 输出 `output\935#1.mp4` / `935#2.mp4` / `935_split.json`；`--copy` 快速模式（对齐关键帧，可能偏 1 秒级）
-  - 漏检调 `--sim 0.975` / `--min-duration 3.5`，误检调 `--min-duration 5` / `--episodes 2`
+  - 双击运行 → 拖入视频或粘贴路径 → 检测到标题卡直接切割
+  - 第一集从第一个标题卡开始（之前的 OP/引子自动舍弃；`--keep-intro` 保留）；文件名里的 `「标题」` 会用作单集名
+  - 输出 `output\スケスケ望遠鏡でさがしもの.mp4` / `くしゃみに気をつけろ.mp4` / `<原名>_split.json`；`--copy` 快速模式（对齐关键帧，可能偏 1 秒级）
+  - 漏检调 `--sim 0.997` / `--min-duration 4`，误检调 `--min-duration 6` / `--episodes 2`
 - **`04_ja_asr.bat`** —— 日语视频去背景音 + ASR + 说话人分离 + 词级对齐字幕 + 翻译（需要 creator-asr-ja 环境，见下文）：
   - **双击运行 = 处理 `C:\test\temps\` 里的所有视频**：ASR → 日文 `<名字>.srt` → 中文 `<名字>.zh.srt`（各步已完成会自动跳过；默认不烧录，要烧录自己加 `--burn`）
   - 双击会自动检测并启动翻译服务（llama.cpp，见 `bat/start_translate_server.bat`），无需手动先起服务
@@ -221,10 +222,12 @@ uv run python scripts/split_episode.py input/935.mp4 --preview   # 只检测，�
 uv run python scripts/split_episode.py input/935.mp4             # 确认无误后真正切割
 ```
 
-原理：每 0.5s 抽帧做灰度签名 → 找长时间画面高度稳定的区间（相似度 ≥0.98、持续 ≥4s、排除黑屏/纯色）
-→ 候选边界 ±2s 逐帧扫描取最大不连续帧作为标题卡精确首末帧 → 第 2、3 个标题卡起始帧即分割点。
-常用参数：`--episodes N`（强制集数）、`--sim`（静止判定阈值，默认 0.98）、
-`--min-duration`（标题卡最短秒数，默认 4）、`--copy`（流拷贝快速切割）。
+原理：每 0.5s 抽帧做灰度签名 → 找长时间画面高度稳定的区间（与区间首帧相似度 ≥0.999、持续 ≥5s、排除黑屏/纯色）
+→ 候选边界 ±2s 逐帧扫描取最大不连续帧作为标题卡精确首末帧 → **每个标题卡（含第一个）的起始帧即分割点**：
+第一集从第一个标题卡开始，之前的 OP/引子舍弃（`--keep-intro` 可改回从 0:00 开始）。
+输出文件名取原文件名中的 `「单集标题」`（如 `ドラえもん 「A」「B」.mp4` → `A.mp4` / `B.mp4`；标题数与集数不符时回退 `原名#N`）。
+常用参数：`--episodes N`（强制集数）、`--sim`（静止判定阈值，默认 0.999）、
+`--min-duration`（标题卡最短秒数，默认 5）、`--copy`（流拷贝快速切割）。
 
 ## 小红书（视频提取 + 转文案）
 

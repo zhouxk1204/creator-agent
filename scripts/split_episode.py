@@ -16,9 +16,13 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
   4. Check the run is entered/exited via an abrupt scene change.
   5. Refine each surviving run frame-by-frame (+-2s padding): the card's exact
      first/last frame is the strongest discontinuity (hard cut) on each side.
-  6. Split points = the START of every title card except the first one
-     (the first card belongs to story #1).
-  7. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
+  6. Split points = the START of every title card INCLUDING the first one:
+     story #1 begins at its card, and the OP/intro before it is discarded
+     (--keep-intro keeps the old behavior of starting story #1 at 0:00).
+  7. Output names come from the episode titles embedded in the filename:
+     「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
+     when the title count doesn't match the episode count.
+  8. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy).
 
 Usage:
@@ -36,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -131,9 +136,7 @@ def scan_samples(cap: cv2.VideoCapture, fps: float, interval: float) -> list[Sam
     return samples
 
 
-def find_stable_runs(
-    samples: list[Sample], anchor_sim: float, min_duration: float
-) -> list[tuple[int, int, float]]:
+def find_stable_runs(samples: list[Sample], anchor_sim: float, min_duration: float) -> list[tuple[int, int, float]]:
     """Return ``(start_idx, end_idx, min_anchor_sim)`` runs of static samples.
 
     Every sample in a run is compared against the run's FIRST sample (the
@@ -303,22 +306,33 @@ def detect_title_cards(video: Path, interval: float, anchor_sim: float, min_dura
     return fps, duration, merged
 
 
-def pick_split_cards(cards: list[Candidate], episodes: int | None) -> list[Candidate]:
-    """Cards that mark a NEW story. Split points = their start times.
+def pick_split_cards(cards: list[Candidate], n_splits: int | None) -> list[Candidate]:
+    """Cards that open a NEW story. Split points = their start times.
 
-    Without --episodes: every card except the first splits. With --episodes N:
-    keep exactly N-1 split cards, preferring long cards with abrupt boundaries.
+    Without --episodes: every candidate card splits. With n_splits=N: keep
+    exactly N split cards, preferring long cards with abrupt boundaries.
     """
-    splits = cards[1:]
-    if episodes is None:
-        return splits
-    need = episodes - 1
-    if len(splits) < need:
-        raise SystemExit(
-            f"期望 {episodes} 集需要 {need} 个分割点，但只检测到 {len(splits)} 个候选标题卡。请先 --preview 检查。"
-        )
-    chosen = sorted(splits, key=lambda c: c.score, reverse=True)[:need]
+    if n_splits is None:
+        return cards
+    if len(cards) < n_splits:
+        raise SystemExit(f"期望 {n_splits} 个分割点，但只检测到 {len(cards)} 个候选标题卡。请先 --preview 检查。")
+    chosen = sorted(cards, key=lambda c: c.score, reverse=True)[:n_splits]
     return sorted(chosen, key=lambda c: c.start)
+
+
+def parse_episode_titles(stem: str) -> list[str]:
+    """Episode titles embedded in the filename: ドラえもん 「A」「B」 -> [A, B]."""
+    return re.findall(r"「([^」]+)」", stem)
+
+
+def episode_names(stem: str, n: int) -> list[str]:
+    """Output basenames for n episodes, preferring the 「titles」 in the filename."""
+    titles = parse_episode_titles(stem)
+    if len(titles) == n:
+        return [re.sub(r'[<>:"/\\|?*]', "_", t).strip() for t in titles]
+    if titles:
+        print(f"⚠️ 文件名含 {len(titles)} 个「标题」但切成 {n} 集，回退为 {stem}#N 命名", file=sys.stderr)
+    return [f"{stem}#{i + 1}" for i in range(n)]
 
 
 def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: Path) -> None:
@@ -363,15 +377,7 @@ def find_ffmpeg() -> str | None:
     return None
 
 
-def cut_episodes(
-    video: Path, fps: float, duration: float, split_cards: list[Candidate], out_dir: Path, copy: bool
-) -> list[dict]:
-    stem = video.stem
-    bounds = [0.0] + [c.start for c in split_cards] + [duration]
-    episodes = []
-    for i in range(len(bounds) - 1):
-        name = f"{stem}#{i + 1}"
-        episodes.append({"name": name, "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)})
+def cut_episodes(video: Path, episodes: list[dict], out_dir: Path, copy: bool) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise SystemExit("找不到 ffmpeg：PATH 上没有，settings.yaml 的 asr.ffmpeg_path 也未配置。请先安装 ffmpeg。")
@@ -400,7 +406,6 @@ def cut_episodes(
         cmd += [str(out)]
         print(f"  切割 {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
         subprocess.run(cmd, check=True)
-    return episodes
 
 
 def main() -> int:
@@ -410,12 +415,15 @@ def main() -> int:
     p.add_argument("--preview", action="store_true", help="只检测并生成预览图/报告, 不切割")
     p.add_argument("--episodes", type=int, default=None, help="期望集数 (默认: 自动, 每个标题卡开新一集)")
     p.add_argument("--interval", type=float, default=0.5, help="低频扫描间隔秒 (默认 0.5)")
-    p.add_argument("--sim", type=float, default=ANCHOR_SIM, help=f"锚定相似度: 区间内每帧与首帧的最低相似度 (默认 {ANCHOR_SIM})")
+    p.add_argument(
+        "--sim", type=float, default=ANCHOR_SIM, help=f"锚定相似度: 每帧与区间首帧的最低相似度 (默认 {ANCHOR_SIM})"
+    )
     p.add_argument(
         "--min-duration", type=float, default=MIN_CARD_DURATION, help=f"标题卡最短持续秒 (默认 {MIN_CARD_DURATION})"
     )
     p.add_argument("--pad", type=float, default=REFINE_PAD, help=f"精修扫描前后扩展秒 (默认 {REFINE_PAD})")
     p.add_argument("--copy", action="store_true", help="ffmpeg 流拷贝切割 (快, 但按关键帧对齐, 不精确)")
+    p.add_argument("--keep-intro", action="store_true", help="第一集从 0:00 开始 (保留第一个标题卡前的 OP/引子)")
     args = p.parse_args()
 
     if not args.video.is_file():
@@ -434,31 +442,43 @@ def main() -> int:
         print(f"    相似度: {c.similarity}")
         print(f"    持续: {c.duration:.3f}s   {' / '.join(flags)}")
 
-    if len(cards) < 2:
-        print("\n⚠️ 检测到的标题卡不足 2 个, 无法分割。可降低 --sim / --min-duration 后用 --preview 重试。")
+    if not cards:
+        print("\n⚠️ 没有检测到标题卡, 无法分割。可降低 --sim / --min-duration 后用 --preview 重试。")
         print("   例如: --sim 0.997 或 --min-duration 4")
         return 1
 
-    split_cards = pick_split_cards(cards, args.episodes)
-    n_ep = len(split_cards) + 1
-    print("\n建议分割点:")
-    for c in split_cards:
-        print(f"  {fmt_time(c.start)}")
+    # Default: every card opens a new story, story #1 starts at the first card
+    # and the OP/intro before it is discarded. --keep-intro keeps story #1
+    # from 0:00 and splits only at cards[1:].
+    if args.keep_intro:
+        n_splits = None if args.episodes is None else args.episodes - 1
+        split_cards = pick_split_cards(cards[1:], n_splits)
+        bounds = [0.0] + [c.start for c in split_cards] + [duration]
+    else:
+        split_cards = pick_split_cards(cards, args.episodes)
+        bounds = [c.start for c in split_cards] + [duration]
+
+    n_ep = len(bounds) - 1
+    names = episode_names(args.video.stem, n_ep)
+    episodes = [{"name": names[i], "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)} for i in range(n_ep)]
+
+    print("\n建议分割方案:")
+    for ep in episodes:
+        print(f"  {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
+    if not args.keep_intro and split_cards:
+        print(f"(已舍弃 {fmt_time(split_cards[0].start)} 之前的 OP/引子部分)")
     print(f"将切成 {n_ep} 集" + (" (检测到 >2 个标题卡, 注意确认是否真有 3 个故事)" if n_ep > 2 else ""))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.preview:
         save_preview(args.video, fps, cards, args.output_dir / "preview")
 
-    bounds = [0.0] + [c.start for c in split_cards] + [duration]
     result = {
         "source": args.video.name,
         "fps": round(fps, 3),
         "duration": round(duration, 3),
-        "episodes": [
-            {"name": f"{args.video.stem}#{i + 1}", "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)}
-            for i in range(len(bounds) - 1)
-        ],
+        "intro_discarded": (not args.keep_intro and bool(split_cards)),
+        "episodes": episodes,
         "title_cards": [
             {
                 "start": round(c.start, 3),
@@ -481,7 +501,7 @@ def main() -> int:
     if n_ep > 3:
         print("⚠️ 集数超过 3, 很可能是误检。已跳过切割, 请先 --preview 确认。")
         return 1
-    cut_episodes(args.video, fps, duration, split_cards, args.output_dir, args.copy)
+    cut_episodes(args.video, episodes, args.output_dir, args.copy)
     print("完成。")
     return 0
 

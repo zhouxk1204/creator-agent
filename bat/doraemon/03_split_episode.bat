@@ -17,10 +17,13 @@ rem   03_split_episode.bat C:\test\935.mp4          path given directly (or drag
 rem   03_split_episode.bat C:\test                  a directory: uses the FIRST video in it
 rem   03_split_episode.bat C:\test --copy           extra args are passed through
 rem
-rem Flow: split_episode.py detects title cards and cuts in one pass, writing
-rem output\935#1.mp4, 935#2.mp4, 935_split.json. If detection looks wrong
-rem (>3 episodes) the script refuses to cut; then run it manually with
-rem --preview to inspect:  scripts\split_episode.py "%VIDEO%" --preview
+rem Flow: split_episode.py detects title cards and cuts in one pass. Story #1
+rem starts at the FIRST title card (the OP/intro before it is discarded;
+rem --keep-intro keeps it). Output files are named from the 「titles」 in the
+rem source filename: ドラえもん 「A」「B」.mp4 -> A.mp4 / B.mp4 (+ _split.json).
+rem If detection looks wrong (>3 episodes) the script refuses to cut; then run
+rem it manually with --preview to inspect:
+rem   scripts\split_episode.py "%VIDEO%" --preview
 rem ---------------------------------------------------------------------------
 
 set "VIDEO=%~1"
