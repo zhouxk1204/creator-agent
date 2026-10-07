@@ -23,7 +23,11 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
      when the title count doesn't match the episode count.
   8. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
-     keyframe-aligned stream copy).
+     keyframe-aligned stream copy). The re-encode uses a GPU encoder
+     (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
+     verified with a tiny probe encode — else falls back to libx264 (--cpu
+     forces CPU). Frame decoding for detection likewise prefers hardware
+     acceleration via OpenCV's FFmpeg backend (D3D11/DXVA on Windows).
 
 Usage:
     uv run python scripts/split_episode.py input/935.mp4 --preview   # detect + report + images only
@@ -108,6 +112,26 @@ def fmt_time(t: float) -> str:
 
 def similarity(a: np.ndarray, b: np.ndarray) -> float:
     return 1.0 - float(np.mean(cv2.absdiff(a, b))) / 255.0
+
+
+def open_capture(video: Path) -> cv2.VideoCapture:
+    """Open the video, preferring GPU (hardware) decode when available.
+
+    OpenCV's FFmpeg backend can offload H.264 decode to the GPU (D3D11/DXVA
+    on Windows). Probe one frame; if hardware decode fails for any reason,
+    fall back to plain software decoding.
+    """
+    try:
+        cap = cv2.VideoCapture(
+            str(video), cv2.CAP_FFMPEG, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY]
+        )
+        if cap.isOpened() and cap.grab():
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            return cap
+        cap.release()
+    except Exception:
+        pass
+    return cv2.VideoCapture(str(video))
 
 
 def scan_samples(cap: cv2.VideoCapture, fps: float, interval: float) -> list[Sample]:
@@ -265,7 +289,7 @@ def refine_candidate(
 
 
 def detect_title_cards(video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float):
-    cap = cv2.VideoCapture(str(video))
+    cap = open_capture(video)
     if not cap.isOpened():
         raise SystemExit(f"无法打开视频: {video}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
@@ -337,7 +361,7 @@ def episode_names(stem: str, n: int) -> list[str]:
 
 def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: Path) -> None:
     preview_dir.mkdir(parents=True, exist_ok=True)
-    cap = cv2.VideoCapture(str(video))
+    cap = open_capture(video)
     thumbs: list[np.ndarray] = []
     for i, c in enumerate(cards, 1):
         ok, frame = read_frame_at(cap, int((c.start + c.end) / 2 * fps))
@@ -377,32 +401,75 @@ def find_ffmpeg() -> str | None:
     return None
 
 
-def cut_episodes(video: Path, episodes: list[dict], out_dir: Path, copy: bool) -> None:
+# GPU encoders tried in order; the first whose probe encode actually runs
+# (driver + GPU present) wins. Quality settings roughly match libx264 crf 18.
+HW_ENCODERS: list[tuple[str, list[str]]] = [
+    ("h264_nvenc", ["-rc:v", "vbr", "-cq:v", "20", "-b:v", "0"]),  # NVIDIA
+    ("h264_qsv", ["-global_quality", "20"]),  # Intel
+    ("h264_amf", ["-quality", "balanced", "-rc", "cqp", "-qp_i", "20", "-qp_p", "20"]),  # AMD
+    ("h264_videotoolbox", ["-q:v", "65"]),  # Apple
+]
+CPU_VARGS = ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+
+
+def probe_encoder(ffmpeg: str, name: str, vargs: list[str]) -> bool:
+    """True if a tiny test encode with ``name`` actually runs on this machine.
+
+    ``ffmpeg -encoders`` listing an encoder doesn't mean it works (e.g. nvenc
+    is compiled in but there's no NVIDIA GPU), so we really encode 5 frames.
+    """
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=10:duration=0.5",
+        "-c:v",
+        name,
+        *vargs,
+        "-pix_fmt",
+        "yuv420p",
+        "-frames:v",
+        "5",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=60).returncode == 0
+    except Exception:
+        return False
+
+
+def choose_video_args(ffmpeg: str, force_cpu: bool) -> tuple[str, list[str]]:
+    if not force_cpu:
+        for name, vargs in HW_ENCODERS:
+            if probe_encoder(ffmpeg, name, vargs):
+                return f"{name} (GPU)", ["-c:v", name, *vargs, "-pix_fmt", "yuv420p"]
+        print("未检测到可用的 GPU 编码器, 回退 CPU libx264")
+    return "libx264 (CPU)", [*CPU_VARGS, "-pix_fmt", "yuv420p"]
+
+
+def cut_episodes(video: Path, episodes: list[dict], out_dir: Path, copy: bool, force_cpu: bool = False) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise SystemExit("找不到 ffmpeg：PATH 上没有，settings.yaml 的 asr.ffmpeg_path 也未配置。请先安装 ffmpeg。")
+    if copy:
+        label, vargs = "stream copy", []
+    else:
+        label, vargs = choose_video_args(ffmpeg, force_cpu)
+    print(f"切割编码器: {label}")
     for ep in episodes:
         out = out_dir / f"{ep['name']}.mp4"
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ep['start']:.3f}", "-i", str(video)]
         if copy:
             cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", "-c", "copy"]
         else:
-            cmd += [
-                "-t",
-                f"{ep['end'] - ep['start']:.3f}",
-                "-c:v",
-                "libx264",
-                "-crf",
-                "18",
-                "-preset",
-                "medium",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-            ]
+            cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", *vargs, "-c:a", "aac", "-b:a", "192k"]
         cmd += [str(out)]
         print(f"  切割 {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
         subprocess.run(cmd, check=True)
@@ -423,6 +490,7 @@ def main() -> int:
     )
     p.add_argument("--pad", type=float, default=REFINE_PAD, help=f"精修扫描前后扩展秒 (默认 {REFINE_PAD})")
     p.add_argument("--copy", action="store_true", help="ffmpeg 流拷贝切割 (快, 但按关键帧对齐, 不精确)")
+    p.add_argument("--cpu", action="store_true", help="强制 CPU (libx264) 重编码切割, 不尝试 GPU 编码器")
     p.add_argument("--keep-intro", action="store_true", help="第一集从 0:00 开始 (保留第一个标题卡前的 OP/引子)")
     args = p.parse_args()
 
@@ -501,7 +569,7 @@ def main() -> int:
     if n_ep > 3:
         print("⚠️ 集数超过 3, 很可能是误检。已跳过切割, 请先 --preview 确认。")
         return 1
-    cut_episodes(args.video, episodes, args.output_dir, args.copy)
+    cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu)
     print("完成。")
     return 0
 
