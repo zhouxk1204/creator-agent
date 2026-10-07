@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 chcp 65001 >nul
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
@@ -19,8 +20,9 @@ rem   03_split_episode.bat C:\test --copy           extra args are passed throug
 rem
 rem Flow: split_episode.py detects title cards and cuts in one pass. Story #1
 rem starts at the FIRST title card (the OP/intro before it is discarded;
-rem --keep-intro keeps it). Output files are named from the 「titles」 in the
-rem source filename: ドラえもん 「A」「B」.mp4 -> A.mp4 / B.mp4 (+ _split.json).
+rem --keep-intro keeps it). Output files are named from the episode titles
+rem embedded in the source filename's Japanese corner brackets
+rem ( doraemon [A][B].mp4 -> A.mp4 / B.mp4 ), plus <stem>_split.json.
 rem If detection looks wrong (>3 episodes) the script refuses to cut; then run
 rem it manually with --preview to inspect:
 rem   scripts\split_episode.py "%VIDEO%" --preview
@@ -70,8 +72,8 @@ if exist "%VIDEO%\*" (
         pause >nul
         exit /b 1
     )
-    set "VIDEO=%FOUND%"
-    echo  Using first video in folder: %VIDEO%
+    set "VIDEO=!FOUND!"
+    echo  Using first video in folder: !VIDEO!
 )
 if not exist "%VIDEO%" (
     echo  File not found: %VIDEO%
