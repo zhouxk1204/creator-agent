@@ -35,12 +35,14 @@ def split_cues(
     max_chars: int = 24,
     max_sec: float = 8.0,
     pause_sec: float = 0.6,
+    speech: Sequence[tuple[float, float]] | None = None,
 ) -> list[dict]:
     """Split ``text`` (recognized for ``[start, end]``) into cue dicts.
 
     - Long pauses (>= ``pause_sec`` of silence between consecutive words,
-      only knowable with word timestamps) are HARD cue boundaries: a cue
-      never straddles one, and a sentence containing one is cut there.
+      or between speech intervals in the fallback timeline) are HARD cue
+      boundaries: a cue never straddles one, and a sentence containing one
+      is cut there.
     - Split at sentence-ending punctuation (。！？) next; short consecutive
       sentences are re-merged up to ``max_chars`` / ``max_sec`` (never
       across a pause boundary).
@@ -51,7 +53,11 @@ def split_cues(
       seconds). When given and roughly consistent with ``text``, cue times
       come from the real word times (cue start = its first word's start,
       cue end = its last word's end); otherwise time is allocated
-      proportionally by character count over ``[start, end]``.
+      proportionally by character count. ``speech`` = VAD speech intervals
+      (absolute seconds) makes that fallback speech-aware: text is spread
+      over a compressed speech-only timeline, so cues start/end on utterance
+      edges and never cover inter-utterance silence; without ``speech`` the
+      fallback is plain linear over ``[start, end]``.
 
     Returns ``[{"start", "end", "text"}, ...]``. Word-timed cues keep their
     real word edges (they may fall slightly outside ``[start, end]`` when the
@@ -64,7 +70,7 @@ def split_cues(
         return []
     start, end = max(0.0, float(start)), float(end)
 
-    start_at, end_at, word_timed, pauses = _make_timeline(t, start, end, words, pause_sec)
+    start_at, end_at, word_timed, pauses = _make_timeline(t, start, end, words, pause_sec, speech)
     timeline = (start_at, end_at)
     pause_set = set(pauses)
 
@@ -238,7 +244,12 @@ def match_words_to_text(text: str, words: Sequence[Word]) -> tuple[list[int | No
 
 
 def _make_timeline(
-    text: str, start: float, end: float, words: Sequence[Word] | None, pause_sec: float = 0.6
+    text: str,
+    start: float,
+    end: float,
+    words: Sequence[Word] | None,
+    pause_sec: float = 0.6,
+    speech: Sequence[tuple[float, float]] | None = None,
 ) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]]:
     """(start_at, end_at, word_timed, pause_breaks) over char offsets into ``text``.
 
@@ -250,23 +261,34 @@ def _make_timeline(
     start is its first word's start, its end is its last word's end.
 
     ``pause_breaks`` = char offsets where the silence between two consecutive
-    matched words reaches ``pause_sec`` (offset = first char of the later
-    word, so leading punctuation stays with the left piece).
+    matched words (or, in the speech fallback, between two speech intervals)
+    reaches ``pause_sec`` (offset = first char of the later piece, so leading
+    punctuation stays with the left piece).
 
-    Falls back to linear interpolation (and no pause breaks) when there are
-    no words or when too little of the text could be matched to them.
+    Fallback order: word timeline -> speech-interval timeline (``speech``) ->
+    plain linear interpolation over [start, end].
     """
     n = len(text)
 
     def linear(off: float) -> float:
         return start + (end - start) * min(max(off, 0.0), n) / n
 
-    if not words:
-        return linear, linear, False, []
+    if words:
+        char_word, matched = match_words_to_text(text, words)
+        if matched >= max(1, int(0.5 * n)):
+            return _word_timeline(text, words, char_word, pause_sec)
+    if speech:
+        st = _speech_timeline(text, start, end, speech, pause_sec)
+        if st is not None:
+            return st
+    return linear, linear, False, []
 
-    char_word, matched = match_words_to_text(text, words)
-    if matched < max(1, int(0.5 * n)):
-        return linear, linear, False, []  # word coverage too poor to be trusted
+
+def _word_timeline(
+    text: str, words: Sequence[Word], char_word: list[int | None], pause_sec: float
+) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]]:
+    """Word-timestamp timeline: cue edges take the real word edges."""
+    n = len(text)
 
     covered = [wi for wi in char_word if wi is not None]
     first_w, last_w = covered[0], covered[-1]
@@ -299,3 +321,86 @@ def _make_timeline(
             pauses.append(char_word.index(b))
 
     return start_at, end_at, True, pauses
+
+
+def _speech_timeline(
+    text: str,
+    start: float,
+    end: float,
+    speech: Sequence[tuple[float, float]],
+    pause_sec: float,
+) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]] | None:
+    """Speech-aware proportional timeline (no word timestamps available).
+
+    Text chars are spread over a COMPRESSED speech-only timeline: the speech
+    intervals inside [start, end] concatenated with the silence squeezed out.
+    A cue's start/end therefore always land inside an utterance — subtitles
+    never hang over inter-utterance silence, and cue boundaries snap to
+    utterance edges (cue end = left interval's end, next cue's start = right
+    interval's start). Gaps >= ``pause_sec`` between intervals become hard
+    cue boundaries at the char offset the gap maps to.
+
+    Returns None when no speech interval overlaps [start, end] (caller falls
+    back to plain linear).
+    """
+    n = len(text)
+    ivs: list[tuple[float, float]] = []
+    for s, e in sorted((float(s), float(e)) for s, e in speech):
+        a, b = max(s, start), min(e, end)
+        if b > a:
+            ivs.append((a, b))
+    if not ivs:
+        return None
+
+    cum = [0.0]  # compressed (speech-only) seconds elapsed before each interval
+    for a, b in ivs:
+        cum.append(cum[-1] + (b - a))
+    total = cum[-1]
+    last = len(ivs) - 1
+
+    def _map(c: float, from_left: bool) -> float:
+        # from_left=True (cue start): a position exactly on an interval
+        # boundary maps into the RIGHT interval's start; False (cue end):
+        # into the LEFT interval's end. The gap stays subtitle-free.
+        for i, (a, b) in enumerate(ivs):
+            if c < cum[i + 1] or (not from_left and c <= cum[i + 1]) or i == last:
+                return a + min(max(c - cum[i], 0.0), b - a)
+        return ivs[-1][1]  # unreachable (i == last catches all)
+
+    def start_at(off: float) -> float:
+        return _map(total * min(max(off, 0.0), n) / n, from_left=True)
+
+    def end_at(off: float) -> float:
+        return _map(total * min(max(off, 0.0), n) / n, from_left=False)
+
+    pauses: list[int] = []
+    for i in range(last):
+        if ivs[i + 1][0] - ivs[i][1] >= pause_sec:
+            off = round(n * cum[i + 1] / total)
+            if 0 < off < n:
+                pauses.append(off)
+
+    return start_at, end_at, False, pauses
+
+
+def cut_repeat_tail(text: str, min_repeats: int = 3, min_span: int = 6) -> str:
+    """Truncate a degenerate repetition tail (ASR hallucination on music /
+    silence): the same unit repeated >= ``min_repeats`` times at the very end
+    of the text, spanning >= ``min_span`` chars. Returns the text cut back to
+    one occurrence of the unit; unchanged when there is no such tail.
+
+    Whitespace is stripped first (JA ASR output carries none anyway). Only
+    tails are cut — stutters at the start of a line (「ねねねね…」) are real
+    speech and are left alone.
+    """
+    t = "".join(str(text).split())
+    n = len(t)
+    best = n
+    for p in range(1, n // min_repeats + 1):
+        unit = t[n - p :]
+        k = 1
+        while (k + 1) * p <= n and t[n - (k + 1) * p : n - k * p] == unit:
+            k += 1
+        if k >= min_repeats and k * p >= min_span:
+            best = min(best, n - (k - 1) * p)
+    return t[:best]

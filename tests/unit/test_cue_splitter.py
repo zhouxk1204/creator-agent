@@ -236,3 +236,81 @@ def test_resolve_overlaps_keeps_speaker_field():
     out = resolve_overlaps(segs)
     assert out[0]["speaker"] == "話者1" and out[1]["speaker"] == "話者2"
     assert out[0]["end"] == out[1]["start"]
+
+
+# ---------------------------------------------------------------------------
+# Speech-aware proportional fallback (no word timestamps)
+# ---------------------------------------------------------------------------
+
+
+def test_speech_fallback_hugs_utterance_edges():
+    # Chunk spans 10-20s but speech only lives in two intervals; cues must
+    # start/end on utterance edges, never cover the gap.
+    speech = [(11.0, 13.0), (17.0, 19.0)]
+    cues = split_cues("前半です。後半です。", 10.0, 20.0, max_chars=6, speech=speech)
+    assert [c["text"] for c in cues] == ["前半です。", "後半です。"]
+    assert cues[0]["start"] == 11.0 and cues[0]["end"] == 13.0
+    assert cues[1]["start"] == 17.0 and cues[1]["end"] == 19.0
+
+
+def test_speech_fallback_gap_is_hard_boundary():
+    # One long sentence whose span contains a >pause_sec gap: the cue is cut
+    # at the gap even though there is no punctuation there.
+    speech = [(0.0, 2.0), (5.0, 7.0)]  # 3s gap
+    cues = split_cues("ああああいいいい", 0.0, 7.0, max_chars=24, pause_sec=0.6, speech=speech)
+    assert len(cues) == 2
+    assert cues[0]["end"] <= 2.0 <= cues[1]["start"] - 2.9  # gap left subtitle-free
+
+
+def test_speech_fallback_no_overlap_falls_back_to_linear():
+    cues = split_cues("前半です。後半です。", 10.0, 20.0, max_chars=6, speech=[(30.0, 31.0)])
+    assert cues[0]["start"] == 10.0 and cues[0]["end"] == 15.0  # plain linear
+
+
+def test_speech_fallback_clips_intervals_to_chunk():
+    # Speech spilling outside [start, end] is clipped to the chunk window.
+    speech = [(9.0, 12.0), (18.0, 21.0)]
+    cues = split_cues("前半です。後半です。", 10.0, 20.0, max_chars=6, speech=speech)
+    assert cues[0]["start"] >= 10.0 and cues[-1]["end"] <= 20.0
+
+
+def test_words_take_priority_over_speech():
+    text = "雨です。雪です。"
+    words = [
+        ("雨", 0.0, 0.5),
+        ("です", 0.5, 1.5),
+        ("。", 1.5, 1.6),
+        ("雪", 5.0, 5.5),
+        ("です", 5.5, 6.5),
+        ("。", 6.5, 6.6),
+    ]
+    speech = [(0.0, 3.0), (4.0, 6.6)]  # would give different edges
+    cues = split_cues(text, 0.0, 6.6, words=words, max_chars=4, speech=speech)
+    assert cues[0]["end"] == 1.6 and cues[1]["start"] == 5.0  # word edges win
+
+
+# ---------------------------------------------------------------------------
+# Hallucination repeat-tail cutting
+# ---------------------------------------------------------------------------
+
+
+def test_cut_repeat_tail_truncates_loop():
+    from creator_agent.asr.cue_splitter import cut_repeat_tail
+
+    assert cut_repeat_tail("よ。バイバイ。バイバイ。バイバイ。") == "よ。バイバイ。"
+    assert cut_repeat_tail("白鳥、白鳥、白鳥、") == "白鳥、"
+
+
+def test_cut_repeat_tail_keeps_real_speech():
+    from creator_agent.asr.cue_splitter import cut_repeat_tail
+
+    # Leading stutter + real content: not a tail, left alone.
+    assert cut_repeat_tail("ねねねねねね何してるな？") == "ねねねねねね何してるな？"
+    # Short repeats below the repeat count are kept.
+    assert cut_repeat_tail("本当本当ですね") == "本当本当ですね"
+
+
+def test_cut_repeat_tail_whole_text_loop():
+    from creator_agent.asr.cue_splitter import cut_repeat_tail
+
+    assert cut_repeat_tail("ああああああああ") == "あ"

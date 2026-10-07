@@ -19,16 +19,20 @@ jobs.json = [{"video_id": str, "audio_path": str}, ...]
 Pipeline per job (everything downstream of separation runs on the VOCAL stem —
 VAD, ASR and the aligner all share one audio source and one timeline):
 
-    vocals.wav -> silero-VAD speech intervals
+    vocals.wav -> silero-VAD speech intervals (permissive pass for chunking,
+       plus a fixed tight pass for cue auditing / fallback timing)
     -> targeted chunks (~3-8s, hard cap 15s; oversized split at natural pause)
-    -> Qwen3-ASR per chunk
+    -> Qwen3-ASR per chunk (+ hallucination repeat-tail cut)
     -> Qwen3-ForcedAligner per chunk (separate aligner-env SUBPROCESS, one per
        video, per-chunk results streamed back)
     -> alignment quality gate per chunk (coverage / window / timing /
-       duration) — rejected alignments fall back to proportional cue times
+       duration) — rejected alignments fall back to SPEECH-AWARE proportional
+       cue times (spread over the tight VAD intervals, never over silence)
        WITH a logged reason, never silently
-    -> cue splitting at punctuation + long pauses -> segments
-    -> per-video SUMMARY (VAD/chunk/ASR/alignment/cue counters)
+    -> cue splitting at punctuation + long pauses -> drop cues covering no
+       speech (hallucinated / misaligned) -> segments
+    -> per-video SUMMARY (VAD/chunk/ASR/alignment/cue counters + speech
+       ranges left without subtitles)
 
 Optional steps that fail only degrade themselves (no alignment / no
 diarization), never the whole batch.
@@ -79,9 +83,9 @@ _SHORT_SEG_SEC = 0.5  # VAD segments below this are counted as "short" in the su
 # live in creator_agent, which is not installed here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from align_check import NO_WORDS, AlignCheck, check_alignment  # noqa: E402
-from cue_splitter import resolve_overlaps, split_cues  # noqa: E402
+from cue_splitter import cut_repeat_tail, resolve_overlaps, split_cues  # noqa: E402
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
-from vad_chunker import build_chunks  # noqa: E402
+from vad_chunker import build_chunks, speech_coverage, uncovered_ranges  # noqa: E402
 
 
 def _emit(results: list) -> None:
@@ -214,13 +218,14 @@ def _to_16k_mono(wav_path: Path, out_path: Path) -> Path:
     return out_path
 
 
-def _speech_intervals(vad_model, vocals_path: Path, args) -> list[tuple[float, float]]:
-    """silero-vad raw speech intervals [(start, end), ...] (unmerged).
-
-    min_speech_duration is low (default 120ms) so short interjections
-    (「あっ」「えっ」) survive to ASR; speech_pad keeps soft onsets/offsets
-    from being clipped by the VAD edges themselves.
-    """
+def _speech_intervals(
+    vad_model,
+    vocals_path: Path,
+    min_speech_ms: int,
+    min_silence_ms: int,
+    speech_pad_ms: int,
+) -> list[tuple[float, float]]:
+    """silero-vad raw speech intervals [(start, end), ...] (unmerged)."""
     import soundfile as sf
     import torch
     from silero_vad import get_speech_timestamps
@@ -231,11 +236,24 @@ def _speech_intervals(vad_model, vocals_path: Path, args) -> list[tuple[float, f
         wav,
         vad_model,
         sampling_rate=_SAMPLE_RATE,
-        min_speech_duration_ms=args.vad_min_speech_ms,
-        min_silence_duration_ms=args.vad_min_silence_ms,
-        speech_pad_ms=args.vad_speech_pad_ms,
+        min_speech_duration_ms=min_speech_ms,
+        min_silence_duration_ms=min_silence_ms,
+        speech_pad_ms=speech_pad_ms,
     )
     return [(t["start"] / _SAMPLE_RATE, t["end"] / _SAMPLE_RATE) for t in ts]
+
+
+# Tight VAD pass (fixed params): short silence merge + minimal pad, so the
+# intervals hug true utterance edges. Used to AUDIT cues (drop subtitles
+# covering no speech) and as the speech-aware proportional fallback timeline
+# — NOT for chunking (chunking keeps the permissive configured params, and
+# music/noise can fool the permissive pass into long bogus "speech" runs).
+_TIGHT_MIN_SPEECH_MS = 100
+_TIGHT_MIN_SILENCE_MS = 150
+_TIGHT_SPEECH_PAD_MS = 30
+# Cues whose tight-VAD speech coverage falls below this are dropped as
+# hallucinated / misaligned (logged, counted in the summary).
+_MIN_CUE_SPEECH_COV = 0.3
 
 
 def _diarize(
@@ -409,7 +427,14 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         vocals, other_stems = _separate_vocals(separator, audio_path, work)
         _progress(vid, f"人声分离完成（{time.monotonic() - t0:.0f}s）→ VAD 检测语音段…")
 
-        intervals = _speech_intervals(vad_model, vocals, args)
+        # Chunking pass uses the configured (permissive) params: low
+        # min_speech keeps 「あっ」「えっ」-type interjections, speech_pad
+        # keeps soft onsets from being clipped. The tight pass hugs true
+        # utterance edges for cue auditing + fallback timing.
+        intervals = _speech_intervals(
+            vad_model, vocals, args.vad_min_speech_ms, args.vad_min_silence_ms, args.vad_speech_pad_ms
+        )
+        tight = _speech_intervals(vad_model, vocals, _TIGHT_MIN_SPEECH_MS, _TIGHT_MIN_SILENCE_MS, _TIGHT_SPEECH_PAD_MS)
         stats["vad_segments"] = len(intervals)
         stats["vad_short"] = sum(1 for s, e in intervals if e - s < _SHORT_SEG_SEC)
         stats["vad_long"] = sum(1 for s, e in intervals if e - s > args.max_chunk)
@@ -478,6 +503,15 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 stats["asr_empty"] += 1
                 _chunk_log(cid, "ASR", f"EMPTY reason=NO_TEXT ({el:.1f}s)")
                 continue
+            # Hallucination guard: on music/noise the model loops one unit
+            # (「バイバイ。バイバイ。…」); cut the degenerate tail BEFORE
+            # alignment so phantom words can't drag real cues off their audio.
+            cut = cut_repeat_tail(text)
+            stripped = "".join(text.split())
+            if len(cut) < len(stripped):
+                stats["asr_repeat_cut"] += 1
+                _chunk_log(cid, "ASR", f'repeat-tail cut {len(stripped)}->{len(cut)} chars tail="{stripped[len(cut) :][:20]}…"')
+                text = cut
             stats["asr_ok"] += 1
             preview = text[:30] + ("…" if len(text) > 30 else "")
             _chunk_log(cid, "ASR", f'OK {el:.1f}s len={len(text)} text="{preview}"')
@@ -524,7 +558,28 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 max_chars=args.max_cue_chars,
                 max_sec=args.max_cue_sec,
                 pause_sec=args.pause_sec,
+                # Speech-aware fallback: when word alignment is rejected, cues
+                # are spread over the tight speech intervals only (never over
+                # silence), with hard breaks at inter-utterance gaps.
+                speech=[(s, e) for s, e in tight if e > c["start"] and s < c["end"]],
             )
+            # Drop cues covering (almost) no speech under the tight VAD pass:
+            # hallucinated text on music/silence, or words the aligner locked
+            # onto the wrong utterance. Real dialogue is essentially never
+            # below this floor, and every drop is logged + counted.
+            kept = []
+            for cue in cues:
+                cov = speech_coverage(cue["start"], cue["end"], tight)
+                if cov < _MIN_CUE_SPEECH_COV:
+                    stats["cues_dropped_no_speech"] += 1
+                    _chunk_log(
+                        cid,
+                        "CUE",
+                        f'DROP speech_cov={cov:.0%} {_fmt_ts(cue["start"])}-{_fmt_ts(cue["end"])} "{cue["text"][:20]}"',
+                    )
+                    continue
+                kept.append(cue)
+            cues = kept
             stats["cues"] += len(cues)
             timed = "word-timed" if words else "proportional"
             _chunk_log(cid, "CUE", f"generated={len(cues)} ({timed})")
@@ -541,7 +596,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # above rejects the badly-shifted alignments it used to "repair".
         segments = resolve_overlaps(segments)
 
-        _print_summary(vid, duration, stats, chunks, time.monotonic() - t0)
+        _print_summary(vid, duration, stats, chunks, time.monotonic() - t0, intervals, segments)
 
         vocals_out = None
         if keep_dir is not None:
@@ -581,9 +636,18 @@ def _gate_alignment(rec: dict | None, c: dict, args) -> AlignCheck:
     )
 
 
-def _print_summary(vid: str, duration: float, stats: Counter, chunks: list[dict], elapsed: float) -> None:
+def _print_summary(
+    vid: str,
+    duration: float,
+    stats: Counter,
+    chunks: list[dict],
+    elapsed: float,
+    intervals: list[tuple[float, float]],
+    segments: list[dict],
+) -> None:
     """Per-video pipeline summary — the counters that tell you WHERE a bad
-    episode went wrong (VAD? ASR? alignment? which fallback reason?)."""
+    episode went wrong (VAD? ASR? alignment? which fallback reason?), plus a
+    list of spoken ranges that ended up with no subtitle at all."""
     chunk_reasons = sorted(k for k in stats if k.startswith("chunk_"))
     fallback_reasons = sorted(k for k in stats if k.startswith("align_fallback_"))
     lines = [
@@ -605,6 +669,7 @@ def _print_summary(vid: str, duration: float, stats: Counter, chunks: list[dict]
         f"  success               : {stats['asr_ok']}",
         f"  empty                 : {stats['asr_empty']}",
         f"  failed                : {stats['asr_failed']}",
+        f"  repeat-tail cut       : {stats['asr_repeat_cut']}",
         "Alignment",
         f"  success               : {stats['align_ok']}",
         f"  fallback              : {sum(stats[k] for k in fallback_reasons)}",
@@ -613,6 +678,21 @@ def _print_summary(vid: str, duration: float, stats: Counter, chunks: list[dict]
     lines += [
         "Subtitle",
         f"  cues                  : {stats['cues']}",
+        f"  dropped (no speech)   : {stats['cues_dropped_no_speech']}",
+    ]
+    # Speech the subtitles never covered (ASR dropped it, or its cues were
+    # rejected/filtered away). Long ranges here = missing dialogue.
+    missed = uncovered_ranges(intervals, [(s["start"], s["end"]) for s in segments], min_sec=1.0)
+    missed_total = sum(e - s for s, e in missed)
+    lines += [
+        "Coverage",
+        f"  speech not subtitled  : {missed_total:.1f}s in {len(missed)} range(s)",
+    ]
+    for s, e in missed[:12]:
+        lines.append(f"    {_fmt_ts(s)} - {_fmt_ts(e)} ({e - s:.1f}s)")
+    if len(missed) > 12:
+        lines.append(f"    ... and {len(missed) - 12} more")
+    lines += [
         f"Elapsed                 : {elapsed:.1f}s",
         "=" * 60,
     ]

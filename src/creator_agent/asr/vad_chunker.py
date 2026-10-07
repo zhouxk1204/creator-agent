@@ -9,6 +9,45 @@ silence.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+
+def speech_coverage(start: float, end: float, intervals: Sequence[tuple[float, float]]) -> float:
+    """Fraction of ``[start, end]`` overlapped by speech ``intervals`` (0..1).
+
+    Used to audit subtitle cues against a tight VAD pass: a cue covering
+    almost no speech is an ASR hallucination or a misaligned word timeline.
+    """
+    if end <= start:
+        return 0.0
+    cov = sum(max(0.0, min(end, e) - max(start, s)) for s, e in intervals)
+    return min(1.0, cov / (end - start))
+
+
+def uncovered_ranges(
+    intervals: Sequence[tuple[float, float]], covered: Sequence[tuple[float, float]], min_sec: float = 1.0
+) -> list[tuple[float, float]]:
+    """Speech ranges (from ``intervals``) with no overlap from ``covered``
+    spans, merged and filtered to >= ``min_sec``. Surfaces spoken dialogue
+    that ended up with no subtitle at all."""
+    out: list[tuple[float, float]] = []
+    for s, e in intervals:
+        # Subtract covered spans from [s, e]; keep leftover pieces.
+        pieces = [(s, e)]
+        for cs, ce in covered:
+            nxt = []
+            for a, b in pieces:
+                if ce <= a or cs >= b:
+                    nxt.append((a, b))
+                else:
+                    if cs > a:
+                        nxt.append((a, cs))
+                    if ce < b:
+                        nxt.append((ce, b))
+            pieces = nxt
+        out.extend(p for p in pieces if p[1] - p[0] >= min_sec)
+    return out
+
 
 def merge_speech_intervals(
     intervals: list[tuple[float, float]],

@@ -46,3 +46,29 @@ def test_padding_applied_and_clamped():
     chunks = merge_speech_intervals([(0.05, 1.0), (2.0, 3.0)], max_gap=0.1, pad=0.1, duration=3.05)
     assert chunks[0] == (0.0, 1.1)  # start clamped at 0
     assert chunks[1] == (1.9, 3.05)  # end clamped at duration
+
+
+def test_speech_coverage():
+    from creator_agent.asr.vad_chunker import speech_coverage
+
+    iv = [(0.0, 2.0), (4.0, 6.0)]
+    assert speech_coverage(0.0, 6.0, iv) == 4.0 / 6.0
+    assert speech_coverage(1.0, 5.0, iv) == 0.5
+    assert speech_coverage(2.0, 4.0, iv) == 0.0
+    assert speech_coverage(5.0, 5.0, iv) == 0.0  # empty range
+
+
+def test_uncovered_ranges():
+    from creator_agent.asr.vad_chunker import uncovered_ranges
+
+    speech = [(0.0, 5.0), (10.0, 20.0)]
+    covered = [(1.0, 2.0), (12.0, 13.0), (16.0, 22.0)]
+    out = uncovered_ranges(speech, covered, min_sec=1.0)
+    assert out == [(0.0, 1.0), (2.0, 5.0), (10.0, 12.0), (13.0, 16.0)]
+
+
+def test_uncovered_ranges_min_sec_filter():
+    from creator_agent.asr.vad_chunker import uncovered_ranges
+
+    out = uncovered_ranges([(0.0, 10.0)], [(0.0, 9.5)], min_sec=1.0)
+    assert out == []  # 0.5s leftover is below the threshold
