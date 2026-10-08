@@ -20,6 +20,16 @@ Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
 
 Usage:
     uv run python scripts/fetch_doraemon.py 934
+    uv run python scripts/fetch_doraemon.py --auto   # fetch every aired episode
+                                                     # after the newest local one
+
+--auto is for the weekly scheduled task (bat/doraemon/weekly_sync.bat): it
+finds the highest episode already in storage/doraemon, then fetches n+1, n+2,
+... while the story page exists AND its broadcast date (JST) is not in the
+future — tv-asahi publishes the *upcoming* episode's page days early, so the
+air-date gate is what stops it from running ahead of the broadcast. Numbers of
+the episodes it fetched are written one per line to
+storage/doraemon/.last_auto_fetched for the caller (empty file = nothing new).
 """
 
 from __future__ import annotations
@@ -32,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -253,10 +264,11 @@ def comfy_upscale(client: httpx.Client, base_url: str, img_path: Path, dest: Pat
     return False  # timed out
 
 
-def main(episode: str) -> None:
+def fetch_one(episode: str) -> int:
+    """Fetch one episode's page + assets. Returns a process exit code."""
     if not episode.strip().isdigit():
         print(f"Invalid episode number: {episode!r} (expected e.g. 934)")
-        sys.exit(2)
+        return 2
     ep = f"{int(episode):04d}"
     url = BASE_URL.format(ep=ep)
 
@@ -264,12 +276,12 @@ def main(episode: str) -> None:
         resp = client.get(url)
         if resp.status_code != 200:
             print(f"HTTP {resp.status_code} for {url} — episode may not exist.")
-            sys.exit(1)
+            return 1
         data = parse_page(resp.text)
 
         if not data["stories"]:
             print(f"No stories parsed from {url} — page layout may have changed.")
-            sys.exit(1)
+            return 1
 
         out_dir = OUT_ROOT / ep
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -358,10 +370,79 @@ def main(episode: str) -> None:
     for story in data["stories"]:
         print(f"  story     : {story['title']}  ({len(story['synopsis'])} chars)")
     print(f"\nSaved to: {out_dir.resolve()}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# --auto: catch up on every episode aired after the newest local one.
+# ---------------------------------------------------------------------------
+
+JST = timezone(timedelta(hours=9))
+# '2026年9月19日放送' -> (2026, 9, 19). Matches the <p class="date"> format.
+BROADCAST_DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
+# Safety bound so a wrong starting point can't fetch the entire backlog.
+MAX_AUTO_CATCHUP = 8
+# Numbers fetched by the last --auto run, one per line; read by weekly_sync.bat.
+AUTO_STATE_NAME = ".last_auto_fetched"
+
+
+def _local_episodes() -> list[int]:
+    if not OUT_ROOT.is_dir():
+        return []
+    return sorted(
+        int(p.name) for p in OUT_ROOT.iterdir() if p.is_dir() and p.name.isdigit() and (p / "metadata.json").exists()
+    )
+
+
+def _peek_broadcast_date(client: httpx.Client, ep: str) -> date | None:
+    """Broadcast date of story page ``ep``; None when the page doesn't exist yet."""
+    resp = client.get(BASE_URL.format(ep=ep))
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    m = BROADCAST_DATE_RE.search(resp.text)
+    if not m:
+        raise RuntimeError(f"No broadcast date found on {BASE_URL.format(ep=ep)}")
+    return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def auto_fetch() -> int:
+    done = _local_episodes()
+    if not done:
+        print("--auto needs one already-fetched episode in storage/doraemon/ to count from.")
+        return 2
+
+    today_jst = datetime.now(JST).date()
+    fetched: list[int] = []
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=30) as client:
+        n = done[-1] + 1
+        while len(fetched) < MAX_AUTO_CATCHUP:
+            air = _peek_broadcast_date(client, f"{n:04d}")
+            if air is None:
+                if not fetched:
+                    print(f"Episode {n:04d} has no page yet — nothing new.")
+                break
+            if air > today_jst:
+                print(f"Episode {n:04d} airs {air} (JST) — not broadcast yet, skipping.")
+                break
+            print(f"Episode {n:04d} aired {air} — fetching.")
+            rc = fetch_one(str(n))
+            if rc != 0:
+                return rc
+            fetched.append(n)
+            n += 1
+
+    state = OUT_ROOT / AUTO_STATE_NAME
+    state.write_text("".join(f"{n}\n" for n in fetched), encoding="utf-8")
+    if fetched:
+        print(f"Auto-fetched episode(s): {', '.join(str(n) for n in fetched)}")
+    return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: fetch_doraemon.py <episode_number>  (e.g. 934)")
+        print("Usage: fetch_doraemon.py <episode_number|--auto>  (e.g. 934)")
         sys.exit(2)
-    main(sys.argv[1])
+    if sys.argv[1] == "--auto":
+        sys.exit(auto_fetch())
+    sys.exit(fetch_one(sys.argv[1]))
