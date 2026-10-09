@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -131,6 +132,7 @@ def main() -> None:
 
     if args.episode:
         download(args.episode, out_dir)
+        os.startfile(out_dir)  # open the download folder for the user
         return
 
     with httpx.Client(timeout=30, follow_redirects=True) as client:
@@ -157,6 +159,7 @@ def main() -> None:
         download(ep["id"], out_dir)
 
     print(f"\nSaved to: {out_dir.resolve()}")
+    os.startfile(out_dir)  # open the download folder for the user
 
 
 if __name__ == "__main__":
