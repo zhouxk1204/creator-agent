@@ -7,11 +7,13 @@
     ↓
 PySceneDetect 分镜检测（ContentDetector）
     ↓
+后处理：边界复核合并（闪烁误切修复）+ 黑场标记
+    ↓
 每个分镜的开始/结束时间（秒 + 帧号）
     ↓
 FFmpeg 精确切割成独立视频
     ↓
-scenes.json
+scenes.json + postprocess_report.json
 ```
 
 后续阶段（Qwen3-VL 视频理解、字幕匹配、解说稿生成、TTS、自动剪辑）都以
@@ -70,6 +72,12 @@ python scripts/split_scenes.py "D:\videos\935#1.mp4"
 | `--config PATH` | 指定配置文件（默认 `config/scene_config.json`） |
 | `--no-export` | 只检测分镜、生成 scenes.json，不切割视频（先看效果再导出） |
 | `--overwrite` | 输出目录已存在且非空时允许覆盖（**默认拒绝**） |
+| `--merge-threshold 100` | 边界复核合并阈值：min_cross 低于该值的边界被撤销 |
+| `--cross-window 6` | 边界复核时两侧各检查的帧数 |
+| `--analysis-scale 0.5` | 后处理分析用缩放比例 |
+| `--no-merge` | 关闭闪烁误切合并 |
+| `--no-black-mark` | 关闭黑场标记 |
+| `--dry-run` | 只生成 `postprocess_report.json` 分析报告，分镜结果保持检测原样 |
 
 优先级：命令行参数 > `config/scene_config.json` > 内置默认值。
 
@@ -84,6 +92,7 @@ D:\videos\935#1\
 │   ├── 0002.mp4
 │   └── ...
 ├── scenes.json
+├── postprocess_report.json
 └── scene_split.log
 ```
 
@@ -93,7 +102,7 @@ D:\videos\935#1\
 
 ```json
 {
-  "version": "1.0",
+  "version": "1.1",
   "episode": "935#1",
   "source": {
     "file": "935#1.mp4",
@@ -108,6 +117,14 @@ D:\videos\935#1\
     "threshold": 27.0,
     "min_scene_len_frames": 12
   },
+  "postprocess": {
+    "dry_run": false,
+    "merge": { "enabled": true, "merge_threshold": 100.0, "cross_window": 6, "analysis_scale": 0.5, "merge_max_iterations": 4 },
+    "black": { "enabled": true, "black_max_yavg": 20.0, "...": "..." },
+    "original_scene_count": 180,
+    "merged_boundary_count": 32,
+    "black_scene_count": 1
+  },
   "scenes": [
     {
       "scene_id": "0001",
@@ -118,7 +135,11 @@ D:\videos\935#1\
       "end_frame": 101,
       "start_timecode": "00:00:00.000",
       "end_timecode": "00:00:04.208",
-      "video": "scenes/0001.mp4"
+      "video": "scenes/0001.mp4",
+      "black": false,
+      "merge_history": [],
+      "boundary_score": null,
+      "review_status": "auto"
     }
   ]
 }
@@ -127,6 +148,31 @@ D:\videos\935#1\
 - 时间一律是 **秒 + 浮点数**（毫秒级精度，供后续字幕对齐），另附格式化时间码。
 - `video` 是**相对路径**，与机器无关。
 - `scene_id` 为 `0001` / `0002` / …，与文件名 `0001.mp4` 一一对应。
+- `black`：纯黑场标记。**只标记不删除**，分镜照常导出、留在时间轴上（字幕匹配依赖时间轴完整）。
+- `merge_history`：被边界复核合并进来的原始分镜（检测编号、边界帧、min_cross、原因）。
+- `boundary_score`：本分镜起始边界的 min_cross 复核分数（首个分镜为 `null`）。
+- `review_status`：`auto` = 自动处理；人工确认后由下游改写。
+
+## 6.1 后处理：闪烁误切合并 + 黑场标记
+
+动画中的明暗交替特效（爆炸/电击/闪回，约 3~4 帧一次亮度脉冲）会让
+ContentDetector 在**同一个镜头内部**反复误切，切出一堆 0.4~1.4 秒的碎分镜。
+后处理对每个候选边界做复核：取边界**两侧各 `cross_window` 帧**两两比较
+（半分辨率 HSV mean-abs-diff），取最小值 `min_cross`——闪烁段两侧必存在
+相近帧（min_cross 小），真正的切换两侧画面完全不同（min_cross 大）。
+低于 `merge_threshold` 的边界被撤销，相邻分镜合并；迭代复查直到收敛。
+
+黑场判定综合 4 个指标（平均亮度、亮度标准差、黑像素占比、黑帧比例），
+避免把暗夜场景、黑底字幕卡误判为纯黑场。黑场**照常导出并保留在时间轴上**，
+只在 scenes.json 里标记 `black: true`，由下游决定如何使用。
+
+所有阈值都在 `config/scene_config.json` 的 `postprocess` 段可调；
+`merge_threshold` 只在当前 min_cross 度量口径（半分辨率 + HSV 三通道
+mean-abs-diff 之和）下有效，改算法必须重新标定。
+
+每次运行生成 `postprocess_report.json`：逐边界的复核分数与决策（KEEP/MERGE）、
+合并迭代记录、黑场判定明细，用于复盘。调阈值时建议先 `--dry-run` +
+`--no-export` 看报告，确认无误后再正式跑。
 
 ## 7. 如何调整 threshold
 
@@ -169,4 +215,5 @@ pytest
 ```
 
 测试视频由 ffmpeg lavfi 现场生成（纯色硬切），覆盖：正常切割、无切换视频、
-2 秒短视频、输出目录冲突、FFmpeg 缺失报错、23.976fps 保留、min_scene_len 过滤闪切。
+2 秒短视频、输出目录冲突、FFmpeg 缺失报错、23.976fps 保留、min_scene_len 过滤闪切、
+闪烁误切合并、关闭合并、黑场标记（仍导出）、dry-run 报告。

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from conftest import requires_ffmpeg
-from models import DetectorConfig
+from models import DetectorConfig, PostProcessConfig
 from scene_splitter import SceneSplitError, SceneSplitter
 from video_utils import (
     FFmpegNotFoundError,
@@ -105,7 +105,7 @@ def test_normal_video_split(tmp_path):
     json_path = out / "scenes.json"
     assert json_path.is_file()
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["version"] == "1.0"
+    assert data["version"] == "1.1"
     assert data["episode"] == "normal"
     assert data["source"]["fps"] == 24.0
     assert data["source"]["width"] == 320
@@ -268,3 +268,128 @@ def test_min_scene_len_merges_flash_cuts(tmp_path):
 def test_missing_input_file(tmp_path):
     with pytest.raises(SceneSplitError, match="不存在"):
         SceneSplitter(tmp_path / "nope.mp4").run()
+
+
+# ---------------------------------------------------------------- 后处理
+
+
+def make_flash_video(path: Path, fps: int = 24) -> None:
+    """red 1s | white 4 帧闪烁 | red 1s —— 同一个镜头内的亮度闪烁。
+
+    min_scene_len=2 时 ContentDetector 会在闪烁两端各切一刀（误切），
+    边界复核合并应把它们撤销，恢复成单个分镜。
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=red:s=320x240:r={fps}:d=1",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=white:s=320x240:r={fps}:d={4 / fps}",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=red:s=320x240:r={fps}:d=1",
+        "-filter_complex",
+        "[0:v][1:v][2:v]concat=n=3:v=1[out]",
+        "-map",
+        "[out]",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+@requires_ffmpeg
+def test_flash_false_cuts_merged(tmp_path):
+    """镜头内闪烁造成的误切应被边界复核合并撤销。"""
+    video = tmp_path / "flashfx.mp4"
+    make_flash_video(video)
+    out = tmp_path / "flashfx"
+
+    summary = SceneSplitter(
+        video,
+        out,
+        config=DetectorConfig(min_scene_len_frames=2),
+        postprocess=PostProcessConfig(black_enabled=False),
+    ).run()
+
+    assert summary.ok
+    assert len(summary.scenes) == 1
+    assert len(summary.scenes[0].merge_history) == 2
+    reasons = {h["reason"] for h in summary.scenes[0].merge_history}
+    assert reasons == {"min_cross_below_merge_threshold"}
+    report = json.loads((out / "postprocess_report.json").read_text(encoding="utf-8"))
+    assert report["summary"]["boundaries_merged"] == 2
+
+
+@requires_ffmpeg
+def test_merge_disabled_keeps_flash_cuts(tmp_path):
+    """关闭合并后，闪烁误切保持原样（行为与旧版本一致）。"""
+    video = tmp_path / "flashfx.mp4"
+    make_flash_video(video)
+    out = tmp_path / "flashfx"
+
+    summary = SceneSplitter(
+        video,
+        out,
+        config=DetectorConfig(min_scene_len_frames=2),
+        postprocess=PostProcessConfig(merge_enabled=False, black_enabled=False),
+    ).run()
+
+    assert summary.ok
+    assert len(summary.scenes) == 3
+
+
+@requires_ffmpeg
+def test_black_scene_marked_but_exported(tmp_path):
+    """纯黑分镜只标记 black=true，照常导出、不删除（保持时间轴完整）。"""
+    video = tmp_path / "blackmid.mp4"
+    make_video(video, ["red", "black", "blue"], segment_seconds=2.0)
+    out = tmp_path / "blackmid"
+
+    summary = SceneSplitter(video, out).run()
+
+    assert summary.ok
+    black_scenes = [s for s in summary.scenes if s.black]
+    assert len(black_scenes) == 1
+    black_id = black_scenes[0].scene_id
+    # 黑场照常导出，分镜总数不减少
+    assert (out / "scenes" / f"{black_id}.mp4").is_file()
+    assert len(summary.scenes) == len(list((out / "scenes").glob("*.mp4")))
+    data = json.loads((out / "scenes.json").read_text(encoding="utf-8"))
+    entry = next(s for s in data["scenes"] if s["scene_id"] == black_id)
+    assert entry["black"] is True
+    assert entry["review_status"] == "auto"
+
+
+@requires_ffmpeg
+def test_dry_run_reports_without_applying(tmp_path):
+    """dry-run：生成报告，但分镜结果保持检测原样。"""
+    video = tmp_path / "flashfx.mp4"
+    make_flash_video(video)
+    out = tmp_path / "flashfx"
+
+    summary = SceneSplitter(
+        video,
+        out,
+        config=DetectorConfig(min_scene_len_frames=2),
+        postprocess=PostProcessConfig(black_enabled=False, dry_run=True),
+    ).run()
+
+    assert summary.ok
+    assert len(summary.scenes) == 3  # 未合并
+    report = json.loads((out / "postprocess_report.json").read_text(encoding="utf-8"))
+    assert report["dry_run"] is True
+    assert report["summary"]["boundaries_merged"] == 2  # 报告里给出“将会合并”的决策
+    assert report["original_scene_count"] == 3

@@ -3,5 +3,20 @@
     "type": "content",
     "threshold": 27.0,
     "min_scene_len_frames": 12
+  },
+  "postprocess": {
+    "merge_enabled": true,
+    "merge_threshold": 100.0,
+    "cross_window": 6,
+    "analysis_scale": 0.5,
+    "merge_max_iterations": 4,
+    "black_enabled": true,
+    "black_max_yavg": 20.0,
+    "black_max_ystd": 8.0,
+    "black_min_pblack": 0.95,
+    "black_pixel_threshold": 32,
+    "black_sample_frames": 8,
+    "black_min_frame_ratio": 0.95,
+    "dry_run": false
   }
 }
