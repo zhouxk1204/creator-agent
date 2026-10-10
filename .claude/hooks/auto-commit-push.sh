@@ -14,10 +14,22 @@ git diff --cached --quiet 2>/dev/null || dirty=1
 
 if [ "$dirty" -eq 1 ]; then
   git add -A 2>/dev/null || exit 0
-  git commit -q -m "chore: auto-commit uncommitted changes on session stop
+
+  # Build a per-commit message from the actual changes: file count, touched
+  # top-level areas, and a (capped) status listing in the body.
+  st="$(git status --short 2>/dev/null)"
+  nfiles=$(printf '%s\n' "$st" | grep -c . || true)
+  areas=$(printf '%s\n' "$st" | sed 's/^...//; s/.* -> //; s/^"//; s/"$//' \
+    | cut -d/ -f1 | sort -u | head -5 | paste -sd, - | sed 's/,/, /g')
+  [ -n "$areas" ] || areas="working tree"
+  body=$(printf '%s\n' "$st" | head -20)
+
+  git commit -q -m "chore: auto-commit session leftovers ($nfiles file(s): $areas)
+
+$body
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>" 2>/dev/null || exit 0
-  echo "[auto-commit-push] committed leftover changes" >&2
+  echo "[auto-commit-push] committed $nfiles leftover file(s): $areas" >&2
 fi
 
 # Push if the local branch is ahead of its upstream (covers manual commits too).
