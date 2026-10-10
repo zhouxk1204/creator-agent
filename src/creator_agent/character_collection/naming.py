@@ -13,7 +13,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_RE_CANDIDATE = re.compile(r"^(?P<episode>.+)_(?P<scene>V\d{3,})_T(?P<ms>\d{6,})_C(?P<idx>\d{2,})$")
+# Scene IDs are usually "V003" (split_scene.py) but other splitters use bare
+# numerics ("0003"); both parse. Episode IDs may contain underscores, so the
+# match is anchored from the right.
+_RE_CANDIDATE = re.compile(r"^(?P<episode>.+)_(?P<scene>V?\d{3,})_T(?P<ms>\d{6,})_C(?P<idx>\d{2,})$")
 
 
 @dataclass(frozen=True)

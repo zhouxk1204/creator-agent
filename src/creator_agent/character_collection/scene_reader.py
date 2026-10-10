@@ -55,6 +55,23 @@ def resolve_video_path(scenes_json: Path, source_name: str, video_override: Path
     raise SceneReaderError(f"找不到故事视频 {source_name}，尝试过:\n  {tried}\n可用 --video 显式指定。")
 
 
+def _parse_source(doc: dict) -> tuple[str, float]:
+    """Return (source video filename, fps declared at source level).
+
+    split_scene.py writes ``"source": "935_1.mp4"`` (v1.0); other splitters
+    write a dict like ``"source": {"file": "test.mp4", "fps": 30.0, ...}``
+    (v1.1). Both are accepted.
+    """
+    source = doc.get("source")
+    if isinstance(source, str) and source:
+        return source, 0.0
+    if isinstance(source, dict):
+        name = source.get("file")
+        if isinstance(name, str) and name:
+            return name, float(source.get("fps") or 0.0)
+    raise SceneReaderError("scenes.json 缺少 source 字段（应为视频文件名字符串或含 file 字段的对象）")
+
+
 def load_episode_scenes(scenes_json: Path, video_override: Path | None = None) -> EpisodeScenes:
     """Parse scenes.json and resolve its story video. Raises SceneReaderError."""
     if not scenes_json.is_file():
@@ -64,30 +81,29 @@ def load_episode_scenes(scenes_json: Path, video_override: Path | None = None) -
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise SceneReaderError(f"scenes.json 解析失败 {scenes_json}: {e}") from e
 
-    source = doc.get("source")
-    if not source:
-        raise SceneReaderError(f"scenes.json 缺少 source 字段: {scenes_json}")
+    source_name, source_fps = _parse_source(doc)
     raw_scenes = doc.get("scenes")
     if not isinstance(raw_scenes, list) or not raw_scenes:
         raise SceneReaderError(f"scenes.json 没有 scenes 列表: {scenes_json}")
 
-    video_path = resolve_video_path(scenes_json, source, video_override)
-    episode_id = Path(source).stem
-    fps = float(doc.get("fps") or 0.0)
+    video_path = resolve_video_path(scenes_json, source_name, video_override)
+    episode_id = Path(source_name).stem
+    fps = float(doc.get("fps") or 0.0) or source_fps
 
     scenes: list[SceneRecord] = []
     for i, s in enumerate(raw_scenes, 1):
         try:
             start = float(s["start"])
             end = float(s["end"])
-            scene_fps = float(s.get("fps") or fps)
+            scene_fps = float(s.get("fps") or 0.0) or fps
         except (KeyError, TypeError, ValueError) as e:
             raise SceneReaderError(f"scenes.json 第 {i} 个分镜字段异常: {s!r} ({e})") from e
         if end <= start:
             raise SceneReaderError(f"scenes.json 第 {i} 个分镜时间区间无效: start={start} end={end}")
         scenes.append(
             SceneRecord(
-                scene_id=str(s.get("id") or f"V{i:03d}"),
+                # v1.0 uses "id" ("V003"); v1.1 uses "scene_id" ("0003").
+                scene_id=str(s.get("id") or s.get("scene_id") or f"V{i:03d}"),
                 index=int(s.get("index", i)),
                 start=start,
                 end=end,
