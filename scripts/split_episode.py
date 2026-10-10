@@ -567,7 +567,13 @@ def main() -> int:
         return 0
 
     if n_ep > 3:
-        print("⚠️ 集数超过 3, 很可能是误检。已跳过切割, 请先 --preview 确认。")
+        # Refusing to cut without evidence is only useful if the user can
+        # inspect the candidates NOW — detection takes minutes, so save the
+        # preview frames here instead of making them re-run with --preview.
+        save_preview(args.video, fps, cards, args.output_dir / "preview")
+        print("⚠️ 集数超过 3, 很可能是误检。已跳过切割。")
+        print(f"   请查看 {args.output_dir / 'preview'}/ 下的候选预览图确认。")
+        print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
         return 1
     cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu)
     print("完成。")
