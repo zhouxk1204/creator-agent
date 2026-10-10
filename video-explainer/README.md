@@ -174,6 +174,85 @@ mean-abs-diff 之和）下有效，改算法必须重新标定。
 合并迭代记录、黑场判定明细，用于复盘。调阈值时建议先 `--dry-run` +
 `--no-export` 看报告，确认无误后再正式跑。
 
+## 6.2 后处理调参方法
+
+### 标准调参流程
+
+```bash
+# 1. dry-run：只做分析和报告，不改分镜结果、不切视频（几十秒跑完）
+python scripts/split_scenes.py input.mp4 --dry-run --no-export --overwrite
+
+# 2. 检查 postprocess_report.json 里的 boundaries 明细（见下）
+
+# 3. 改 config/scene_config.json 的 postprocess 段（或命令行 --merge-threshold），
+#    重复 1~2 直到满意
+
+# 4. 正式跑（去掉 --dry-run --no-export）
+python scripts/split_scenes.py input.mp4 --overwrite
+```
+
+### 怎么读 postprocess_report.json
+
+`boundaries` 数组是逐边界复核明细，每条：
+
+```json
+{ "frame": 10175, "timecode": "00:05:39.167", "min_cross": 217.65, "decision": "keep" }
+```
+
+- `decision: "merge"` = 该边界被撤销、相邻分镜合并；`"keep"` = 保留。
+- 复盘时**按 min_cross 从大到小抽查 merge 条目**：分数越高的合并越可疑
+  （越可能是“同场景不同机位”被误合并）。score < 50 的基本都是闪烁误切，
+  可以放心；80~100 区间建议人工看视频确认。
+- `merge_scenes` 明细也写在 scenes.json 每个分镜的 `merge_history` 里，
+  `boundary_score` 保留了每个幸存边界的分数。
+
+### merge_threshold 怎么调
+
+```text
+merge_threshold 调低 → 合并更保守：误合并减少，但闪烁碎片可能残留
+merge_threshold 调高 → 合并更激进：闪烁碎片清理干净，但可能误合并弱切换
+```
+
+实测参考（哆啦 A 梦 30fps 一集，854x480）：
+
+| min_cross 区间 | 实际含义 | 期望决策 |
+|---|---|---|
+| < 50 | 闪烁/明暗特效误切 | merge |
+| 50 ~ 100 | 快速运动+闪烁混合区 | 多数是误切，建议抽查 |
+| > 170 | 真正的镜头切换 | keep |
+
+默认值 **100** 来自上述间隔（误切最高 ~97，真切最低 ~170）。
+调整步进建议 ±10~20，每调一次用 dry-run 重看报告里决策变化的边界
+（就是 min_cross 落在新旧阈值之间的那些）。
+
+### 什么情况不能靠 merge_threshold 解决
+
+- **漏切的真切点**：后处理只能撤销边界、不能新增边界。如果某处明显该切
+  没切（报告里根本没有这条 boundary），要调检测侧：降低 `detector.threshold`
+  或减小 `min_scene_len_frames`，让 ContentDetector 先提出这个候选边界。
+- **闪烁周期特别长**（明暗交替超过 ±`cross_window` 帧）：边界两侧 6 帧内
+  找不到相近帧，min_cross 会偏高、漏合并。把 `cross_window` 调到 8~10 试试。
+- **`analysis_scale` 不建议改**：改了等于改了 min_cross 的度量口径，
+  `merge_threshold` 的标定值（100）会失效，需要按上面的分布重新标定。
+
+### 黑场参数怎么调
+
+先看 `postprocess_report.json` 的 `black_scenes` 明细（含 mean_yavg /
+mean_ystd / mean_pblack / black_frame_ratio 四个实测值）：
+
+- **暗夜场景被误标 black**：通常是 mean_ystd 偏大或 mean_pblack 不够高。
+  调低 `black_max_ystd`（如 5.0）或调高 `black_min_pblack`（如 0.98）。
+- **黑场漏标**（如黑场带微弱噪点/台标）：放宽 `black_max_yavg`（如 24.0）
+  或调低 `black_min_pblack`。
+- 判黑的分镜依然照常导出，只是 `black: true` 标记，调错了也不会丢失时间轴。
+
+### 已知限制
+
+- 合并是“宁可多合不可错切”的策略：对解说场景，相邻镜头被合并通常无害
+  （Qwen3-VL 分析时长分镜照样能描述），但碎分镜会割裂语义，所以默认阈值偏激进。
+- 黑场标记只看画面，不看音频：黑屏但有台词/音效的片段照常会被标记，
+  下游（字幕匹配）应结合音轨判断如何使用这些分镜。
+
 ## 7. 如何调整 threshold
 
 ```text
@@ -190,6 +269,11 @@ min_scene_len 越大 → 过滤更多短镜头（闪切被合并进相邻分镜�
 
 建议先用 `--no-export` 只检测、检查 `scenes.json` 中的分镜数量和时长分布，
 满意后再去掉 `--no-export` 导出视频。
+
+> **注意**：如果是闪烁特效导致的碎分镜（一堆 0.4~1.4 秒的连续小段），
+> **不要**靠调高 detector `threshold` 解决——闪烁帧的分数（50~104）和真切
+> （170+）重叠，调高会连真切一起漏掉。正确做法是保持 detector 灵敏，
+> 用 6.2 节的后处理边界复核（`merge_threshold`）来合并。
 
 ## 8. 常见问题
 
