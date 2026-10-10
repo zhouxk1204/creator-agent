@@ -73,6 +73,19 @@ src/creator_agent/
 └── cli/            # Typer app
 ```
 
+## Git workflow: auto commit + push
+
+After ANY code/doc modification task completes, Claude must commit and push to
+`origin` without being asked — no Stop hook, Claude does it directly.
+
+- Write a **meaningful, descriptive commit message** each time (what & why,
+  referencing the feature/fix — never a generic "auto-commit" placeholder).
+- `git add -A` the task's changes, commit, then `git push`. Both steps, always —
+  the user pulls the code on another machine to test.
+- If the working tree has unrelated pre-existing changes, commit only what's
+  relevant (or call it out) rather than silently sweeping everything in.
+- End commit messages with `Co-Authored-By: Claude Code <noreply@anthropic.com>`.
+
 ## Phase boundaries
 
 **Phase 1 (done)**: collect → download, scheduler + CLI. Terminal status for sync is `VIDEO_DOWNLOADED` (`run` / `transcribe` go further to ASR).
