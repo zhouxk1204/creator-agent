@@ -30,3 +30,12 @@ Thumbs.db
 # Episode splitter scratch dirs (scripts/split_episode.py)
 /input/
 /output/
+
+# Character material library: images are large/local-only; manifests (JSONL
+# index) and the directory skeleton stay in git.
+/character_library/inbox/
+/character_library/previews/
+/character_library/analysis/
+/character_library/characters/*/*.jpg
+/character_library/characters/*/*.jpeg
+/character_library/characters/*/*.png
