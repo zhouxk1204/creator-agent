@@ -38,6 +38,7 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
 Usage:
     uv run python scripts/split_episode.py input/935.mp4 --preview   # detect + report + images only
     uv run python scripts/split_episode.py input/935.mp4             # detect + cut + write 935_split.json
+    uv run python scripts/split_episode.py input/935.mp4 --confirm   # detect + show contact sheet, y/n -> cut
     uv run python scripts/split_episode.py input/935.mp4 -o output --episodes 2 --copy
 
 First run on a new source should always be --preview: it writes
@@ -50,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -517,6 +519,14 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
     print(f"预览图已写入 {preview_dir}/ ({len(thumbs)} 张候选 + contact_sheet.jpg)")
 
 
+def _open_in_shell(path: Path) -> None:
+    """Open a file/dir with the Windows shell (image viewer / Explorer)."""
+    try:
+        os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only tool
+    except Exception as e:
+        print(f"  无法自动打开 {path}: {e}")
+
+
 def find_ffmpeg() -> str | None:
     """ffmpeg on PATH, else the one configured for ASR in settings.yaml."""
     exe = shutil.which("ffmpeg")
@@ -629,6 +639,11 @@ def main() -> int:
         action="store_true",
         help="关闭大标题文字校验 (默认丢弃没有标题文字的静态候选; --preview 下始终只标注不丢弃)",
     )
+    p.add_argument(
+        "--confirm",
+        action="store_true",
+        help="切割前打开标题卡联系表并在控制台等待 y/n 确认 (取消时退出码 2 并打开预览目录)",
+    )
     args = p.parse_args()
 
     if not args.video.is_file():
@@ -722,6 +737,20 @@ def main() -> int:
         print(f"   请查看 {args.output_dir / 'preview'}/ 下的候选预览图确认。")
         print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
         return 1
+
+    if args.confirm:
+        preview_dir = args.output_dir / "preview"
+        save_preview(args.video, fps, cards, preview_dir)
+        _open_in_shell(preview_dir / "contact_sheet.jpg")
+        try:
+            ans = input("\n按以上方案分割? [y/N]: ")
+        except EOFError:
+            ans = ""
+        if ans.strip().lower() not in ("y", "yes"):
+            _open_in_shell(preview_dir)
+            print(f"已取消。候选预览图在 {preview_dir}/，调整后重跑即可。")
+            return 2
+
     cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu)
     print("完成。")
     return 0

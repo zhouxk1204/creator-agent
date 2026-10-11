@@ -11,17 +11,19 @@ if errorlevel 1 (
 call .venv\Scripts\activate.bat >nul 2>&1
 
 rem ---------------------------------------------------------------------------
-rem Episode splitter: detect title cards -> cut directly (no confirmation).
+rem Episode splitter: detect title cards -> preview -> y/n confirm -> cut.
 rem
 rem   03_split_episode.bat                          prompts for the video path
 rem   03_split_episode.bat C:\test\935.mp4          path given directly (or drag & drop)
 rem   03_split_episode.bat C:\test                  a directory: uses the FIRST video in it
 rem   03_split_episode.bat C:\test --copy           extra args are passed through
 rem
-rem Flow: split_episode.py detects title cards and cuts in one pass. Story #1
-rem starts at the FIRST title card (the OP/intro before it is discarded;
-rem --keep-intro keeps it). Output files are named from the episode titles
-rem embedded in the source filename's Japanese corner brackets
+rem Flow: split_episode.py detects title cards, opens the contact sheet
+rem (output\preview\contact_sheet.jpg) and waits for console confirmation:
+rem   y = cut immediately (no re-detection), N = open output\preview\ and stop.
+rem Story #1 starts at the FIRST title card (the OP/intro before it is
+rem discarded; --keep-intro keeps it). Output files are named from the episode
+rem titles embedded in the source filename's Japanese corner brackets
 rem ( doraemon [A][B].mp4 -> A.mp4 / B.mp4 ), plus <stem>_split.json.
 rem If detection looks wrong (>3 episodes) the script refuses to cut and
 rem auto-saves preview frames to output\preview\; inspect them, then rerun
@@ -84,13 +86,17 @@ if not exist "%VIDEO%" (
 echo.
 echo ========================================
 echo   Splitting: %VIDEO%
+echo   (contact sheet opens first; answer y to cut)
 echo ========================================
 echo.
-"%PY%" scripts\split_episode.py "%VIDEO%"%EXTRA%
+"%PY%" scripts\split_episode.py "%VIDEO%" --confirm %EXTRA%
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
-if not "%RC%"=="0" (
+if "%RC%"=="2" (
+    echo  Cancelled - preview folder opened. Adjust and re-run when ready.
+)
+if not "%RC%"=="0" if not "%RC%"=="2" (
     echo  FAILED ^(exit code %RC%^) - see the error above.
     echo  If detection found too few cards, try:
     echo    03_split_episode.bat "%VIDEO%" --sim 0.997
