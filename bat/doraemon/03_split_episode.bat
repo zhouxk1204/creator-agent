@@ -21,6 +21,9 @@ rem
 rem Flow: split_episode.py detects title cards, opens the contact sheet
 rem (output\preview\contact_sheet.jpg) and waits for console confirmation:
 rem   y = cut immediately (no re-detection), N = open output\preview\ and stop.
+rem Episode ends snap to the nearest black frame (before the next card / in
+rem the last 3 min); end_XX.jpg previews in output\preview\ show the final
+rem frame of each story.
 rem Story #1 starts at the FIRST title card (the OP/intro before it is
 rem discarded; --keep-intro keeps it). Output files are named from the episode
 rem titles embedded in the source filename's Japanese corner brackets

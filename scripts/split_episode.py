@@ -28,7 +28,12 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
   8. Output names come from the episode titles embedded in the filename:
      「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
      when the title count doesn't match the episode count.
-  9. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
+  9. Snap each story's END to the nearest black frame: for non-last stories
+     the last black run (>=0.15s) in the 40s before the next title card; for
+     the last story the last black run in the final 180s. If no black run is
+     found the original boundary is kept. end_XX.jpg previews are written
+     alongside the candidate contact sheet.
+ 10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
      verified with a tiny probe encode — else falls back to libx264 (--cpu
@@ -86,6 +91,10 @@ TEXT_DENSITY_MIN = 0.055  # mean interior stroke density of a real text line
 TEXT_CY_MAX = 0.45  # title text sits in the upper part of the card
 TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
+# --- episode end snapping (step 9) -------------------------------------------
+END_BLACK_WINDOW = 40.0  # non-last stories: search black runs this far before the next card
+END_BLACK_WINDOW_LAST = 180.0  # last story: search this tail window
+END_BLACK_MIN_RUN = 0.15  # ignore sub-0.15s black flickers
 
 
 @dataclass
@@ -412,6 +421,55 @@ def has_title_text(frame: np.ndarray) -> bool:
     return False
 
 
+def find_black_run_end(cap: cv2.VideoCapture, fps: float, t_end: float, window: float) -> float | None:
+    """Start time of the LAST black run (>=END_BLACK_MIN_RUN) in [t_end-window, t_end].
+
+    A story's true content ends where the black gap before the next title
+    card (or the video's trailing black) begins; the run start is the cut
+    point, so the black itself is excluded.
+    """
+    f1 = int(t_end * fps)
+    f0 = max(0, int((t_end - window) * fps))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
+    last_start: int | None = None
+    run_start: int | None = None
+    f = f0
+    while f <= f1:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        sig = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), SIG_SIZE, interpolation=cv2.INTER_AREA)
+        if float(sig.mean()) < BLACK_MEAN:
+            if run_start is None:
+                run_start = f
+        else:
+            if run_start is not None and (f - run_start) / fps >= END_BLACK_MIN_RUN:
+                last_start = run_start
+            run_start = None
+        f += 1
+    if run_start is not None and (f - run_start) / fps >= END_BLACK_MIN_RUN:
+        last_start = run_start
+    return (last_start / fps) if last_start is not None else None
+
+
+def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
+    """Snap each episode's end to the nearest black frame (step 9). Mutates ``episodes``."""
+    cap = open_capture(video)
+    try:
+        for i, ep in enumerate(episodes):
+            window = END_BLACK_WINDOW if i < len(episodes) - 1 else END_BLACK_WINDOW_LAST
+            black = find_black_run_end(cap, fps, ep["end"], window)
+            if black is None:
+                print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
+            elif black <= ep["start"] + 1.0:
+                print(f"  {ep['name']} 黑帧异常(早于故事起点)，保持原结尾 {fmt_time(ep['end'])}")
+            elif black < ep["end"] - 0.05:
+                print(f"  结尾黑帧对齐 {ep['name']}: {fmt_time(ep['end'])} -> {fmt_time(black)}")
+                ep["end"] = round(black, 3)
+    finally:
+        cap.release()
+
+
 def detect_title_cards(
     video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float, text_filter: bool = True
 ):
@@ -517,6 +575,20 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
         rows = [np.hstack(grid[r * cols : (r + 1) * cols]) for r in range(rows_n)]
         cv2.imwrite(str(preview_dir / "contact_sheet.jpg"), np.vstack(rows))
     print(f"预览图已写入 {preview_dir}/ ({len(thumbs)} 张候选 + contact_sheet.jpg)")
+
+
+def save_end_previews(video: Path, fps: float, episodes: list[dict], preview_dir: Path) -> None:
+    """Dump the frame 0.5s before each episode's (black-snapped) end so the
+    user can eyeball where each story will actually stop."""
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    cap = open_capture(video)
+    try:
+        for i, ep in enumerate(episodes, 1):
+            ok, frame = read_frame_at(cap, max(0, int((ep["end"] - 0.5) * fps)))
+            if ok and frame is not None:
+                cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
+    finally:
+        cap.release()
 
 
 def _open_in_shell(path: Path) -> None:
@@ -691,6 +763,9 @@ def main() -> int:
     names = episode_names(args.video.stem, n_ep)
     episodes = [{"name": names[i], "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)} for i in range(n_ep)]
 
+    print("\n结尾黑帧对齐:")
+    adjust_episode_ends(args.video, fps, episodes)
+
     print("\n建议分割方案:")
     for ep in episodes:
         print(f"  {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
@@ -701,6 +776,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.preview:
         save_preview(args.video, fps, cards, args.output_dir / "preview")
+        save_end_previews(args.video, fps, episodes, args.output_dir / "preview")
 
     result = {
         "source": args.video.name,
@@ -733,6 +809,7 @@ def main() -> int:
         # inspect the candidates NOW — detection takes minutes, so save the
         # preview frames here instead of making them re-run with --preview.
         save_preview(args.video, fps, cards, args.output_dir / "preview")
+        save_end_previews(args.video, fps, episodes, args.output_dir / "preview")
         print("⚠️ 集数超过 3, 很可能是误检。已跳过切割。")
         print(f"   请查看 {args.output_dir / 'preview'}/ 下的候选预览图确认。")
         print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
@@ -741,6 +818,7 @@ def main() -> int:
     if args.confirm:
         preview_dir = args.output_dir / "preview"
         save_preview(args.video, fps, cards, preview_dir)
+        save_end_previews(args.video, fps, episodes, preview_dir)
         _open_in_shell(preview_dir / "contact_sheet.jpg")
         try:
             ans = input("\n按以上方案分割? [y/N]: ")
