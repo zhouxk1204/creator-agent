@@ -26,15 +26,17 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      story #1 begins at its card, and the OP/intro before it is discarded
      (--keep-intro keeps the old behavior of starting story #1 at 0:00).
   8. Output names come from the episode titles embedded in the filename:
-     「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
+     「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>_N
      when the title count doesn't match the episode count.
   9. Snap each story's END to the nearest black frame: for non-last stories
      the last black run (>=0.15s) in the [card-60s, card-20s] window before
      the next title card — a black run closer to the card is its transition-
      in, not the story end (cutting there keeps sponsor/eyecatch junk); for
-     the last story the last black run in the final 180s. If no black run is
-     found the original boundary is kept. END rows in the contact sheet show
-     the frame right before the aligned black run (end_XX.jpg too).
+     the last story the last black run 2~3 minutes before the video ends —
+     the trailing black is the tail transition, and ED/preview interstitials
+     after the story are excluded. If no black run is found the original
+     boundary is kept. END rows in the contact sheet show the last visible
+     frame before the aligned black run (end_XX.jpg too).
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -93,6 +95,7 @@ TEXT_DENSITY_MIN = 0.055  # mean interior stroke density of a real text line
 TEXT_CY_MAX = 0.45  # title text sits in the upper part of the card
 TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
+
 # --- episode end snapping (step 9) -------------------------------------------
 # Non-last stories: the end black run must sit in [card-60s, card-20s].
 # A black run CLOSER than 20s to the next title card is the card's own
@@ -100,7 +103,11 @@ TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # interstitials); further than 60s is mid-story flicker.
 END_BLACK_BEFORE_CARD_MIN = 20.0
 END_BLACK_BEFORE_CARD_MAX = 60.0
-END_BLACK_WINDOW_LAST = 180.0  # last story: search this tail window
+# Last story: same idea against the video tail — the end black run must sit
+# 2~3 minutes before the video ends. The trailing seconds of black are the
+# transition into the tail; ED/preview interstitials after the story are cut.
+END_BLACK_BEFORE_END_MIN = 120.0
+END_BLACK_BEFORE_END_MAX = 180.0
 END_BLACK_MIN_RUN = 0.15  # ignore sub-0.15s black flickers
 # End preview frame (contact sheet END rows / end_XX.jpg): the literal frame
 # before the black run is often a dark fade-out tail (mean barely above the
@@ -476,7 +483,7 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
             if i < len(episodes) - 1:
                 t0, t1 = ep["end"] - END_BLACK_BEFORE_CARD_MAX, ep["end"] - END_BLACK_BEFORE_CARD_MIN
             else:
-                t0, t1 = ep["end"] - END_BLACK_WINDOW_LAST, ep["end"]
+                t0, t1 = ep["end"] - END_BLACK_BEFORE_END_MAX, ep["end"] - END_BLACK_BEFORE_END_MIN
             black_f = find_black_run_end(cap, fps, t0, t1)
             if black_f is None:
                 print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
@@ -569,8 +576,8 @@ def episode_names(stem: str, n: int) -> list[str]:
     if len(titles) == n:
         return [re.sub(r'[<>:"/\\|?*]', "_", t).strip() for t in titles]
     if titles:
-        print(f"⚠️ 文件名含 {len(titles)} 个「标题」但切成 {n} 集，回退为 {stem}#N 命名", file=sys.stderr)
-    return [f"{stem}#{i + 1}" for i in range(n)]
+        print(f"⚠️ 文件名含 {len(titles)} 个「标题」但切成 {n} 集，回退为 {stem}_N 命名", file=sys.stderr)
+    return [f"{stem}_{i + 1}" for i in range(n)]
 
 
 def _labelled_thumb(frame: np.ndarray, label: str) -> np.ndarray:
