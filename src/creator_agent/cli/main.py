@@ -515,24 +515,35 @@ def ja_asr(
         typer.echo(f"No new videos to transcribe ({len(skipped)} already have .srt).")
 
     if translate or burn:
+        from creator_agent.translate.server import ensure_server, stop_server
         from creator_agent.translate.translator import process_translations
 
-        # Newly transcribed this run -> (re)translate their fresh .srt.
-        if ok_videos:
-            typer.echo(f"Translating {len(ok_videos)} new subtitle file(s) via {settings.translate.model} ...")
-            tdone, tfailed = process_translations(ok_videos, settings.translate, out_dir=out, burn=burn, force=True)
-            typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
-            for name, err in tfailed:
-                typer.echo(f"  {name}: {err}")
-        # Already-done videos: translate any still missing a .zh.srt. Existing
-        # Chinese subs are left untouched (force=False), so hand-edits survive.
-        if skipped:
-            typer.echo(f"Translating existing subtitle file(s) missing Chinese via {settings.translate.model} ...")
-            tdone, tfailed = process_translations(skipped, settings.translate, out_dir=out, burn=burn, force=False)
-            if tdone or tfailed:
+        # The ASR worker subprocess has exited by now, so its RAM/VRAM is free.
+        # Start the translation LLM only now (never during ASR — llama-server +
+        # torch/CUDA + vocal separator + ASR model together exceed the Windows
+        # commit limit and the ASR model load dies with os error 1455).
+        server_proc = ensure_server(settings.translate.base_url, echo=typer.echo)
+        try:
+            # Newly transcribed this run -> (re)translate their fresh .srt.
+            if ok_videos:
+                typer.echo(f"Translating {len(ok_videos)} new subtitle file(s) via {settings.translate.model} ...")
+                tdone, tfailed = process_translations(ok_videos, settings.translate, out_dir=out, burn=burn, force=True)
                 typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
-            for name, err in tfailed:
-                typer.echo(f"  {name}: {err}")
+                for name, err in tfailed:
+                    typer.echo(f"  {name}: {err}")
+            # Already-done videos: translate any still missing a .zh.srt. Existing
+            # Chinese subs are left untouched (force=False), so hand-edits survive.
+            if skipped:
+                typer.echo(f"Translating existing subtitle file(s) missing Chinese via {settings.translate.model} ...")
+                tdone, tfailed = process_translations(skipped, settings.translate, out_dir=out, burn=burn, force=False)
+                if tdone or tfailed:
+                    typer.echo(f"Translate done: {tdone}, {len(tfailed)} failed.")
+                for name, err in tfailed:
+                    typer.echo(f"  {name}: {err}")
+        finally:
+            if server_proc is not None:
+                typer.echo("[server] stopping translation LLM to free VRAM/RAM...")
+                stop_server(server_proc)
 
     # Mirror generated subtitle files into the Obsidian vault
     # (<project_dir>/episodes/<stem>/). No-op for files already exported
@@ -591,7 +602,15 @@ def translate_cmd(
 
     out = Path(out_dir) if out_dir else (Path(settings.ja_asr.out_dir) if settings.ja_asr.out_dir else None)
     typer.echo(f"Translating {len(targets)} file(s) via {ts.model} @ {ts.base_url} ...")
-    done, failed = process_translations(targets, ts, out_dir=out, burn=burn, force=force)
+    from creator_agent.translate.server import ensure_server, stop_server
+
+    server_proc = ensure_server(ts.base_url, echo=typer.echo)
+    try:
+        done, failed = process_translations(targets, ts, out_dir=out, burn=burn, force=force)
+    finally:
+        if server_proc is not None:
+            typer.echo("[server] stopping translation LLM to free VRAM/RAM...")
+            stop_server(server_proc)
     typer.echo(f"Done: {done} translated, {len(failed)} failed.")
     for name, err in failed:
         typer.echo(f"  {name}: {err}")
