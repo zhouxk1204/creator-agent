@@ -29,6 +29,11 @@ _DEFAULT_ALIAS = "qwen3.5-9b"
 
 _SW_MINIMIZE = 6
 
+# urllib honors HTTP_PROXY / ALL_PROXY from the environment; a system/Clash proxy
+# would answer a bogus status (e.g. 502) for the loopback server, so probe with
+# proxies explicitly disabled — same reason llm.chat() passes trust_env=False.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def _root_url(base_url: str) -> str:
     # base_url is the OpenAI-compatible endpoint (.../v1); llama-server's
@@ -47,7 +52,7 @@ def server_ready(base_url: str, timeout: float = _HEALTH_TIMEOUT) -> bool:
     Servers without /health (e.g. Ollama) fall back to the models listing.
     """
     try:
-        with urllib.request.urlopen(_root_url(base_url) + "/health", timeout=timeout) as resp:
+        with _NO_PROXY_OPENER.open(_root_url(base_url) + "/health", timeout=timeout) as resp:
             return resp.status == 200
     except urllib.error.HTTPError as exc:
         if exc.code != 404:
@@ -56,7 +61,7 @@ def server_ready(base_url: str, timeout: float = _HEALTH_TIMEOUT) -> bool:
         return False
     # No /health endpoint: a 200 on the models listing counts as ready.
     try:
-        with urllib.request.urlopen(base_url.rstrip("/") + "/models", timeout=timeout) as resp:
+        with _NO_PROXY_OPENER.open(base_url.rstrip("/") + "/models", timeout=timeout) as resp:
             return resp.status == 200
     except (urllib.error.URLError, OSError):
         return False
