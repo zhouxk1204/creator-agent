@@ -95,6 +95,9 @@ if not "%RC%"=="0" (
     echo  If detection found too few cards, try:
     echo    03_split_episode.bat "%VIDEO%" --sim 0.997
     echo    03_split_episode.bat "%VIDEO%" --min-duration 4
+    echo  Cards without big title text are dropped by default; if a real
+    echo  title card was wrongly dropped, disable the check:
+    echo    03_split_episode.bat "%VIDEO%" --no-text-filter
     echo  If it refused to cut ^(too many episodes^), preview frames were
     echo  saved automatically - check them, then rerun with --episodes N:
     echo    03_split_episode.bat "%VIDEO%" --episodes 3

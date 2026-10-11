@@ -16,13 +16,19 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
   4. Check the run is entered/exited via an abrupt scene change.
   5. Refine each surviving run frame-by-frame (+-2s padding): the card's exact
      first/last frame is the strongest discontinuity (hard cut) on each side.
-  6. Split points = the START of every title card INCLUDING the first one:
+  6. Verify the card actually shows BIG TITLE TEXT (no OCR): on the card's
+     middle frame, MSER components of character size are clustered into
+     baseline-aligned lines; a title line is >=4 same-size stroke-dense
+     components in the upper part of the frame. Static shots without title
+     text (post-story bumpers, sponsor stills) are dropped here; in
+     --preview they are kept but labelled NOTEXT. --no-text-filter disables.
+  7. Split points = the START of every title card INCLUDING the first one:
      story #1 begins at its card, and the OP/intro before it is discarded
      (--keep-intro keeps the old behavior of starting story #1 at 0:00).
-  7. Output names come from the episode titles embedded in the filename:
+  8. Output names come from the episode titles embedded in the filename:
      「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
      when the title count doesn't match the episode count.
-  8. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
+  9. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
      verified with a tiny probe encode — else falls back to libx264 (--cpu
@@ -70,6 +76,14 @@ CUT_SIM = 0.9  # adjacent-frame sim below this at the boundary = hard scene cut
 BLACK_MEAN = 12.0  # below -> black screen, reject
 WHITE_MEAN = 243.0  # above -> washed-out solid, reject
 SOLID_STD = 12.0  # below -> near-solid color frame, reject
+# --- title-text verification (step 6; all fractions of frame height) --------
+TEXT_CHAR_H_MIN = 0.03  # MSER component height range for "character" candidates
+TEXT_CHAR_H_MAX = 0.25
+TEXT_LINE_MIN = 4  # a title line needs at least this many same-size components
+TEXT_DENSITY_MIN = 0.055  # mean interior stroke density of a real text line
+TEXT_CY_MAX = 0.45  # title text sits in the upper part of the card
+TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
+# ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
 
 
 @dataclass
@@ -91,6 +105,7 @@ class Candidate:
     abrupt_start: bool
     abrupt_end: bool
     ref_sig: np.ndarray = field(repr=False)  # signature at card middle
+    has_title_text: bool = True  # step-6 check; default keeps hand-built cards
 
     @property
     def score(self) -> float:
@@ -122,9 +137,7 @@ def open_capture(video: Path) -> cv2.VideoCapture:
     fall back to plain software decoding.
     """
     try:
-        cap = cv2.VideoCapture(
-            str(video), cv2.CAP_FFMPEG, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY]
-        )
+        cap = cv2.VideoCapture(str(video), cv2.CAP_FFMPEG, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
         if cap.isOpened() and cap.grab():
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             return cap
@@ -288,7 +301,118 @@ def refine_candidate(
     )
 
 
-def detect_title_cards(video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float):
+def _mser_char_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Character-size MSER components (both polarities), IoU-deduped."""
+    h, w = gray.shape
+    boxes = []
+    for g in (gray, 255 - gray):
+        mser = cv2.MSER_create(delta=5, min_area=int(gray.size * 0.00008), max_area=int(gray.size * 0.02))
+        _, bbs = mser.detectRegions(g)
+        boxes.extend(map(tuple, bbs))
+    boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
+    kept: list[tuple[int, int, int, int]] = []
+    for b in boxes:
+        x, y, bw, bh = b
+        if not (TEXT_CHAR_H_MIN <= bh / h <= TEXT_CHAR_H_MAX and 0.12 <= bw / bh <= 1.5):
+            continue
+        if any(
+            (max(0, min(x + bw, X + W) - max(x, X)) * max(0, min(y + bh, Y + H) - max(y, Y)))
+            > 0.65 * min(bw * bh, W * H)
+            for (X, Y, W, H) in kept
+        ):
+            continue
+        kept.append(b)
+    return kept
+
+
+def _baseline_lines(boxes: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, int, int]]]:
+    """Cluster char boxes into baseline-aligned lines (union-find).
+
+    Text line = >=TEXT_LINE_MIN components of similar height whose y-ranges
+    overlap, centers fit one baseline, and x-gaps stay small. Background junk
+    (foliage, character art) is random in size/position and fails this.
+    """
+    n = len(boxes)
+    parent = list(range(n))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for i in range(n):
+        xi, yi, wi, hi = boxes[i]
+        for j in range(i + 1, n):
+            xj, yj, wj, hj = boxes[j]
+            if abs(hi - hj) > 0.35 * min(hi, hj):
+                continue
+            if min(yi + hi, yj + hj) - max(yi, yj) < 0.45 * min(hi, hj):
+                continue
+            parent[find(i)] = find(j)
+
+    groups: dict[int, list] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(boxes[i])
+
+    lines: list[list[tuple[int, int, int, int]]] = []
+    for g in groups.values():
+        if len(g) < TEXT_LINE_MIN:
+            continue
+        g.sort(key=lambda b: b[0])
+        med_h = float(np.median([b[3] for b in g]))
+        med_w = float(np.median([b[2] for b in g]))
+        if np.array([b[1] + b[3] / 2 for b in g]).std() > 0.55 * med_h:
+            continue
+        seg = [g[0]]
+        for prev, b in zip(g, g[1:]):
+            if b[0] - (prev[0] + prev[2]) > 2.5 * med_w:
+                if len(seg) >= TEXT_LINE_MIN:
+                    lines.append(seg)
+                seg = [b]
+            else:
+                seg.append(b)
+        if len(seg) >= TEXT_LINE_MIN:
+            lines.append(seg)
+    return lines
+
+
+def _interior_stroke_density(edges: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Edge density inside a box EXCLUDING a boundary ring.
+
+    Text strokes criss-cross the character interior; a blob's outline only
+    lives at its boundary, so blob interiors are nearly edge-free.
+    """
+    x, y, w, h = box
+    r = int(min(w, h) * 0.18)
+    xi0, yi0, xi1, yi1 = x + r, y + r, x + w - r, y + h - r
+    if xi1 <= xi0 or yi1 <= yi0:
+        return 0.0
+    roi = edges[yi0:yi1, xi0:xi1]
+    return float(np.count_nonzero(roi)) / roi.size
+
+
+def has_title_text(frame: np.ndarray) -> bool:
+    """True if the frame shows a line of BIG TITLE TEXT (see docstring step 6)."""
+    h = frame.shape[0]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 60, 160)
+    for line in _baseline_lines(_mser_char_boxes(gray)):
+        cy = float(np.mean([b[1] + b[3] / 2 for b in line])) / h
+        if cy > TEXT_CY_MAX:
+            continue
+        med_h = float(np.median([b[3] for b in line])) / h
+        if med_h < TEXT_LINE_H_MIN:
+            continue
+        density = float(np.mean([_interior_stroke_density(edges, b) for b in line]))
+        if density >= TEXT_DENSITY_MIN:
+            return True
+    return False
+
+
+def detect_title_cards(
+    video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float, text_filter: bool = True
+):
     cap = open_capture(video)
     if not cap.isOpened():
         raise SystemExit(f"无法打开视频: {video}")
@@ -312,6 +436,14 @@ def detect_title_cards(video: Path, interval: float, anchor_sim: float, min_dura
         if cand is None:
             print(f"  精修失败(边界异常) {fmt_time(samples[a].t)} - {fmt_time(samples[b].t)}")
             continue
+        ok, frame = read_frame_at(cap, int((cand.start + cand.end) / 2 * fps))
+        cand.has_title_text = bool(ok and frame is not None and has_title_text(frame))
+        if not cand.has_title_text:
+            print(f"  无大标题文字 {fmt_time(cand.start)} - {fmt_time(cand.end)}", end="")
+            if text_filter:
+                print(" -> 丢弃 (--no-text-filter 可关闭)")
+                continue
+            print(" -> 保留 (text_filter off)")
         cards.append(cand)
 
     # Merge candidates that refined into overlapping regions (same card found twice)
@@ -370,7 +502,7 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
         out = preview_dir / f"candidate_{i:02d}.jpg"
         cv2.imwrite(str(out), frame)
         thumb = cv2.resize(frame, (320, 180))
-        label = f"#{i} {fmt_time(c.start)}-{fmt_time(c.end)} ({c.duration:.2f}s)"
+        label = f"#{i} {fmt_time(c.start)}-{fmt_time(c.end)} ({c.duration:.2f}s){'' if c.has_title_text else ' NOTEXT'}"
         bar = np.full((28, 320, 3), 32, np.uint8)
         cv2.putText(bar, label, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         thumbs.append(np.vstack([thumb, bar]))
@@ -492,12 +624,22 @@ def main() -> int:
     p.add_argument("--copy", action="store_true", help="ffmpeg 流拷贝切割 (快, 但按关键帧对齐, 不精确)")
     p.add_argument("--cpu", action="store_true", help="强制 CPU (libx264) 重编码切割, 不尝试 GPU 编码器")
     p.add_argument("--keep-intro", action="store_true", help="第一集从 0:00 开始 (保留第一个标题卡前的 OP/引子)")
+    p.add_argument(
+        "--no-text-filter",
+        action="store_true",
+        help="关闭大标题文字校验 (默认丢弃没有标题文字的静态候选; --preview 下始终只标注不丢弃)",
+    )
     args = p.parse_args()
 
     if not args.video.is_file():
         raise SystemExit(f"文件不存在: {args.video}")
 
-    fps, duration, cards = detect_title_cards(args.video, args.interval, args.sim, args.min_duration, args.pad)
+    # Preview keeps NOTEXT candidates (labelled) so nothing is hidden; cut
+    # mode drops them unless --no-text-filter.
+    text_filter = not args.no_text_filter and not args.preview
+    fps, duration, cards = detect_title_cards(
+        args.video, args.interval, args.sim, args.min_duration, args.pad, text_filter=text_filter
+    )
 
     print("\n检测到候选:")
     for i, c in enumerate(cards, 1):
@@ -509,10 +651,14 @@ def main() -> int:
         print(f"\n[{i}] {fmt_time(c.start)} - {fmt_time(c.end)}")
         print(f"    相似度: {c.similarity}")
         print(f"    持续: {c.duration:.3f}s   {' / '.join(flags)}")
+        if not c.has_title_text:
+            print("    ⚠️ 未检测到大标题文字")
 
     if not cards:
         print("\n⚠️ 没有检测到标题卡, 无法分割。可降低 --sim / --min-duration 后用 --preview 重试。")
         print("   例如: --sim 0.997 或 --min-duration 4")
+        if text_filter:
+            print("   若候选都因无大标题文字被丢弃，可用 --no-text-filter 关闭该校验再试。")
         return 1
 
     # Default: every card opens a new story, story #1 starts at the first card
@@ -554,6 +700,7 @@ def main() -> int:
                 "similarity": c.similarity,
                 "abrupt_start": c.abrupt_start,
                 "abrupt_end": c.abrupt_end,
+                "has_title_text": c.has_title_text,
             }
             for c in cards
         ],
