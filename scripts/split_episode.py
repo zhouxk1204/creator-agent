@@ -29,10 +29,12 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>#N
      when the title count doesn't match the episode count.
   9. Snap each story's END to the nearest black frame: for non-last stories
-     the last black run (>=0.15s) in the 40s before the next title card; for
+     the last black run (>=0.15s) in the [card-60s, card-20s] window before
+     the next title card — a black run closer to the card is its transition-
+     in, not the story end (cutting there keeps sponsor/eyecatch junk); for
      the last story the last black run in the final 180s. If no black run is
-     found the original boundary is kept. end_XX.jpg previews are written
-     alongside the candidate contact sheet.
+     found the original boundary is kept. END rows in the contact sheet show
+     the frame right before the aligned black run (end_XX.jpg too).
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -92,9 +94,20 @@ TEXT_CY_MAX = 0.45  # title text sits in the upper part of the card
 TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
 # --- episode end snapping (step 9) -------------------------------------------
-END_BLACK_WINDOW = 40.0  # non-last stories: search black runs this far before the next card
+# Non-last stories: the end black run must sit in [card-60s, card-20s].
+# A black run CLOSER than 20s to the next title card is the card's own
+# transition-in, not the story end (cutting there keeps sponsor/eyecatch
+# interstitials); further than 60s is mid-story flicker.
+END_BLACK_BEFORE_CARD_MIN = 20.0
+END_BLACK_BEFORE_CARD_MAX = 60.0
 END_BLACK_WINDOW_LAST = 180.0  # last story: search this tail window
 END_BLACK_MIN_RUN = 0.15  # ignore sub-0.15s black flickers
+# End preview frame (contact sheet END rows / end_XX.jpg): the literal frame
+# before the black run is often a dark fade-out tail (mean barely above the
+# black threshold), which is uninformative to eyeball. Walk back up to 2s to
+# the last clearly visible content frame instead. The CUT point is unaffected.
+END_PREVIEW_MIN_MEAN = 35.0
+END_PREVIEW_MAX_BACKTRACK = 2.0
 
 
 @dataclass
@@ -421,16 +434,16 @@ def has_title_text(frame: np.ndarray) -> bool:
     return False
 
 
-def find_black_run_end(cap: cv2.VideoCapture, fps: float, t_end: float, window: float) -> int | None:
+def find_black_run_end(cap: cv2.VideoCapture, fps: float, t0: float, t1: float) -> int | None:
     """Frame index of the LAST black run's first frame (>=END_BLACK_MIN_RUN)
-    in [t_end-window, t_end].
+    in the window [t0, t1].
 
-    A story's true content ends where the black gap before the next title
-    card (or the video's trailing black) begins; the run start is the cut
-    point, so the black itself is excluded.
+    A story's true content ends where the black gap before the interstitial
+    (or the video's trailing black) begins; the run start is the cut point,
+    so the black itself is excluded.
     """
-    f1 = int(t_end * fps)
-    f0 = max(0, int((t_end - window) * fps))
+    f1 = int(t1 * fps)
+    f0 = max(0, int(t0 * fps))
     cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
     last_start: int | None = None
     run_start: int | None = None
@@ -460,8 +473,11 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
     cap = open_capture(video)
     try:
         for i, ep in enumerate(episodes):
-            window = END_BLACK_WINDOW if i < len(episodes) - 1 else END_BLACK_WINDOW_LAST
-            black_f = find_black_run_end(cap, fps, ep["end"], window)
+            if i < len(episodes) - 1:
+                t0, t1 = ep["end"] - END_BLACK_BEFORE_CARD_MAX, ep["end"] - END_BLACK_BEFORE_CARD_MIN
+            else:
+                t0, t1 = ep["end"] - END_BLACK_WINDOW_LAST, ep["end"]
+            black_f = find_black_run_end(cap, fps, t0, t1)
             if black_f is None:
                 print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
                 continue
@@ -564,6 +580,32 @@ def _labelled_thumb(frame: np.ndarray, label: str) -> np.ndarray:
     return np.vstack([thumb, bar])
 
 
+def _end_preview_frame(cap: cv2.VideoCapture, fps: float, frame_no: int) -> np.ndarray | None:
+    """Preview image for an episode end: the last clearly visible content
+    frame at or before ``frame_no`` (the frame right before the black run).
+
+    Stories often FADE to black, so the literal frame before the run is a
+    near-black fade tail; walk back up to END_PREVIEW_MAX_BACKTRACK seconds
+    for the last frame at END_PREVIEW_MIN_MEAN or brighter. Falls back to the
+    literal frame if everything nearby is dark.
+    """
+    f0 = max(0, frame_no - int(END_PREVIEW_MAX_BACKTRACK * fps))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
+    best: np.ndarray | None = None
+    for _f in range(f0, frame_no + 1):
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        sig = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), SIG_SIZE, interpolation=cv2.INTER_AREA)
+        if float(sig.mean()) >= END_PREVIEW_MIN_MEAN:
+            best = frame
+    if best is None:
+        ok, best = read_frame_at(cap, frame_no)
+        if not ok:
+            best = None
+    return best
+
+
 def save_preview(
     video: Path, fps: float, cards: list[Candidate], preview_dir: Path, episodes: list[dict] | None = None
 ) -> None:
@@ -591,8 +633,8 @@ def save_preview(
             # frame; end_frame is the exact index (no float-rounding drift),
             # falling back to the plain boundary when no black run was found
             frame_no = ep.get("end_frame", int(ep["end"] * fps)) - 1
-            ok, frame = read_frame_at(cap, max(0, frame_no))
-            if not ok or frame is None:
+            frame = _end_preview_frame(cap, fps, max(0, frame_no))
+            if frame is None:
                 continue
             cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
             label = f"END {ep['name']}: last frame @ {fmt_time(ep['end'])}"
