@@ -551,7 +551,22 @@ def episode_names(stem: str, n: int) -> list[str]:
     return [f"{stem}#{i + 1}" for i in range(n)]
 
 
-def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: Path) -> None:
+def _labelled_thumb(frame: np.ndarray, label: str) -> np.ndarray:
+    thumb = cv2.resize(frame, (320, 180))
+    bar = np.full((28, 320, 3), 32, np.uint8)
+    cv2.putText(bar, label, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+    return np.vstack([thumb, bar])
+
+
+def save_preview(
+    video: Path, fps: float, cards: list[Candidate], preview_dir: Path, episodes: list[dict] | None = None
+) -> None:
+    """Contact sheet of candidate title cards (+ episode end frames when given).
+
+    End thumbs show the LAST NON-BLACK frame of each story: the frame right
+    before the black run the end was snapped to (or the last frame before the
+    plain boundary when no black run was found).
+    """
     preview_dir.mkdir(parents=True, exist_ok=True)
     cap = open_capture(video)
     thumbs: list[np.ndarray] = []
@@ -561,11 +576,19 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
             continue
         out = preview_dir / f"candidate_{i:02d}.jpg"
         cv2.imwrite(str(out), frame)
-        thumb = cv2.resize(frame, (320, 180))
         label = f"#{i} {fmt_time(c.start)}-{fmt_time(c.end)} ({c.duration:.2f}s){'' if c.has_title_text else ' NOTEXT'}"
-        bar = np.full((28, 320, 3), 32, np.uint8)
-        cv2.putText(bar, label, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-        thumbs.append(np.vstack([thumb, bar]))
+        thumbs.append(_labelled_thumb(frame, label))
+    n_ends = 0
+    if episodes:
+        for i, ep in enumerate(episodes, 1):
+            # frame just before the (black-run) cut point = last content frame
+            ok, frame = read_frame_at(cap, max(0, int(ep["end"] * fps) - 1))
+            if not ok or frame is None:
+                continue
+            cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
+            label = f"END {ep['name']}: last frame @ {fmt_time(ep['end'])}"
+            thumbs.append(_labelled_thumb(frame, label))
+            n_ends += 1
     cap.release()
     if thumbs:
         cols = min(3, len(thumbs))
@@ -574,21 +597,7 @@ def save_preview(video: Path, fps: float, cards: list[Candidate], preview_dir: P
         grid = [thumbs[i] if i < len(thumbs) else blank for i in range(rows_n * cols)]
         rows = [np.hstack(grid[r * cols : (r + 1) * cols]) for r in range(rows_n)]
         cv2.imwrite(str(preview_dir / "contact_sheet.jpg"), np.vstack(rows))
-    print(f"预览图已写入 {preview_dir}/ ({len(thumbs)} 张候选 + contact_sheet.jpg)")
-
-
-def save_end_previews(video: Path, fps: float, episodes: list[dict], preview_dir: Path) -> None:
-    """Dump the frame 0.5s before each episode's (black-snapped) end so the
-    user can eyeball where each story will actually stop."""
-    preview_dir.mkdir(parents=True, exist_ok=True)
-    cap = open_capture(video)
-    try:
-        for i, ep in enumerate(episodes, 1):
-            ok, frame = read_frame_at(cap, max(0, int((ep["end"] - 0.5) * fps)))
-            if ok and frame is not None:
-                cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
-    finally:
-        cap.release()
+    print(f"预览图已写入 {preview_dir}/ ({len(cards)} 张候选 + {n_ends} 张结尾 + contact_sheet.jpg)")
 
 
 def _open_in_shell(path: Path) -> None:
@@ -775,8 +784,7 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.preview:
-        save_preview(args.video, fps, cards, args.output_dir / "preview")
-        save_end_previews(args.video, fps, episodes, args.output_dir / "preview")
+        save_preview(args.video, fps, cards, args.output_dir / "preview", episodes)
 
     result = {
         "source": args.video.name,
@@ -808,8 +816,7 @@ def main() -> int:
         # Refusing to cut without evidence is only useful if the user can
         # inspect the candidates NOW — detection takes minutes, so save the
         # preview frames here instead of making them re-run with --preview.
-        save_preview(args.video, fps, cards, args.output_dir / "preview")
-        save_end_previews(args.video, fps, episodes, args.output_dir / "preview")
+        save_preview(args.video, fps, cards, args.output_dir / "preview", episodes)
         print("⚠️ 集数超过 3, 很可能是误检。已跳过切割。")
         print(f"   请查看 {args.output_dir / 'preview'}/ 下的候选预览图确认。")
         print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
@@ -817,8 +824,7 @@ def main() -> int:
 
     if args.confirm:
         preview_dir = args.output_dir / "preview"
-        save_preview(args.video, fps, cards, preview_dir)
-        save_end_previews(args.video, fps, episodes, preview_dir)
+        save_preview(args.video, fps, cards, preview_dir, episodes)
         _open_in_shell(preview_dir / "contact_sheet.jpg")
         try:
             ans = input("\n按以上方案分割? [y/N]: ")
