@@ -421,8 +421,9 @@ def has_title_text(frame: np.ndarray) -> bool:
     return False
 
 
-def find_black_run_end(cap: cv2.VideoCapture, fps: float, t_end: float, window: float) -> float | None:
-    """Start time of the LAST black run (>=END_BLACK_MIN_RUN) in [t_end-window, t_end].
+def find_black_run_end(cap: cv2.VideoCapture, fps: float, t_end: float, window: float) -> int | None:
+    """Frame index of the LAST black run's first frame (>=END_BLACK_MIN_RUN)
+    in [t_end-window, t_end].
 
     A story's true content ends where the black gap before the next title
     card (or the video's trailing black) begins; the run start is the cut
@@ -449,23 +450,28 @@ def find_black_run_end(cap: cv2.VideoCapture, fps: float, t_end: float, window: 
         f += 1
     if run_start is not None and (f - run_start) / fps >= END_BLACK_MIN_RUN:
         last_start = run_start
-    return (last_start / fps) if last_start is not None else None
+    return last_start
 
 
 def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
-    """Snap each episode's end to the nearest black frame (step 9). Mutates ``episodes``."""
+    """Snap each episode's end to the nearest black frame (step 9). Mutates ``episodes``:
+    sets ``end`` (seconds) and ``end_frame`` (exact black-run start index, used
+    for the end preview so no float-rounding can shift it off by a frame)."""
     cap = open_capture(video)
     try:
         for i, ep in enumerate(episodes):
             window = END_BLACK_WINDOW if i < len(episodes) - 1 else END_BLACK_WINDOW_LAST
-            black = find_black_run_end(cap, fps, ep["end"], window)
-            if black is None:
+            black_f = find_black_run_end(cap, fps, ep["end"], window)
+            if black_f is None:
                 print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
-            elif black <= ep["start"] + 1.0:
+                continue
+            black = black_f / fps
+            if black <= ep["start"] + 1.0:
                 print(f"  {ep['name']} 黑帧异常(早于故事起点)，保持原结尾 {fmt_time(ep['end'])}")
             elif black < ep["end"] - 0.05:
                 print(f"  结尾黑帧对齐 {ep['name']}: {fmt_time(ep['end'])} -> {fmt_time(black)}")
                 ep["end"] = round(black, 3)
+                ep["end_frame"] = black_f
     finally:
         cap.release()
 
@@ -581,8 +587,11 @@ def save_preview(
     n_ends = 0
     if episodes:
         for i, ep in enumerate(episodes, 1):
-            # frame just before the (black-run) cut point = last content frame
-            ok, frame = read_frame_at(cap, max(0, int(ep["end"] * fps) - 1))
+            # the frame right BEFORE the black run = the story's last content
+            # frame; end_frame is the exact index (no float-rounding drift),
+            # falling back to the plain boundary when no black run was found
+            frame_no = ep.get("end_frame", int(ep["end"] * fps)) - 1
+            ok, frame = read_frame_at(cap, max(0, frame_no))
             if not ok or frame is None:
                 continue
             cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
