@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from creator_agent.asr import boundary_check
 from creator_agent.asr.audio_extractor import extract_audio
 from creator_agent.asr.subtitle import write_srt
 from creator_agent.models.transcript import Transcript, TranscriptSegment
@@ -128,6 +129,11 @@ class JaTranscriber:
 
             # 2. Invoke the worker (models load once for the whole batch).
             results = self._run_worker(jobs, out_dir)
+
+            # 2.5 Boundary check against the ORIGINAL video+audio: snap cue
+            # edges to true silences and flag suspects. Must run here, before
+            # the temp audio dir is cleaned up below.
+            self._check_boundaries(results, extracted, audio_dir)
         finally:
             if tmp is not None:
                 tmp.cleanup()
@@ -150,6 +156,82 @@ class JaTranscriber:
                 logger.exception("Failed to persist transcript for %s", vpath)
 
         return transcribed, failed
+
+    # ------------------------------------------------------------------
+
+    def _check_boundaries(
+        self,
+        results: list,
+        extracted: list[tuple[Path, str]],
+        audio_dir: Path,
+    ) -> None:
+        """Snap cue edges to true silences (original video+audio boundary check).
+
+        Mutates each ok result in place: ``segments`` are replaced by the
+        refined cues and a ``boundary_report`` string is attached for
+        ``_write_outputs``. Failures only skip the check for that video
+        (original segments kept) — they never fail the video.
+        """
+        s = self._settings
+        if not getattr(s, "boundary_check", False):
+            return
+        res_by_id = {r.get("video_id"): r for r in results}
+        for vpath, vid in extracted:
+            r = res_by_id.get(vid, {})
+            if not r.get("ok"):
+                continue
+            segments = r.get("segments") or []
+            if not segments:
+                continue
+            try:
+                # Vocal stem gives the cleanest silence detection (music in the
+                # mix can mask pauses); fall back to the extracted mix WAV.
+                vocals = Path(r["vocals_path"]) if r.get("vocals_path") else None
+                audio_path = vocals if vocals and vocals.exists() else audio_dir / f"{vid}.wav"
+                audio_duration = float(r.get("duration_sec") or 0.0)
+                silences = boundary_check.detect_silences(
+                    audio_path,
+                    s.ffmpeg_path,
+                    noise_db=s.boundary_silence_db,
+                    min_silence_sec=s.boundary_min_silence_sec,
+                    duration=audio_duration or None,
+                )
+                try:
+                    video_duration = boundary_check.probe_video_duration(vpath, s.ffmpeg_path)
+                except Exception as e:
+                    logger.warning("ffprobe duration failed for %s: %s", vpath, e)
+                    video_duration = None
+                refined, flags = boundary_check.refine_cues(
+                    segments,
+                    silences,
+                    audio_duration=audio_duration or (video_duration or 0.0),
+                    video_duration=video_duration,
+                    snap_window=s.boundary_snap_sec,
+                    lead_in=s.boundary_lead_in_sec,
+                    tail_out=s.boundary_tail_sec,
+                )
+                snapped = sum(
+                    1
+                    for old, new in zip(segments, refined)
+                    if abs(old["start"] - new["start"]) > 1e-3 or abs(old["end"] - new["end"]) > 1e-3
+                )
+                r["segments"] = refined
+                suspect = sum(1 for f in flags if f["index"] is not None)
+                r["boundary_report"] = boundary_check.format_check_report(
+                    vid, video_duration, audio_duration, len(refined), snapped, flags, refined
+                )
+                _progress(f"边界检查 {vid}：{len(refined)} 条（吸附 {snapped}，可疑 {suspect}）")
+                if suspect:
+                    for f in flags:
+                        if f["index"] is not None:
+                            cue = refined[f["index"]]
+                            _progress(
+                                f"  ! [{'/'.join(f['reasons'])}] #{f['index'] + 1} "
+                                f"{cue['start']:.2f}-{cue['end']:.2f} {f['detail']}"
+                            )
+            except Exception as e:  # keep the original segments on any failure
+                logger.warning("Boundary check failed for %s: %s", vpath, e)
+                _progress(f"  ! 边界检查跳过（{vpath.name}: {e}）")
 
     # ------------------------------------------------------------------
 
@@ -279,6 +361,10 @@ class JaTranscriber:
         lines = [f"{s.speaker}: {s.text}" if s.speaker else s.text for s in segs if s.text.strip()]
         (target_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         write_srt(segs, target_dir / f"{stem}.srt")
+        # Boundary-check report (only present when boundary_check ran); the
+        # .srt itself stays clean for 剪映 import.
+        if r.get("boundary_report"):
+            (target_dir / f"{stem}.check.txt").write_text(r["boundary_report"], encoding="utf-8")
 
     @staticmethod
     def _unique_id(stem: str, used: set[str]) -> str:

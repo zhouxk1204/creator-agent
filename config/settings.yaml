@@ -69,6 +69,14 @@ ja_asr:
   # 对齐质量门：窗口两侧 pad（也是词时间允许超出块边界的最大距离）+ 覆盖率下限
   align_pad_sec: 0.3
   align_min_coverage: 0.5
+  # 边界检查（对照原视频+音频）：cue 起止向真实静音吸附（ffmpeg silencedetect，
+  # 在人声 stem 上检测），可疑边界写入 <视频名>.check.txt；.srt 保持干净供剪映导入
+  boundary_check: true
+  boundary_snap_sec: 0.5        # cue 边界允许移动去贴静音的最大距离
+  boundary_silence_db: -35.0    # silencedetect 噪声门限
+  boundary_min_silence_sec: 0.12
+  boundary_lead_in_sec: 0.08    # 字幕比语音 onset 提前这么多出现
+  boundary_tail_sec: 0.10       # 语音结束后字幕多停留这么多
   verbose: false            # true = worker 打 DEBUG 日志（VAD 段/词时间/cue 范围）
 translate:
   # JA->ZH subtitle translation via local OpenAI-compatible server.

@@ -85,6 +85,15 @@ class JaAsrSettings(BaseModel):
     # word may spill outside its chunk) and the word-coverage floor.
     align_pad_sec: float = 0.3
     align_min_coverage: float = 0.5
+    # Boundary check against the ORIGINAL video+audio (post-ASR, main env):
+    # snap cue edges to true silences (ffmpeg silencedetect on the vocal stem)
+    # and flag suspects into <stem>.check.txt. The .srt stays clean.
+    boundary_check: bool = True
+    boundary_snap_sec: float = 0.5  # max distance a cue edge may move to reach silence
+    boundary_silence_db: float = -35.0  # silencedetect noise floor
+    boundary_min_silence_sec: float = 0.12  # silencedetect min silence duration
+    boundary_lead_in_sec: float = 0.08  # subtitle appears this far before speech onset
+    boundary_tail_sec: float = 0.10  # ... and lingers this far after speech offset
     verbose: bool = False  # debug logging in the worker (VAD segments, word times, cues)
 
 
