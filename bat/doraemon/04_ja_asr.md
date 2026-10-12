@@ -1,0 +1,300 @@
+# 04_ja_asr 日文 ASR 管线实现详解
+
+本文档描述 `04_ja_asr.bat` 背后六步管线的完整实现，供核对与调试用。
+源码位置：`src/creator_agent/asr/`（主流程）、`src/creator_agent/cli/main.py`（`ja-asr` 命令）、
+`src/creator_agent/config.py`（`JaAsrSettings`）。
+
+---
+
+## 1. 总体架构：三个 Python 进程
+
+```
+04_ja_asr.bat
+ └─ .venv (主 uv env, 无 torch)
+     └─ creator-agent ja-asr  (cli/main.py: ja_asr)
+         └─ JaTranscriber (asr/ja_transcriber.py)
+             ├─ extract_audio()            ffmpeg → 16kHz 单声道 WAV
+             ├─ [子进程 1] ja_worker.py    conda env: creator-asr-ja
+             │     ├─ BS-RoFormer 人声分离 (audio-separator)
+             │     ├─ silero-VAD × 2 遍（宽松 + 紧凑）
+             │     ├─ CAM++ 说话人分离（可选）
+             │     ├─ Qwen3-ASR-1.7B 逐块识别
+             │     ├─ [子进程 2] aligner_worker.py  conda env: creator-asr-ja-aligner
+             │     │     └─ Qwen3-ForcedAligner-0.6B 词级对齐
+             │     ├─ 对齐质量门 → cue 切分 → 幻觉 cue 过滤
+             │     └─ 打印 ===ASR_RESULTS_BEGIN=== JSON ===ASR_RESULTS_END===
+             ├─ boundary_check（主环境）   ffprobe + silencedetect 边界吸附
+             └─ 写 .srt / .txt / .transcript.json / .check.txt
+```
+
+**为什么要三个 env：**
+- `creator-asr-ja`：Qwen3-ASR 需要 `transformers>=5.13`。
+- `creator-asr-ja-aligner`：`qwen-asr`（ForcedAligner）钉死 `transformers==4.57.6`，两者不能共存。
+- 主 uv env：不放任何重依赖，负责音频提取、worker 调度、边界检查、写产物、翻译/烧录编排。
+
+**绝不能与翻译 LLM server 同时跑**：llama-server + torch/CUDA + 人声分离 + ASR 模型
+一起会超 Windows commit 上限，ASR 模型加载死于 `os error 1455`。所以 CLI 在 ASR 全部
+结束后才惰性启动翻译 server，译完即停（commit `fe55190`）。自己手动起的 server 不会被停。
+
+---
+
+## 2. 六步管线逐步实现
+
+### 步骤 1：视频提取音频（主环境，`asr/audio_extractor.py`）
+
+- ffmpeg 命令：`-vn -acodec pcm_s16le -ar 16000 -ac 1` → 16kHz 单声道 WAV。
+- **幂等缓存**：写 sidecar `<out>.wav.src.json`（源文件 size + mtime_ns）。重跑时只有源视频
+  未变才复用缓存——同名替换的视频不会错用旧音频（否则整条时间轴都错）。`--force` 总是重提。
+- 输出位置：`ja_asr.work_dir`（配了则持久保留）或临时目录（跑完即删）。
+- ffmpeg 路径：config 的 `ffmpeg_path` 是完整构建，不在系统 PATH；worker 子进程启动时把
+  ffmpeg 所在目录注入 `PATH`（audio-separator 内部会 shell 调 `ffmpeg`）。
+- stderr 以 UTF-8 + errors="replace" 解码——中文文件名在 GBK 代码页下会让 stderr 读取线程
+  抛 UnicodeDecodeError（提取本身成功，只是噪音）。
+
+### 步骤 2：分离纯人声（worker env，`ja_worker._separate_vocals`）
+
+- audio-separator + BS-RoFormer（默认 vocal 模型，可用 `--sep-model` 换）。
+- **输出重定向**：audio-separator 默认把 `<name>_(Vocals)_*.wav` 写进进程 CWD。实现里把
+  `separator.output_dir` 和 `separator.model_instance.output_dir` 都指向 per-job 临时目录
+  （模型实例在 `load_model` 时已捕获 output_dir，两个都要改）。
+- 返回的是裸文件名（相对 output_dir），需用临时目录 resolve。
+- 分出的 vocal stem（通常 44.1kHz）重采样为 16kHz 单声道（`scipy.signal.resample_poly`）。
+- 其余 stem（如伴奏）仅在 keep 目录开启时保留，供人耳核对分离质量。
+- **后续所有步骤（VAD / ASR / 对齐）都跑在 vocal stem 上**——共享同一音频源、同一时间轴。
+
+### 步骤 3：VAD + 分块（worker env，`vad_chunker.py` / `speaker_turns.py`）
+
+**两遍 silero-VAD，参数不同、用途不同：**
+
+| pass | 参数 | 用途 |
+|---|---|---|
+| 宽松（config 可调） | min_speech=120ms, min_silence=300ms, pad=150ms | 分块。低 min_speech 保住「あっ」「えっ」式感叹词；pad 保住弱起音不被切掉 |
+| 紧凑（硬编码） | min_speech=100ms, min_silence=150ms, pad=30ms | ① cue 审计（丢弃不覆盖语音的字幕）② 对齐失败时的 speech-aware 回退时间轴。音乐/噪音可能骗过宽松 pass 造出假长语音段，所以不用它做审计 |
+
+**分块（无说话人时，`build_chunks`）**：目标 3–8s，硬上限 15s。
+1. gap ≤ 0.3s 的相邻语音段合并为 utterance group（句内换气）。
+2. 相邻 group 打包进同一 chunk，直到跨度超 target_max；过短的 chunk（< target_min）允许
+   撑过 target_max 直到 hard_max 来凑够长度。
+3. 单 group 超 hard_max：在内部停顿最接近 target_max 处递归切（`forced_split_natural`）；
+   单条连续语音段超 hard_max 且无停顿可切：硬切（`forced_split_hard`）。
+4. 每 chunk 两侧 pad 0.1s，clamp 到 [0, duration]。
+
+每个 chunk 带 `reason`（normal / merged / forced_split_natural / forced_split_hard），
+进日志和 SUMMARY 计数。
+
+**说话人分离（可选，`speaker_model` 配置后启用）：**
+- CAM++（ModelScope）对每个 ≥0.4s 的语音段提取 192 维嵌入（短段继承邻居标签）。
+- AgglomerativeClustering（cosine, average linkage, distance_threshold=speaker_threshold=0.5；
+  阈值越低说话人越多）。
+- `smooth_labels`：两轮把两侧同标签的孤立误标翻转（短附和「うん」嵌入常不稳定）。
+- `build_speaker_chunks`：说话人切换必开新 chunk——一条字幕绝不混两个人的话。
+  显示名为 話者A/B/C…（按首次出现顺序，全片稳定）。
+- 失败只降级为普通分块，不影响整个批次。
+
+### 步骤 4：Qwen3-ASR 逐块识别（worker env）
+
+- 模型 `Qwen/Qwen3-ASR-1.7B-hf`（可换 0.6B 提速），`apply_transcription_request` + generate，
+  `max_new_tokens=1024`（512 会截长 chunk）。
+- **幻觉防护 `cut_repeat_tail`**：音乐/噪音上模型会循环同一单元（「バイバイ。バイバイ。…」）。
+  结尾同一单元重复 ≥3 次且跨度 ≥6 字符 → 砍回只留一次。**只砍尾巴**——句首结巴（「ねねねね…」）
+  是真实语音不动。截断发生在对齐之前，免得幽灵词把真实 cue 拖离音频。
+- 每块打日志：`[CHUNK nnn/NNN][ASR] OK 1.2s len=18 text="…"`；空文本 / 异常分别计
+  `asr_empty` / `asr_failed`，跳过该块继续。
+
+### 步骤 5：词级时间对齐（aligner env 子进程）
+
+- **每视频起一个 aligner 子进程**（模型加载约半分钟），逐块流式返回：每对完一块立刻在
+  stdout 打一行 `===ALIGN_CHUNK=== {json}`，ja_worker 读一行处理一块（质量门 + cue 切分流水线化，
+  不等全片对完）；stderr 线程实时转发。
+- 对齐窗口 = chunk 范围两侧各加 `align_pad_sec`（默认 0.3s）——宽到能找回被 VAD 切掉的起音，
+  窄到对齐器几乎看不到相邻语句、不会把重复词锁到隔壁句上。词时间由 aligner_worker 加上
+  `chunk_start` 换算成绝对秒。
+- aligner 异常/缺失只降级该 chunk，绝不中断批次。
+
+**对齐质量门（`align_check.check_alignment`，五项按序检查，首败即拒）：**
+
+| 常量 | 含义 |
+|---|---|
+| `NO_WORD_TIMESTAMPS` | 对齐器没返回任何词 |
+| `LOW_COVERAGE` | ASR 文本匹配到词的字符占比 < `align_min_coverage`（0.5） |
+| `OUT_OF_WINDOW` | 词超出 [chunk_start−pad, chunk_end+pad] |
+| `INVALID_TIMING` | start ≥ end，或非单调递增 |
+| `ABNORMAL_DURATION` | 词时长不在 [0.02s, 3.0s] |
+
+被拒的对齐**带原因回退**到 speech-aware 比例分摊（绝不静默），计数进 SUMMARY 的
+`align_fallback_<REASON>`。子进程提前死掉没返回的块记 `SUBPROCESS`，对齐器内部异常记
+`EXCEPTION`。
+
+**为什么不在此“修复”重叠**：对齐器可能返回貌似合理的垃圾（词锁到相邻语句）。旧实现用中点
+对称去重会同时弄坏两条 cue；现在质量门先拒，`resolve_overlaps` 只做微小真实边缘重叠的
+最后保险。
+
+### 步骤 6（worker 内）：cue 切分（`cue_splitter.split_cues`）
+
+一个 ASR chunk 可能含好几句，切成 ≤24 字 / ≤8s 的字幕 cue：
+
+1. **硬边界**：词间（或 speech 区间间）静音 ≥ `pause_sec`（0.6s）→ cue 绝不跨越；
+   跨停顿的句子在停顿处切开。
+2. **句末标点**（。！？!?）先切；相邻短句在 max_chars / max_sec 预算内重新合并（不跨停顿）。
+3. 仍超长的句子在软标点（、，,…・：:）靠近上限处换行，无软标点则硬切 max_chars。
+4. 仍超 max_sec 的 cue 在靠近中点处递归强制切。
+5. 最终强制单调、不重叠、非空。
+
+**三种时间轴（fallback 顺序）：**
+- **word_timed**：对齐词序列拼接通常能还原 ASR 文本（但无标点）。逐字走查把每个文本字符
+  映射到产生它的词（`match_words_to_text`，质量门的 coverage 检查共享同一实现，两边度量一致）。
+  cue 起点 = 首词 start，cue 终点 = 末词 end（词间静音不归属任何 cue）。要求 ≥50% 字符匹配，
+  否则降级。词计时 cue 允许越出 chunk 边界（对齐窗口本来就 pad 过）。
+- **speech-aware 比例分摊**（对齐被拒时）：文本按字符占比摊到**压缩后的纯语音时间轴**上
+  （chunk 内紧凑 VAD 区间拼接、挤掉静音）。cue 永远起止于语句边缘、不覆盖句间静音。
+- **plain linear**（无 speech 信息兜底）：[start, end] 线性插值，clamp 在 chunk 内。
+
+**幻觉 cue 过滤**：cue 在紧凑 VAD 下的语音覆盖率 < 0.3 → 丢弃并日志
+（`[CHUNK nnn][CUE] DROP speech_cov=…`）。真实对话几乎不会低于这个地板。
+
+### 步骤 6（主环境）：对照原视频/音频的边界检查（`boundary_check.py`）
+
+worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴——本步在主环境补上
+（只依赖 ffmpeg/ffprobe，worker 退出后、临时音频清理前跑）：
+
+1. **`probe_video_duration`**：ffprobe 原视频容器时长，与提取音频时长对比。音频短于视频
+   >1s → `AUDIO_VIDEO_MISMATCH`（提取可能被截断，整条时间轴都偏短）。
+2. **`detect_silences`**：ffmpeg `silencedetect=noise=-35dB:d=0.12` 跑在 **vocal stem** 上
+   （伴奏里的音乐可能掩盖停顿；vocal 不可用时回退到混音 WAV）→ 真实静音区间。
+   结尾没收到 `silence_end` 的开口静音在 duration 处闭合。
+3. **`refine_cues`**（纯函数，逐边独立）：
+   - cue 边落在静音 (s,e) 内 → 吸附到语音边缘：start → e − lead_in(0.08s)，
+     end → s + tail_out(0.10s)。移动量 ≤ snap_window(0.5s) 算**可信修正**（不记可疑）；
+     深静音里吸附距离超窗 → 保留原时间并记 `START_IN_SILENCE` / `END_IN_SILENCE`。
+   - cue 边落在语音中间是**正常**的（句内标点切分），只在 snap_window 内有静音边时顺手抛光，
+     从不记可疑。
+   - 语音覆盖率 < 0.3 → `NO_SPEECH`（幻觉/错对齐）。
+   - end 超视频时长（容差 0.05s）→ `EXCEEDS_VIDEO`（clamp）。
+   - 最后重排为单调、不重叠、≥0.2s。
+4. 报告写 `<stem>.check.txt`；**.srt 本身保持干净**（要导入剪映核对时间轴）。
+   边界检查失败只跳过该视频（保留原 segments），绝不让视频失败。
+
+---
+
+## 3. 产物布局
+
+输出目录 = `--out-dir` 或 `ja_asr.out_dir`（vault 的 episodes/）；每个视频一个子目录：
+
+```
+<out_dir>/<stem>/
+├── <stem>.srt              # 日文字幕（干净，导入剪映核对时间轴）
+├── <stem>.txt              # 一段一行（带 話者X 前缀），方便阅读/diff
+├── <stem>.transcript.json  # Transcript 模型全量（含 segments 时间）
+└── <stem>.check.txt        # 边界检查报告（吸附数、可疑 cue 及原因）
+```
+
+`ja_asr.work_dir` 配置后，中间产物持久保留（默认 `C:\test\temps\_work`）：
+
+```
+<work_dir>/
+├── <vid>.wav               # 提取的 16k 混音 + <vid>.wav.src.json（缓存校验 sidecar）
+├── <vid>.vocals.wav        # 分离出的人声
+└── <vid>.instrumental.wav  # 伴奏（核对分离质量用）
+```
+
+**跳过逻辑**：目标目录已有 `<stem>.srt` 即视为完成；`--force` 忽略已有 SRT 和音频缓存全量重跑。
+
+---
+
+## 4. 配置项速查（`config/settings.yaml` 的 `ja_asr:` 段）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `env_python` | "" | **必填**。creator-asr-ja env 的 python.exe |
+| `input_dir` | `C:/test/temps` | 无参运行时扫描此目录（递归） |
+| `out_dir` | "" | 输出根目录；空 = 写到视频旁边 |
+| `work_dir` | "" | 中间产物保留目录；空 = 跑完即删 |
+| `model` | `Qwen/Qwen3-ASR-1.7B-hf` | 可换 `Qwen3-ASR-0.6B-hf` 提速 |
+| `sep_model` | "" | audio-separator 模型文件名；空 = 默认 BS-RoFormer |
+| `device` | `cuda:0` | `mps` / `cpu` 用于 Mac 调试 |
+| `language` | `Japanese` | |
+| `aligner_model` | "" | ForcedAligner HF id 或本地路径 |
+| `aligner_env_python` | "" | creator-asr-ja-aligner env 的 python。**两者都配**才启用词级对齐，否则 cue 时间按比例分摊 |
+| `speaker_model` | "" | ModelScope CAM++ id；空 = 不做说话人分离 |
+| `speaker_threshold` | 0.5 | 聚类 cosine 距离阈值，越低说话人越多 |
+| `max_cue_chars` / `max_cue_sec` | 24 / 8.0 | cue 字数/时长上限 |
+| `pause_sec` | 0.6 | 词间静音 ≥ 此值 = 硬 cue 边界 |
+| `vad_min_speech_ms` / `vad_min_silence_ms` / `vad_speech_pad_ms` | 120 / 300 / 150 | 宽松 VAD（分块用） |
+| `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 3.0 / 8.0 / 15.0 | 分块目标区间 + 硬上限 |
+| `asr_max_new_tokens` | 1024 | ASR 生成上限 |
+| `align_pad_sec` / `align_min_coverage` | 0.3 / 0.5 | 对齐窗口 padding（也是词允许越界的最远距离）/ 质量门覆盖率下限 |
+| `boundary_check` | true | 边界检查总开关 |
+| `boundary_snap_sec` | 0.5 | cue 边允许移动去够静音的最大距离 |
+| `boundary_silence_db` / `boundary_min_silence_sec` | -35.0 / 0.12 | silencedetect 噪声门限 / 最短静音 |
+| `boundary_lead_in_sec` / `boundary_tail_sec` | 0.08 / 0.10 | 字幕比语音早出现/晚消失的余量 |
+| `verbose` | false | worker 调试日志（原始 VAD 段、词时间、cue 明细） |
+
+---
+
+## 5. 调试指南
+
+### 5.1 日志契约（grep 速查）
+
+worker 的所有进度走 **stderr**（主进程实时转发）；stdout 只放结果 JSON。
+
+- `[ja-asr] …` — 主环境编排（提取、worker 启停、边界检查、写产物）
+- `[ja-worker][<vid>] …` — 视频级步骤（分离 → VAD → 说话人 → 分块 → ASR → 对齐）
+- `[CHUNK nnn/NNN][STAGE] …` — 块级流水线，**grep `CHUNK 005` 可重建一个块走 VAD→ASR→ALIGN→CUE 的完整路径**
+- `[ja-aligner] …` — aligner 子进程（加载、每块对齐耗时）
+- `ASR SUMMARY` — 每视频收尾计数器（见 5.2）
+- `===ASR_RESULTS_BEGIN===` / `===ALIGN_CHUNK===` — 机器可读契约，勿改
+
+### 5.2 用 SUMMARY 定位坏集出在哪一层
+
+```
+VAD      segments / short / long      → 段异常多/少 → 调 VAD 参数或检查分离质量
+Chunks   total + reason 分布          → forced_split_hard 多 = VAD 把音乐当语音
+ASR      success / empty / failed / repeat-tail cut
+         → repeat-tail cut 多 = 幻觉严重（分离不干净或音乐段）
+Alignment success / fallback 按原因分
+         → OUT_OF_WINDOW 多 = 词锁到相邻语句（align_pad 太大或块太密）
+         → LOW_COVERAGE 多 = ASR 文本与对齐词对不上
+         → SUBPROCESS = aligner 进程死了（看 [ja-aligner] 报错）
+Subtitle cues / dropped (no speech)   → dropped 多 = 幻觉 cue 被过滤（好事）或时间轴整体漂移（坏事）
+Coverage speech not subtitled         → 有语音没字幕的区间列表，长区间 = 丢台词
+```
+
+### 5.3 逐层排查路径
+
+1. **字幕整体偏移/缺失** → 先看 `.check.txt` 的 `AUDIO_VIDEO_MISMATCH`（音频提取被截断）。
+2. **某段没字幕** → SUMMARY 的 "speech not subtitled" 区间；配合 `[CHUNK …][CUE] DROP` 日志
+   看是被过滤还是 ASR 没出字（`asr_empty`）。
+3. **字幕时间与语音对不上** → 看该 chunk 的 `[ALIGN]` 行：fallback 原因是什么。
+   `-v/--verbose` 会打出原始 VAD 段、每个词的时间、每条 cue 的明细。
+4. **人声分离质量存疑** → 听 `work_dir` 里的 `.vocals.wav` / `.instrumental.wav`。
+5. **两个说话人混在一条字幕** → 确认 `speaker_model` 已配；误分可微调 `speaker_threshold`
+   （调低 = 拆出更多说话人）。
+6. **os error 1455 / ASR 模型加载失败** → 翻译 LLM server 和 ASR 同时跑了。CLI 已保证顺序
+   （ASR 完才起 server）；手动起 server 时别同时跑 04。
+7. **翻译 502 Bad Gateway** → 已修（commit `bc286bd`）：请求绕过系统代理 + 5xx 重试。
+
+### 5.4 手动跑 worker 复现
+
+worker 是独立脚本，可脱离 CLI 单跑（jobs.json = `[{"video_id","audio_path"}]`，音频需 16k 单声道）：
+
+```bat
+<creator-asr-ja>\python.exe src\creator_agent\asr\ja_worker.py --jobs jobs.json ^
+    --aligner-model <ForcedAligner路径> --aligner-python <creator-asr-ja-aligner>\python.exe -v
+```
+
+结果 JSON 在 stdout 的 `===ASR_RESULTS_BEGIN/END===` 之间；单视频失败只置 `ok:false`，
+退出码恒为 0（调用方读 JSON 判成败）。
+
+---
+
+## 6. 已知边界与约定
+
+- **可选步骤只降级不失败**：对齐器不可用 → 比例分摊；说话人模型加载失败 → 不做分离；
+  边界检查失败 → 保留原 segments。单视频失败不阻塞批次。
+- **模型缓存**：HF → `~/.cache/huggingface`（镜像设 `HF_ENDPOINT`）；分离模型 →
+  `~/.cache/audio-separator-models`；ModelScope（说话人）→ `~/.cache/modelscope`。
+- **Windows 编码**：子进程强制 `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`；pipe 读取用
+  bytes + `errors="replace"`（GBK 代码页安全）。stdout/stderr 分线程读取防 Windows 小管道死锁。
+- `--translate` / `--burn` 串在同一命令尾部：ASR 全结束后惰性启动翻译 server，新转写的强制
+  重翻（force=True），已有 SRT 只补缺的中文（force=False，保住手工修改）。最后按
+  `translate.export_subtitles` 把字幕镜像进 vault。
