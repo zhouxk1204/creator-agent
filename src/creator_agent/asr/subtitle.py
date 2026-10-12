@@ -67,6 +67,43 @@ def segments_to_srt(segments: list[TranscriptSegment]) -> str:
     return "\n".join(cues)
 
 
+def finalize_for_srt(
+    cues: list[dict],
+    min_display_sec: float = 0.0,
+    lead_in_sec: float = 0.0,
+    tail_sec: float = 0.0,
+    limit: float | None = None,
+) -> list[dict]:
+    """Display-time polish applied to .srt ONLY (transcript.json / .txt keep
+    the real speech times). Pure function over cue dicts ({"start", "end", ...},
+    time order); extra keys (text, speaker) are preserved.
+
+    - ``lead_in_sec`` / ``tail_sec``: show each cue a bit earlier / longer.
+      Keep these 0 when the boundary check already snapped edges with its own
+      lead_in/tail_out margins — enabling both would double the margin.
+    - ``min_display_sec``: stretch cues too short to read.
+    Every cue still ends before the next cue's (adjusted) start minus 20ms,
+    and is clamped to ``limit`` (media duration) when given. All-zero params
+    return the input unchanged (identity = old behavior).
+    """
+    if not cues or (min_display_sec <= 0 and lead_in_sec <= 0 and tail_sec <= 0):
+        return cues
+    starts = [max(0.0, float(c["start"]) - lead_in_sec) for c in cues]
+    out: list[dict] = []
+    for i, c in enumerate(cues):
+        s = starts[i]
+        e = float(c["end"]) + tail_sec
+        if min_display_sec > 0 and e - s < min_display_sec:
+            e = s + min_display_sec
+        if i + 1 < len(cues):
+            e = min(e, starts[i + 1] - 0.02)
+        if limit is not None:
+            e = min(e, limit)
+        e = max(e, s + 0.05)
+        out.append({**c, "start": round(s, 3), "end": round(e, 3)})
+    return out
+
+
 def write_srt(segments: list[TranscriptSegment], path: Path) -> Path:
     """Write segments as SRT to ``path`` (UTF-8, trailing newline)."""
     path = Path(path)

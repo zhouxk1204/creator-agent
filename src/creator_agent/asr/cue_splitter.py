@@ -383,7 +383,13 @@ def _speech_timeline(
     return start_at, end_at, False, pauses
 
 
-def cut_repeat_tail(text: str, min_repeats: int = 3, min_span: int = 6) -> str:
+def cut_repeat_tail(
+    text: str,
+    min_repeats: int = 3,
+    min_span: int = 6,
+    speech_dur: float | None = None,
+    max_cps: float = 0.0,
+) -> str:
     """Truncate a degenerate repetition tail (ASR hallucination on music /
     silence): the same unit repeated >= ``min_repeats`` times at the very end
     of the text, spanning >= ``min_span`` chars. Returns the text cut back to
@@ -392,6 +398,13 @@ def cut_repeat_tail(text: str, min_repeats: int = 3, min_span: int = 6) -> str:
     Whitespace is stripped first (JA ASR output carries none anyway). Only
     tails are cut — stutters at the start of a line (「ねねねね…」) are real
     speech and are left alone.
+
+    Speaking-rate guard: when ``max_cps`` > 0 and ``speech_dur`` (seconds of
+    actual speech in the chunk, from the tight VAD pass) is given, the tail is
+    only cut when the overall rate len(text)/speech_dur exceeds ``max_cps``
+    chars/sec — a hallucination loop produces far more text than the audio
+    could contain, while real 「うんうんうん」-style back-channels at normal
+    speed are kept. ``max_cps`` = 0 restores the old always-cut behavior.
     """
     t = "".join(str(text).split())
     n = len(t)
@@ -403,4 +416,8 @@ def cut_repeat_tail(text: str, min_repeats: int = 3, min_span: int = 6) -> str:
             k += 1
         if k >= min_repeats and k * p >= min_span:
             best = min(best, n - (k - 1) * p)
+    if best == n:
+        return t
+    if max_cps > 0 and speech_dur is not None and n / max(speech_dur, 0.5) <= max_cps:
+        return t
     return t[:best]

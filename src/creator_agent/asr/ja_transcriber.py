@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 from creator_agent.asr import boundary_check
 from creator_agent.asr.audio_extractor import extract_audio
-from creator_agent.asr.subtitle import write_srt
+from creator_agent.asr.subtitle import finalize_for_srt, write_srt
 from creator_agent.models.transcript import Transcript, TranscriptSegment
 
 if TYPE_CHECKING:
@@ -218,7 +218,14 @@ class JaTranscriber:
                 r["segments"] = refined
                 suspect = sum(1 for f in flags if f["index"] is not None)
                 r["boundary_report"] = boundary_check.format_check_report(
-                    vid, video_duration, audio_duration, len(refined), snapped, flags, refined
+                    vid,
+                    video_duration,
+                    audio_duration,
+                    len(refined),
+                    snapped,
+                    flags,
+                    refined,
+                    uncovered=r.get("uncovered"),
                 )
                 _progress(f"边界检查 {vid}：{len(refined)} 条（吸附 {snapped}，可疑 {suspect}）")
                 if suspect:
@@ -272,6 +279,12 @@ class JaTranscriber:
                 str(s.vad_min_silence_ms),
                 "--vad-speech-pad-ms",
                 str(s.vad_speech_pad_ms),
+                "--vad-threshold",
+                str(s.vad_threshold),
+                "--recover-min-sec",
+                str(s.recover_min_sec),
+                "--repeat-tail-max-cps",
+                str(s.repeat_tail_max_cps),
                 "--chunk-target-min",
                 str(s.chunk_target_min_sec),
                 "--chunk-target-max",
@@ -285,6 +298,8 @@ class JaTranscriber:
             ]
             if s.verbose:
                 cmd.append("--verbose")
+            if s.recover_missed:
+                cmd.append("--recover-missed")
             if s.aligner_model:
                 cmd += ["--aligner-model", s.aligner_model]
                 if s.aligner_env_python:
@@ -360,7 +375,27 @@ class JaTranscriber:
         # Segmented text: one segment per line for easy reading / diffing.
         lines = [f"{s.speaker}: {s.text}" if s.speaker else s.text for s in segs if s.text.strip()]
         (target_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        write_srt(segs, target_dir / f"{stem}.srt")
+        # The .srt gets display-time polish (min display duration / lead/tail
+        # margins) when configured; transcript.json + .txt keep the real
+        # speech times untouched.
+        st = self._settings
+        srt_dicts = finalize_for_srt(
+            [dict(s) for s in (r.get("segments") or [])],
+            min_display_sec=st.srt_min_display_sec,
+            lead_in_sec=st.srt_lead_in_sec,
+            tail_sec=st.srt_tail_sec,
+            limit=r.get("duration_sec"),
+        )
+        write_srt([TranscriptSegment(**s) for s in srt_dicts], target_dir / f"{stem}.srt")
+        # Hallucination-filtered cues, so "was the drop a hallucination or a
+        # real line?" is answerable after the run.
+        dropped = r.get("dropped") or []
+        if dropped:
+            dlines = [
+                f"[{d['start']:.2f}-{d['end']:.2f}] speech_cov={d.get('speech_cov', 0):.2f}  {d['text']}"
+                for d in dropped
+            ]
+            (target_dir / f"{stem}.dropped.txt").write_text("\n".join(dlines) + "\n", encoding="utf-8")
         # Boundary-check report (only present when boundary_check ran); the
         # .srt itself stays clean for 剪映 import.
         if r.get("boundary_report"):

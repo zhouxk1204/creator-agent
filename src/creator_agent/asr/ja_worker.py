@@ -85,7 +85,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from align_check import NO_WORDS, AlignCheck, check_alignment  # noqa: E402
 from cue_splitter import cut_repeat_tail, resolve_overlaps, split_cues  # noqa: E402
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
-from vad_chunker import build_chunks, speech_coverage, uncovered_ranges  # noqa: E402
+from vad_chunker import build_chunks, merge_close, speech_coverage, subtract_intervals, uncovered_ranges  # noqa: E402
 
 
 def _emit(results: list) -> None:
@@ -224,6 +224,7 @@ def _speech_intervals(
     min_speech_ms: int,
     min_silence_ms: int,
     speech_pad_ms: int,
+    threshold: float = 0.5,
 ) -> list[tuple[float, float]]:
     """silero-vad raw speech intervals [(start, end), ...] (unmerged)."""
     import soundfile as sf
@@ -236,6 +237,7 @@ def _speech_intervals(
         wav,
         vad_model,
         sampling_rate=_SAMPLE_RATE,
+        threshold=threshold,
         min_speech_duration_ms=min_speech_ms,
         min_silence_duration_ms=min_silence_ms,
         speech_pad_ms=speech_pad_ms,
@@ -248,9 +250,12 @@ def _speech_intervals(
 # covering no speech) and as the speech-aware proportional fallback timeline
 # — NOT for chunking (chunking keeps the permissive configured params, and
 # music/noise can fool the permissive pass into long bogus "speech" runs).
+# The threshold stays at the silero default: this pass is the measuring
+# baseline, so it must not move when the permissive threshold is tuned.
 _TIGHT_MIN_SPEECH_MS = 100
 _TIGHT_MIN_SILENCE_MS = 150
 _TIGHT_SPEECH_PAD_MS = 30
+_TIGHT_THRESHOLD = 0.5
 # Cues whose tight-VAD speech coverage falls below this are dropped as
 # hallucinated / misaligned (logged, counted in the summary).
 _MIN_CUE_SPEECH_COV = 0.3
@@ -410,6 +415,55 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
 # ---------------------------------------------------------------------------
 
 
+def _asr_pass(processor, asr_model, chunks: list[dict], args, stats, work: Path, vocals: Path, tight, total: int):
+    """ASR every chunk on the vocal stem (+ hallucination repeat-tail cut).
+
+    Returns the chunks that produced text, each with its wav path and text
+    attached. ``tight`` = tight-pass VAD intervals, used to measure each
+    chunk's speech duration for the cps-based repeat-tail guard. ``total`` is
+    the final chunk count for the CHUNK nnn/NNN log lines (a recovery pass
+    may append more chunks later; pass the post-recovery count when known).
+    """
+    asr_chunks: list[dict] = []
+    for c in chunks:
+        cid = f"CHUNK {c['idx'] + 1:03d}/{total:03d}"
+        tc = time.monotonic()
+        try:
+            chunk_wav = _slice_wav(vocals, work / f"chunk_{c['idx']:04d}.wav", c["start"], c["end"])
+            text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language, args.max_new_tokens)
+        except Exception as e:
+            stats["asr_failed"] += 1
+            _chunk_log(cid, "ASR", f"FAIL reason=EXCEPTION error={e}")
+            continue
+        el = time.monotonic() - tc
+        if not text:
+            stats["asr_empty"] += 1
+            _chunk_log(cid, "ASR", f"EMPTY reason=NO_TEXT ({el:.1f}s)")
+            continue
+        # Hallucination guard: on music/noise the model loops one unit
+        # (「バイバイ。バイバイ。…」); cut the degenerate tail BEFORE
+        # alignment so phantom words can't drag real cues off their audio.
+        # With --repeat-tail-max-cps the cut only fires when the text is
+        # faster than any real speech could be (chars per speech-second).
+        speech_dur = sum(min(e, c["end"]) - max(s, c["start"]) for s, e in tight if e > c["start"] and s < c["end"])
+        cut = cut_repeat_tail(text, speech_dur=speech_dur, max_cps=args.repeat_tail_max_cps)
+        stripped = "".join(text.split())
+        if len(cut) < len(stripped):
+            stats["asr_repeat_cut"] += 1
+            cps = len(stripped) / max(speech_dur, 0.5)
+            _chunk_log(
+                cid,
+                "ASR",
+                f'repeat-tail cut {len(stripped)}->{len(cut)} chars cps={cps:.1f} tail="{stripped[len(cut) :][:20]}…"',
+            )
+            text = cut
+        stats["asr_ok"] += 1
+        preview = text[:30] + ("…" if len(text) > 30 else "")
+        _chunk_log(cid, "ASR", f'OK {el:.1f}s len={len(text)} text="{preview}"')
+        asr_chunks.append({**c, "wav": chunk_wav, "text": text})
+    return asr_chunks
+
+
 def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     import soundfile as sf
 
@@ -432,9 +486,21 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # keeps soft onsets from being clipped. The tight pass hugs true
         # utterance edges for cue auditing + fallback timing.
         intervals = _speech_intervals(
-            vad_model, vocals, args.vad_min_speech_ms, args.vad_min_silence_ms, args.vad_speech_pad_ms
+            vad_model,
+            vocals,
+            args.vad_min_speech_ms,
+            args.vad_min_silence_ms,
+            args.vad_speech_pad_ms,
+            threshold=args.vad_threshold,
         )
-        tight = _speech_intervals(vad_model, vocals, _TIGHT_MIN_SPEECH_MS, _TIGHT_MIN_SILENCE_MS, _TIGHT_SPEECH_PAD_MS)
+        tight = _speech_intervals(
+            vad_model,
+            vocals,
+            _TIGHT_MIN_SPEECH_MS,
+            _TIGHT_MIN_SILENCE_MS,
+            _TIGHT_SPEECH_PAD_MS,
+            threshold=_TIGHT_THRESHOLD,
+        )
         stats["vad_segments"] = len(intervals)
         stats["vad_short"] = sum(1 for s, e in intervals if e - s < _SHORT_SEG_SEC)
         stats["vad_long"] = sum(1 for s, e in intervals if e - s > args.max_chunk)
@@ -487,35 +553,45 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         _progress(vid, f"分块完成：{len(chunks)} 块 → 开始{step}…")
 
         # Phase 1: ASR every chunk on the vocal stem.
-        asr_chunks: list[dict] = []
-        for c in chunks:
-            cid = f"CHUNK {c['idx'] + 1:03d}/{len(chunks):03d}"
-            tc = time.monotonic()
-            try:
-                chunk_wav = _slice_wav(vocals, work / f"chunk_{c['idx']:04d}.wav", c["start"], c["end"])
-                text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language, args.max_new_tokens)
-            except Exception as e:
-                stats["asr_failed"] += 1
-                _chunk_log(cid, "ASR", f"FAIL reason=EXCEPTION error={e}")
-                continue
-            el = time.monotonic() - tc
-            if not text:
-                stats["asr_empty"] += 1
-                _chunk_log(cid, "ASR", f"EMPTY reason=NO_TEXT ({el:.1f}s)")
-                continue
-            # Hallucination guard: on music/noise the model loops one unit
-            # (「バイバイ。バイバイ。…」); cut the degenerate tail BEFORE
-            # alignment so phantom words can't drag real cues off their audio.
-            cut = cut_repeat_tail(text)
-            stripped = "".join(text.split())
-            if len(cut) < len(stripped):
-                stats["asr_repeat_cut"] += 1
-                _chunk_log(cid, "ASR", f'repeat-tail cut {len(stripped)}->{len(cut)} chars tail="{stripped[len(cut) :][:20]}…"')
-                text = cut
-            stats["asr_ok"] += 1
-            preview = text[:30] + ("…" if len(text) > 30 else "")
-            _chunk_log(cid, "ASR", f'OK {el:.1f}s len={len(text)} text="{preview}"')
-            asr_chunks.append({**c, "wav": chunk_wav, "text": text})
+        asr_chunks = _asr_pass(processor, asr_model, chunks, args, stats, work, vocals, tight, total=len(chunks))
+
+        # Phase 1.5 (optional recovery pass): tight-VAD speech that NO
+        # successful ASR chunk covers (the permissive VAD missed it, or its
+        # chunk came back empty) gets one more ASR attempt as extra chunks
+        # (reason="recovered"). This runs BEFORE the aligner subprocess is
+        # launched, so recovered chunks align in the same run — no second
+        # model load. Coverage proxy = successful chunk spans: with the
+        # speech-aware cue timeline, every tight speech interval inside a
+        # transcribed chunk ends up covered by some cue, so chunk spans are
+        # an exact stand-in for cue spans at this stage. (Speech whose cues
+        # are ALL dropped later by the hallucination filter is not retried —
+        # it lands in the UNRECOVERED_SPEECH list instead.)
+        if args.recover_missed and tight:
+            covered = [(c["start"], c["end"]) for c in asr_chunks]
+            missed = subtract_intervals(tight, covered, args.recover_min_sec)
+            # Pieces closer than 2x the recovery pad would get overlapping
+            # ASR windows; merge them first.
+            missed = merge_close(missed, max_gap=0.6)
+            _progress(vid, f"补漏检测：{len(missed)} 段有语音无字幕（>= {args.recover_min_sec}s）")
+            if missed:
+                extra = [
+                    {
+                        "start": round(max(0.0, s - 0.3), 3),
+                        "end": round(min(duration, e + 0.3), 3),
+                        "reason": "recovered",
+                        "segments": 0,
+                        "speaker": None,
+                    }
+                    for s, e in missed
+                ]
+                for i, c in enumerate(extra):
+                    c["idx"] = len(chunks) + i
+                    _chunk_log(f"CHUNK {c['idx'] + 1:03d}", "RECOVER", f"candidate {c['start']:.2f}-{c['end']:.2f}")
+                stats["chunk_recovered"] += len(extra)
+                chunks = chunks + extra
+                asr_chunks += _asr_pass(
+                    processor, asr_model, extra, args, stats, work, vocals, tight, total=len(chunks)
+                )
 
         # Phase 2+3, pipelined per chunk: align (one subprocess, results
         # streamed per chunk) -> quality gate -> cue split. Rejected
@@ -523,6 +599,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         align_results = _align_stream(args, work, asr_chunks, vid, vocals, duration) if align_on else {}
 
         segments: list[dict] = []
+        dropped: list[dict] = []  # hallucination-filtered cues, kept for auditing
         for c in asr_chunks:
             cid = f"CHUNK {c['idx'] + 1:03d}/{len(chunks):03d}"
             words = None
@@ -572,6 +649,15 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 cov = speech_coverage(cue["start"], cue["end"], tight)
                 if cov < _MIN_CUE_SPEECH_COV:
                     stats["cues_dropped_no_speech"] += 1
+                    dropped.append(
+                        {
+                            "start": round(cue["start"], 3),
+                            "end": round(cue["end"], 3),
+                            "text": cue["text"],
+                            "speech_cov": round(cov, 3),
+                            "chunk": c["idx"],
+                        }
+                    )
                     _chunk_log(
                         cid,
                         "CUE",
@@ -596,7 +682,11 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # above rejects the badly-shifted alignments it used to "repair".
         segments = resolve_overlaps(segments)
 
-        _print_summary(vid, duration, stats, chunks, time.monotonic() - t0, intervals, segments)
+        # Speech the subtitles never covered (ASR dropped it, or its cues were
+        # rejected/filtered away) — surfaced in the SUMMARY and handed to the
+        # caller for the .check.txt UNRECOVERED_SPEECH list.
+        uncovered = uncovered_ranges(intervals, [(s["start"], s["end"]) for s in segments], min_sec=1.0)
+        _print_summary(vid, duration, stats, chunks, time.monotonic() - t0, uncovered)
 
         vocals_out = None
         if keep_dir is not None:
@@ -614,6 +704,8 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         "segments": segments,
         "duration_sec": round(duration, 3),
         "vocals_path": str(vocals_out) if vocals_out else None,
+        "dropped": dropped,
+        "uncovered": [[round(s, 3), round(e, 3)] for s, e in uncovered],
     }
 
 
@@ -642,12 +734,12 @@ def _print_summary(
     stats: Counter,
     chunks: list[dict],
     elapsed: float,
-    intervals: list[tuple[float, float]],
-    segments: list[dict],
+    missed: list[tuple[float, float]],
 ) -> None:
     """Per-video pipeline summary — the counters that tell you WHERE a bad
     episode went wrong (VAD? ASR? alignment? which fallback reason?), plus a
-    list of spoken ranges that ended up with no subtitle at all."""
+    list of spoken ranges that ended up with no subtitle at all (``missed``,
+    precomputed by the caller, which also ships it in the result JSON)."""
     chunk_reasons = sorted(k for k in stats if k.startswith("chunk_"))
     fallback_reasons = sorted(k for k in stats if k.startswith("align_fallback_"))
     lines = [
@@ -682,7 +774,6 @@ def _print_summary(
     ]
     # Speech the subtitles never covered (ASR dropped it, or its cues were
     # rejected/filtered away). Long ranges here = missing dialogue.
-    missed = uncovered_ranges(intervals, [(s["start"], s["end"]) for s in segments], min_sec=1.0)
     missed_total = sum(e - s for s, e in missed)
     lines += [
         "Coverage",
@@ -746,6 +837,22 @@ def main() -> int:
     parser.add_argument("--vad-min-speech-ms", type=int, default=120)
     parser.add_argument("--vad-min-silence-ms", type=int, default=300)
     parser.add_argument("--vad-speech-pad-ms", type=int, default=150)
+    parser.add_argument(
+        "--vad-threshold",
+        type=float,
+        default=0.5,
+        help="permissive-pass VAD probability threshold (silero default 0.5; lower e.g. 0.35 to recover "
+        "weak speech at the cost of more music/noise false positives). The tight audit pass stays at 0.5.",
+    )
+    # Recovery pass: re-ASR tight-VAD speech no successful chunk covers.
+    parser.add_argument("--recover-missed", action="store_true", help="enable the missed-speech recovery pass")
+    parser.add_argument("--recover-min-sec", type=float, default=0.4, help="min missed range length to recover")
+    parser.add_argument(
+        "--repeat-tail-max-cps",
+        type=float,
+        default=0.0,
+        help=">0: only cut a repeat tail when chars/speech-second exceeds this (keeps real うんうん); 0 = always cut",
+    )
     # Chunking: aim for 3-8s chunks, never exceed --max-chunk.
     parser.add_argument("--chunk-target-min", type=float, default=3.0)
     parser.add_argument("--chunk-target-max", type=float, default=8.0)

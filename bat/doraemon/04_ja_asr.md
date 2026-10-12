@@ -68,8 +68,10 @@
 
 | pass | 参数 | 用途 |
 |---|---|---|
-| 宽松（config 可调） | min_speech=120ms, min_silence=300ms, pad=150ms | 分块。低 min_speech 保住「あっ」「えっ」式感叹词；pad 保住弱起音不被切掉 |
-| 紧凑（硬编码） | min_speech=100ms, min_silence=150ms, pad=30ms | ① cue 审计（丢弃不覆盖语音的字幕）② 对齐失败时的 speech-aware 回退时间轴。音乐/噪音可能骗过宽松 pass 造出假长语音段，所以不用它做审计 |
+| 宽松（config 可调） | threshold=`vad_threshold`(默认 0.5), min_speech=120ms, min_silence=300ms, pad=150ms | 分块。低 min_speech 保住「あっ」「えっ」式感叹词；pad 保住弱起音不被切掉 |
+| 紧凑（硬编码） | threshold=0.5（**固定**）, min_speech=100ms, min_silence=150ms, pad=30ms | ① cue 审计（丢弃不覆盖语音的字幕）② 对齐失败时的 speech-aware 回退时间轴 ③ 补漏检测基准。它是度量基准，threshold 永远不随宽松 pass 动 |
+
+`vad_threshold` 调低（如 0.35）可找回弱语音，代价是音乐/噪音误检增多。
 
 **分块（无说话人时，`build_chunks`）**：目标 3–8s，硬上限 15s。
 1. gap ≤ 0.3s 的相邻语音段合并为 utterance group（句内换气）。
@@ -98,8 +100,31 @@
 - **幻觉防护 `cut_repeat_tail`**：音乐/噪音上模型会循环同一单元（「バイバイ。バイバイ。…」）。
   结尾同一单元重复 ≥3 次且跨度 ≥6 字符 → 砍回只留一次。**只砍尾巴**——句首结巴（「ねねねね…」）
   是真实语音不动。截断发生在对齐之前，免得幽灵词把真实 cue 拖离音频。
+  设 `repeat_tail_max_cps`（如 12.0）后加**语速判据**：只有 len(text)/该块语音时长（紧凑 VAD）
+  超过此值才砍——幻觉循环产出的文本远超音频能容纳的量，而正常语速的「うんうんうん」会保留。
+  0 = 旧行为（一律砍）。砍时日志带 `cps=` 可直接核对判据。
 - 每块打日志：`[CHUNK nnn/NNN][ASR] OK 1.2s len=18 text="…"`；空文本 / 异常分别计
   `asr_empty` / `asr_failed`，跳过该块继续。
+
+### 步骤 4.5：补漏 pass（`recover_missed` 开启时）
+
+第一轮 ASR 完成后、**调起 aligner 子进程之前**执行（补漏 chunk 和初始 chunk 走同一次
+aligner 运行，不重复加载模型）：
+
+1. 覆盖代理 = 所有成功 ASR chunk 的跨度（speech-aware 时间轴下，成功 chunk 内的紧凑 VAD
+   语音必然被某条 cue 覆盖，chunk 跨度是精确代理，无需等真实 cue）。
+2. `subtract_intervals(tight, covered, recover_min_sec)` → 有语音但没人识别的区间；
+   间隔 ≤0.6s 的相邻段先 `merge_close` 合并（否则 0.3s 双侧 pad 的 ASR 窗口会重叠重复识别）。
+3. 每段生成 pad 0.3s 的补漏 chunk（`reason="recovered"`，进 SUMMARY 计数 `chunk_recovered`），
+   走同一个 `_asr_pass`（ASR + repeat-tail 防护），随后与初始 chunk 一起对齐、过质量门、
+   切 cue、**同样过幻觉过滤**；与已有 cue 的微小重叠交给 `resolve_overlaps`。
+4. 补漏后仍有语音无字幕的区间 → 结果 JSON 的 `uncovered` 字段 → `.check.txt` 里的
+   `[UNRECOVERED_SPEECH]` 人工听清单。
+
+日志：`[ja-worker][vid] 补漏检测：N 段有语音无字幕` + 每段 `[CHUNK nnn][RECOVER] candidate …`。
+
+注意：第一轮 ASR 出了文本但最终 cue 全被幻觉过滤丢掉的区间**不会**重试（直接进
+UNRECOVERED 清单）——这是刻意的，重试同样的音频大概率还是幻觉。
 
 ### 步骤 5：词级时间对齐（aligner env 子进程）
 
@@ -151,6 +176,8 @@
 
 **幻觉 cue 过滤**：cue 在紧凑 VAD 下的语音覆盖率 < 0.3 → 丢弃并日志
 （`[CHUNK nnn][CUE] DROP speech_cov=…`）。真实对话几乎不会低于这个地板。
+被丢的 cue 同时收集进结果 JSON 的 `dropped` 字段，主环境写成 `<stem>.dropped.txt`
+（格式 `[12.34-14.10] speech_cov=0.21  文本`）——事后可核对丢掉的是幻觉还是真台词。
 
 ### 步骤 6（主环境）：对照原视频/音频的边界检查（`boundary_check.py`）
 
@@ -182,11 +209,17 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 
 ```
 <out_dir>/<stem>/
-├── <stem>.srt              # 日文字幕（干净，导入剪映核对时间轴）
+├── <stem>.srt              # 日文字幕（干净，导入剪映核对时间轴；可配显示时间 polish）
 ├── <stem>.txt              # 一段一行（带 話者X 前缀），方便阅读/diff
-├── <stem>.transcript.json  # Transcript 模型全量（含 segments 时间）
-└── <stem>.check.txt        # 边界检查报告（吸附数、可疑 cue 及原因）
+├── <stem>.transcript.json  # Transcript 模型全量（含 segments 真实语音时间）
+├── <stem>.check.txt        # 边界检查报告（吸附数、可疑 cue、UNRECOVERED_SPEECH 清单）
+└── <stem>.dropped.txt      # 被幻觉过滤丢弃的 cue（仅当有丢弃时生成）
 ```
+
+**SRT 显示时间 polish**（`finalize_for_srt`，只作用在 .srt 上，transcript.json/.txt 保持
+真实语音时间）：`srt_min_display_sec` 把过短的 cue 拉到可读时长（不越过下一条 cue 起点 −20ms、
+不越媒体时长）；`srt_lead_in_sec`/`srt_tail_sec` 加提前/延后余量——边界检查开启时这两个
+**保持 0**（吸附已含 lead_in/tail_out，再开会重复加）。三项全 0 = 关闭（旧行为）。
 
 `ja_asr.work_dir` 配置后，中间产物持久保留（默认 `C:\test\temps\_work`）：
 
@@ -202,6 +235,13 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 ---
 
 ## 4. 配置项速查（`config/settings.yaml` 的 `ja_asr:` 段）
+
+> 所有实验开关（`vad_threshold`/`recover_missed`/`repeat_tail_max_cps`/`srt_*`）默认保持
+> **旧行为**——不改配置跑出的结果与改动前逐字节一致，方便和 baseline 目录逐项对比。
+> 建议一次只开一项：① `vad_threshold: 0.35` → ② `recover_missed: true` →
+> ③ `repeat_tail_max_cps: 12.0` → ④ `srt_min_display_sec: 0.7`。每项重点看 SUMMARY 的
+> `speech not subtitled` 总时长、`dropped (no speech)` 数量、`chunk_recovered` 条数，
+> 以及 `.dropped.txt` 里被丢的是不是真台词。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -220,6 +260,10 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 | `max_cue_chars` / `max_cue_sec` | 24 / 8.0 | cue 字数/时长上限 |
 | `pause_sec` | 0.6 | 词间静音 ≥ 此值 = 硬 cue 边界 |
 | `vad_min_speech_ms` / `vad_min_silence_ms` / `vad_speech_pad_ms` | 120 / 300 / 150 | 宽松 VAD（分块用） |
+| `vad_threshold` | 0.5 | 宽松 pass 概率阈值；调低（如 0.35）找回弱语音，误检增多。紧凑 pass 固定 0.5 不动 |
+| `recover_missed` / `recover_min_sec` | false / 0.4 | 补漏 pass 开关；短于此的漏检区间不补 |
+| `repeat_tail_max_cps` | 0.0 | >0 启用语速判据（建议试 12.0）：字/秒 ≤ 此值的真实重复（「うんうん」）不砍；0 = 一律砍 |
+| `srt_min_display_sec` / `srt_lead_in_sec` / `srt_tail_sec` | 0.0 / 0.0 / 0.0 | .srt 显示时间 polish。边界检查开启时 lead/tail 保持 0 避免重复加余量 |
 | `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 3.0 / 8.0 / 15.0 | 分块目标区间 + 硬上限 |
 | `asr_max_new_tokens` | 1024 | ASR 生成上限 |
 | `align_pad_sec` / `align_min_coverage` | 0.3 / 0.5 | 对齐窗口 padding（也是词允许越界的最远距离）/ 质量门覆盖率下限 |

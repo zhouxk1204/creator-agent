@@ -75,6 +75,31 @@ class JaAsrSettings(BaseModel):
     vad_min_speech_ms: int = 120
     vad_min_silence_ms: int = 300
     vad_speech_pad_ms: int = 150
+    # --- 实验开关（默认全部保持旧行为，方便和 baseline 逐项对比）---
+    # Permissive-pass VAD probability threshold (silero default 0.5). Lower it
+    # (e.g. 0.35) to recover weak/soft speech the VAD used to miss — at the
+    # cost of more music/noise false positives. The tight audit pass stays at
+    # 0.5 (it is the measuring baseline; never change both at once).
+    vad_threshold: float = 0.5
+    # Recovery pass: tight-VAD speech no successful ASR chunk covers gets one
+    # more ASR+alignment attempt as extra chunks (reason="recovered"), reusing
+    # the same aligner subprocess (no second model load).
+    recover_missed: bool = False
+    recover_min_sec: float = 0.4  # missed ranges shorter than this are not recovered
+    # Repeat-tail hallucination guard by speaking rate: >0 enables the cps
+    # criterion — a repeat tail is only cut when chars/sec over the chunk's
+    # speech duration exceeds this (12.0 is a good trial value); real
+    # 「うんうんうん」-style back-channels at normal speed are kept. 0 = old
+    # behavior (every repeat tail is cut).
+    repeat_tail_max_cps: float = 0.0
+    # .srt-only display-time polish (transcript.json keeps real speech times).
+    # All 0 = off. min_display stretches too-short cues for readability;
+    # lead/tail add pre/post margins — keep them 0 when boundary_check is on
+    # (it already adds lead_in/tail_out when snapping; enabling both would
+    # double the margin).
+    srt_min_display_sec: float = 0.0
+    srt_lead_in_sec: float = 0.0
+    srt_tail_sec: float = 0.0
     # Chunking: aim for 3-8s chunks; max_chunk_sec is the HARD cap (oversized
     # chunks are force-split at the nearest natural pause, else hard-cut).
     chunk_target_min_sec: float = 3.0

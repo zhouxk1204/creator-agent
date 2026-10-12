@@ -314,3 +314,22 @@ def test_cut_repeat_tail_whole_text_loop():
     from creator_agent.asr.cue_splitter import cut_repeat_tail
 
     assert cut_repeat_tail("ああああああああ") == "あ"
+
+
+def test_cut_repeat_tail_cps_guard_keeps_normal_speed():
+    from creator_agent.asr.cue_splitter import cut_repeat_tail
+
+    # Real back-channel at normal speed: 12 chars over 2s of speech = 6 cps
+    # <= 12 -> kept even though it looks like a repeat tail.
+    text = "うん、うん、うん、うん、"
+    assert cut_repeat_tail(text, speech_dur=2.0, max_cps=12.0) == text
+
+
+def test_cut_repeat_tail_cps_guard_cuts_impossible_speed():
+    from creator_agent.asr.cue_splitter import cut_repeat_tail
+
+    # Hallucination loop: 20 chars over 1s of speech = 20 cps > 12 -> cut.
+    text = "バイバイ。バイバイ。バイバイ。バイバイ。"
+    assert cut_repeat_tail(text, speech_dur=1.0, max_cps=12.0) == "バイバイ。"
+    # max_cps=0 restores the old always-cut behavior.
+    assert cut_repeat_tail("うん、うん、うん、うん、", speech_dur=2.0, max_cps=0.0) == "うん、"

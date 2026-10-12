@@ -139,3 +139,14 @@ def test_extra_keys_preserved():
         audio_duration=10.0,
     )
     assert cues[0]["speaker"] == "話者A"
+
+
+def test_format_check_report_uncovered():
+    from creator_agent.asr.boundary_check import format_check_report
+
+    report = format_check_report("ep1", 100.0, 100.0, 10, 3, [], [], uncovered=[[12.0, 14.5]])
+    assert "UNRECOVERED_SPEECH" in report
+    assert "00:12.000 --> 00:14.500" in report
+    # No flags AND no uncovered -> clean message (unchanged old behavior).
+    report = format_check_report("ep1", 100.0, 100.0, 10, 3, [], [])
+    assert "无可疑项" in report and "UNRECOVERED" not in report

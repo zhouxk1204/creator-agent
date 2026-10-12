@@ -17,6 +17,10 @@ def _settings() -> JaAsrSettings:
         model="Qwen/Qwen3-ASR-1.7B-hf",
         device="cpu",
         language="Japanese",
+        # These tests target the transcribe orchestration, not the boundary
+        # check; leaving it on would shell out to the real ffmpeg/ffprobe
+        # (and leak those calls into the Popen mock's call history).
+        boundary_check=False,
     )
 
 

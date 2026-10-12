@@ -279,8 +279,13 @@ def format_check_report(
     snapped_count: int,
     flags: list[dict],
     cues: list[dict],
+    uncovered: list | None = None,
 ) -> str:
-    """Human-readable boundary-check report (written to ``<stem>.check.txt``)."""
+    """Human-readable boundary-check report (written to ``<stem>.check.txt``).
+
+    ``uncovered`` = [(start, end), ...] speech ranges that ended up with no
+    subtitle even after the recovery pass (if enabled) — the "needs a human
+    ear" list, flagged UNRECOVERED_SPEECH."""
 
     def ts(sec: float) -> str:
         m, s = divmod(max(0.0, sec), 60.0)
@@ -305,6 +310,11 @@ def format_check_report(
             f"[{'/'.join(f['reasons'])}] cue #{f['index'] + 1} {ts(cue['start'])} --> {ts(cue['end'])} "
             f"{cue.get('text', '')[:20]} — {f['detail']}"
         )
-    if not flags:
+    if uncovered:
+        lines.append("")
+        lines.append(f"有语音但无字幕的区间（补漏后仍为空，需人工听）: {len(uncovered)} 段")
+        for s, e in uncovered:
+            lines.append(f"[UNRECOVERED_SPEECH] {ts(float(s))} --> {ts(float(e))} ({float(e) - float(s):.1f}s)")
+    if not flags and not uncovered:
         lines.append("所有 cue 边界均落在静音附近，无可疑项。")
     return "\n".join(lines) + "\n"

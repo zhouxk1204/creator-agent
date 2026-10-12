@@ -78,3 +78,50 @@ def test_write_srt(tmp_path):
     content = out.read_text(encoding="utf-8")
     assert content.startswith("1\n00:00:00,000 --> 00:00:01,500\nテスト")
     assert content.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# finalize_for_srt (display-time polish)
+# ---------------------------------------------------------------------------
+
+
+def _cue(start, end, text="x"):
+    return {"start": start, "end": end, "text": text}
+
+
+def test_finalize_for_srt_identity_when_off():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    cues = [_cue(1.0, 2.0), _cue(3.0, 3.2)]
+    assert finalize_for_srt(cues) is cues  # all-zero params: untouched
+    assert finalize_for_srt([], min_display_sec=0.7) == []
+
+
+def test_finalize_for_srt_min_display():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    # 0.2s cue stretches to 0.7s; next cue starts at 3.0 so no clamping.
+    out = finalize_for_srt([_cue(1.0, 1.2), _cue(3.0, 4.0)], min_display_sec=0.7)
+    assert out[0]["start"] == 1.0 and out[0]["end"] == 1.7
+    assert out[1] == _cue(3.0, 4.0)  # already long enough
+
+
+def test_finalize_for_srt_clamped_by_next_cue():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    # Stretch would collide with the next cue: capped at next start - 20ms.
+    out = finalize_for_srt([_cue(1.0, 1.2), _cue(1.5, 2.0)], min_display_sec=0.7)
+    assert out[0]["end"] == 1.48
+
+
+def test_finalize_for_srt_lead_tail_and_limit():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    out = finalize_for_srt([_cue(1.0, 2.0)], lead_in_sec=0.1, tail_sec=0.2, limit=2.1)
+    assert out[0]["start"] == 0.9 and out[0]["end"] == 2.1  # tail clamped to media end
+    # Lead-in never goes below 0.
+    out = finalize_for_srt([_cue(0.05, 1.0)], lead_in_sec=0.1)
+    assert out[0]["start"] == 0.0
+    # Extra keys survive.
+    out = finalize_for_srt([{"start": 1.0, "end": 2.0, "text": "t", "speaker": "話者A"}], tail_sec=0.1)
+    assert out[0]["speaker"] == "話者A"

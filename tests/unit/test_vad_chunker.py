@@ -72,3 +72,25 @@ def test_uncovered_ranges_min_sec_filter():
 
     out = uncovered_ranges([(0.0, 10.0)], [(0.0, 9.5)], min_sec=1.0)
     assert out == []  # 0.5s leftover is below the threshold
+
+
+def test_subtract_intervals():
+    from creator_agent.asr.vad_chunker import subtract_intervals
+
+    speech = [(0.0, 5.0), (10.0, 20.0)]
+    covered = [(1.0, 2.0), (12.0, 13.0), (16.0, 22.0)]
+    out = subtract_intervals(speech, covered)
+    assert out == [(0.0, 1.0), (2.0, 5.0), (10.0, 12.0), (13.0, 16.0)]
+    # Fully covered -> nothing left.
+    assert subtract_intervals(speech, [(0.0, 30.0)]) == []
+    # min_len drops short leftovers.
+    assert subtract_intervals([(0.0, 10.0)], [(0.0, 9.5)], min_len=0.6) == []
+    assert subtract_intervals([(0.0, 10.0)], [(0.0, 9.5)], min_len=0.5) == [(9.5, 10.0)]
+
+
+def test_merge_close():
+    from creator_agent.asr.vad_chunker import merge_close
+
+    assert merge_close([(0.0, 1.0), (1.4, 2.0), (5.0, 6.0)], max_gap=0.6) == [(0.0, 2.0), (5.0, 6.0)]
+    assert merge_close([(0.0, 1.0), (1.7, 2.0)], max_gap=0.6) == [(0.0, 1.0), (1.7, 2.0)]
+    assert merge_close([], max_gap=0.6) == []

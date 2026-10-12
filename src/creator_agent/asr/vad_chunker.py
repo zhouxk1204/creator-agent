@@ -49,6 +49,46 @@ def uncovered_ranges(
     return out
 
 
+def subtract_intervals(
+    spans: Sequence[tuple[float, float]],
+    covered: Sequence[tuple[float, float]],
+    min_len: float = 0.0,
+) -> list[tuple[float, float]]:
+    """``spans`` minus ``covered``; leftover pieces shorter than ``min_len``
+    are dropped. Used by the recovery pass: tight-VAD speech intervals minus
+    the spans of successful ASR chunks = speech nobody transcribed."""
+    cov = sorted((float(s), float(e)) for s, e in covered if e > s)
+    out: list[tuple[float, float]] = []
+    for s, e in sorted((float(s), float(e)) for s, e in spans if e > s):
+        cur = s
+        for cs, ce in cov:
+            if ce <= cur:
+                continue
+            if cs >= e:
+                break
+            if cs > cur:
+                out.append((cur, cs))
+            cur = max(cur, ce)
+        if cur < e:
+            out.append((cur, e))
+    return [(a, b) for a, b in out if b - a >= min_len]
+
+
+def merge_close(intervals: Sequence[tuple[float, float]], max_gap: float) -> list[tuple[float, float]]:
+    """Merge intervals separated by <= ``max_gap`` (recovery candidates whose
+    padded ASR windows would otherwise overlap and be transcribed twice)."""
+    ivs = sorted((float(s), float(e)) for s, e in intervals if e > s)
+    if not ivs:
+        return []
+    out = [ivs[0]]
+    for s, e in ivs[1:]:
+        if s - out[-1][1] <= max_gap:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def merge_speech_intervals(
     intervals: list[tuple[float, float]],
     max_gap: float = 0.3,
