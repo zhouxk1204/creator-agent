@@ -20,9 +20,13 @@ Pipeline per job (everything downstream of separation runs on the VOCAL stem —
 VAD, ASR and the aligner all share one audio source and one timeline):
 
     vocals.wav -> silero-VAD speech intervals (permissive pass for chunking,
-       plus a fixed tight pass for cue auditing / fallback timing)
+       plus a fixed tight pass for cue auditing / fallback timing / recovery)
     -> targeted chunks (~3-8s, hard cap 15s; oversized split at natural pause)
-    -> Qwen3-ASR per chunk (+ hallucination repeat-tail cut)
+    -> Qwen3-ASR per chunk (+ hallucination repeat-tail cut, cps-guarded when
+       --repeat-tail-max-cps is set)
+    -> optional recovery pass (--recover-missed): tight-VAD speech no
+       successful chunk covers is re-ASR'd as extra "recovered" chunks that
+       join the SAME aligner run below
     -> Qwen3-ForcedAligner per chunk (separate aligner-env SUBPROCESS, one per
        video, per-chunk results streamed back)
     -> alignment quality gate per chunk (coverage / window / timing /
@@ -45,7 +49,9 @@ sentinel markers (identical contract to asr/worker.py):
 
     ===ASR_RESULTS_BEGIN===
     [{"video_id":..., "ok":true, "text":..., "segments":[{"start","end","text","speaker"?}],
-      "duration_sec":..., "vocals_path":...}, ...]
+      "duration_sec":..., "vocals_path":...,
+      "dropped":  [{"start","end","text","speech_cov","chunk"}, ...],   # hallucination-filtered cues
+      "uncovered": [[start, end], ...]}, ...]                           # speech left without subtitles
     ===ASR_RESULTS_END===
 
 Per-video failures set ``ok: false`` with an ``error`` field; they never abort

@@ -4,9 +4,11 @@ Standalone file-based tool, NOT wired into the sync pipeline: takes local
 video files, extracts audio (ffmpeg), invokes the ja worker (dedicated
 ``creator-asr-ja`` env) as a subprocess — vocal separation + silero-vad
 chunking + Qwen3-ASR — then writes ``<name>.transcript.json`` / ``<name>.txt``
-/ ``<name>.srt`` next to each video (or into ``<out-dir>/<name>/`` — one
-subdirectory per video, matching the vault's ``episodes/<剧集>/`` layout). The worker loads
-all models once per batch, so pass all files in one call.
+/ ``<name>.srt`` (+ ``<name>.check.txt`` boundary report and
+``<name>.dropped.txt`` hallucination-filtered cues when present) next to each
+video (or into ``<out-dir>/<name>/`` — one subdirectory per video, matching
+the vault's ``episodes/<剧集>/`` layout). The worker loads all models once per
+batch, so pass all files in one call.
 """
 
 from __future__ import annotations

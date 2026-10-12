@@ -19,12 +19,14 @@
              │     ├─ silero-VAD × 2 遍（宽松 + 紧凑）
              │     ├─ CAM++ 说话人分离（可选）
              │     ├─ Qwen3-ASR-1.7B 逐块识别
+             │     ├─ 补漏 pass（可选）：无字幕语音区间追加一轮 ASR
              │     ├─ [子进程 2] aligner_worker.py  conda env: creator-asr-ja-aligner
-             │     │     └─ Qwen3-ForcedAligner-0.6B 词级对齐
-             │     ├─ 对齐质量门 → cue 切分 → 幻觉 cue 过滤
+             │     │     └─ Qwen3-ForcedAligner-0.6B 词级对齐（初始+补漏 chunk 同一次运行）
+             │     ├─ 对齐质量门 → cue 切分 → 幻觉 cue 过滤（被丢 cue 收集进结果）
              │     └─ 打印 ===ASR_RESULTS_BEGIN=== JSON ===ASR_RESULTS_END===
+             │           （ok 结果含 segments + dropped + uncovered 字段）
              ├─ boundary_check（主环境）   ffprobe + silencedetect 边界吸附
-             └─ 写 .srt / .txt / .transcript.json / .check.txt
+             └─ 写 .srt / .txt / .transcript.json / .check.txt / .dropped.txt
 ```
 
 **为什么要三个 env：**
@@ -154,7 +156,9 @@ UNRECOVERED 清单）——这是刻意的，重试同样的音频大概率还�
 对称去重会同时弄坏两条 cue；现在质量门先拒，`resolve_overlaps` 只做微小真实边缘重叠的
 最后保险。
 
-### 步骤 6（worker 内）：cue 切分（`cue_splitter.split_cues`）
+### 步骤 5 收尾（worker 内）：cue 切分（`cue_splitter.split_cues`）
+
+> 对应 bat 头注释第 3–4 步的后处理：每个 ASR chunk 对齐完（或回退后）立刻切成字幕 cue。
 
 一个 ASR chunk 可能含好几句，切成 ≤24 字 / ≤8s 的字幕 cue：
 
@@ -179,7 +183,7 @@ UNRECOVERED 清单）——这是刻意的，重试同样的音频大概率还�
 被丢的 cue 同时收集进结果 JSON 的 `dropped` 字段，主环境写成 `<stem>.dropped.txt`
 （格式 `[12.34-14.10] speech_cov=0.21  文本`）——事后可核对丢掉的是幻觉还是真台词。
 
-### 步骤 6（主环境）：对照原视频/音频的边界检查（`boundary_check.py`）
+### 步骤 6（主环境，bat 第 5+6 步）：边界检查 + 写产物（`boundary_check.py`）
 
 worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴——本步在主环境补上
 （只依赖 ffmpeg/ffprobe，worker 退出后、临时音频清理前跑）：
@@ -200,6 +204,9 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
    - 最后重排为单调、不重叠、≥0.2s。
 4. 报告写 `<stem>.check.txt`；**.srt 本身保持干净**（要导入剪映核对时间轴）。
    边界检查失败只跳过该视频（保留原 segments），绝不让视频失败。
+5. 随后 `_write_outputs` 写产物：`.srt` 过 `finalize_for_srt`（配了才变），worker 结果里的
+   `dropped` → `.dropped.txt`，`uncovered` 已并入上面的 check 报告（`[UNRECOVERED_SPEECH]`）。
+   注意：**边界检查关闭时没有 .check.txt**，uncovered 清单只出现在 SUMMARY 日志里。
 
 ---
 
@@ -293,8 +300,9 @@ worker 的所有进度走 **stderr**（主进程实时转发）；stdout 只放�
 ```
 VAD      segments / short / long      → 段异常多/少 → 调 VAD 参数或检查分离质量
 Chunks   total + reason 分布          → forced_split_hard 多 = VAD 把音乐当语音
+         （含 recovered = 补漏 chunk 数，recover_missed 开启时）
 ASR      success / empty / failed / repeat-tail cut
-         → repeat-tail cut 多 = 幻觉严重（分离不干净或音乐段）
+         → repeat-tail cut 多 = 幻觉严重（分离不干净或音乐段）；日志带 cps= 核对判据
 Alignment success / fallback 按原因分
          → OUT_OF_WINDOW 多 = 词锁到相邻语句（align_pad 太大或块太密）
          → LOW_COVERAGE 多 = ASR 文本与对齐词对不上
@@ -306,8 +314,12 @@ Coverage speech not subtitled         → 有语音没字幕的区间列表，�
 ### 5.3 逐层排查路径
 
 1. **字幕整体偏移/缺失** → 先看 `.check.txt` 的 `AUDIO_VIDEO_MISMATCH`（音频提取被截断）。
-2. **某段没字幕** → SUMMARY 的 "speech not subtitled" 区间；配合 `[CHUNK …][CUE] DROP` 日志
-   看是被过滤还是 ASR 没出字（`asr_empty`）。
+2. **某段没字幕** → SUMMARY 的 "speech not subtitled" 区间 + `.check.txt` 的
+   `[UNRECOVERED_SPEECH]` 清单；配合 `[CHUNK …][CUE] DROP` 日志和 `.dropped.txt`
+   看是被过滤还是 ASR 没出字（`asr_empty`）。确认是真台词被漏 → 开 `recover_missed`
+   或调低 `vad_threshold` 重跑（`--force`）。
+2b. **怀疑幻觉过滤误杀真台词** → 翻 `.dropped.txt`：`speech_cov` 接近 0.3 且文本像正常
+   台词的要人工听原片确认；cov 极低（<0.1）的基本是音乐/噪音幻觉，过滤正确。
 3. **字幕时间与语音对不上** → 看该 chunk 的 `[ALIGN]` 行：fallback 原因是什么。
    `-v/--verbose` 会打出原始 VAD 段、每个词的时间、每条 cue 的明细。
 4. **人声分离质量存疑** → 听 `work_dir` 里的 `.vocals.wav` / `.instrumental.wav`。
@@ -327,7 +339,15 @@ worker 是独立脚本，可脱离 CLI 单跑（jobs.json = `[{"video_id","audio
 ```
 
 结果 JSON 在 stdout 的 `===ASR_RESULTS_BEGIN/END===` 之间；单视频失败只置 `ok:false`，
-退出码恒为 0（调用方读 JSON 判成败）。
+退出码恒为 0（调用方读 JSON 判成败）。ok 结果字段：
+
+```json
+{"video_id": "...", "ok": true, "text": "...", "duration_sec": 1430.5,
+ "segments": [{"start": 1.2, "end": 3.4, "text": "…", "speaker": "話者A"}],
+ "vocals_path": ".../ep01.vocals.wav",
+ "dropped":   [{"start": 12.3, "end": 14.1, "text": "…", "speech_cov": 0.21, "chunk": 5}],
+ "uncovered": [[65.2, 68.9]]}
+```
 
 ---
 
