@@ -65,6 +65,7 @@ separation model -> ~/.cache/audio-separator-models; ModelScope (speaker)
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import shutil
@@ -134,6 +135,35 @@ def _fmt_ts(sec: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _patch_separator_tqdm() -> None:
+    """Make audio-separator's tqdm bars visible through the parent pipe.
+
+    JaTranscriber streams this worker's stderr line-by-line, but tqdm redraws
+    its bar in place with '\\r' and no newline — so the minutes-long
+    separation loop shows NOTHING until it finishes (log looks frozen).
+    Swap every audio_separator module's ``tqdm`` for a throttled variant
+    whose redraws end in '\\n': one progress line every few seconds, with
+    percent + it/s + ETA.
+
+    MUST be called after ``load_model()`` — the architecture modules
+    (mdxc_separator etc.) are imported lazily at that point.
+    """
+    import tqdm
+
+    class _NewlineStderr:
+        def write(self, s: str) -> None:
+            sys.stderr.write(s.replace("\r", "\n"))
+            sys.stderr.flush()
+
+        def flush(self) -> None:
+            sys.stderr.flush()
+
+    throttled = functools.partial(tqdm.tqdm, file=_NewlineStderr(), mininterval=5.0)
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("audio_separator") and getattr(mod, "tqdm", None) is tqdm.tqdm:
+            mod.tqdm = throttled
+
+
 def _load_separator(sep_model: str):
     from audio_separator.separator import Separator
 
@@ -143,6 +173,7 @@ def _load_separator(sep_model: str):
         separator.load_model(model_filename=sep_model)
     else:
         separator.load_model()  # default BS-RoFormer vocal model
+    _patch_separator_tqdm()
     return separator
 
 
