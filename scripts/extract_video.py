@@ -1,4 +1,4 @@
-﻿"""Download a single Douyin video and generate subtitles (ASR -> SRT).
+"""Download a single Douyin video and generate subtitles (ASR -> SRT).
 
 Usage:
     uv run python scripts/extract_video.py "https://www.douyin.com/video/7664966551623322914"
@@ -11,7 +11,6 @@ import argparse
 import re
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")

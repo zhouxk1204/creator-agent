@@ -13,6 +13,7 @@ The argument may be a ``/video/<id>`` URL, a profile/modal URL carrying
 ``modal_id=<id>``, or a bare numeric id. With no argument the built-in default
 video is used.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,7 +35,6 @@ from creator_agent.browser.manager import BrowserConfig, BrowserManager
 from creator_agent.collector.douyin.meta import fetch_video_meta
 from creator_agent.collector.douyin.url import DouyinUrlError, parse_video_target
 from creator_agent.config import load_settings
-from creator_agent.downloader.downloader import Downloader
 from creator_agent.models.transcript import Transcript, TranscriptSegment
 
 DEFAULT_VIDEO_ID = "7677189247543135514"
@@ -60,9 +60,7 @@ def main(target: str | None = None) -> int:
     txt_path = out_dir / "transcript.txt"
 
     # 1) Resolve CDN URL via Playwright, then download with httpx (cookies+Referer+UA).
-    browser = BrowserManager(
-        BrowserConfig(user_data_dir=settings.browser.user_data_dir, headless=True)
-    )
+    browser = BrowserManager(BrowserConfig(user_data_dir=settings.browser.user_data_dir, headless=True))
     browser.start()
     try:
         print(f"[1/3] Resolving CDN URL via browser for: {video_url}")
@@ -75,16 +73,12 @@ def main(target: str | None = None) -> int:
             print("ERROR: could not resolve CDN URL.")
             return 1
 
-        downloader = Downloader(
-            storage=None,  # type: ignore[arg-type]
-            browser=browser,
-            timeout_sec=settings.downloader.timeout_sec,
-            retries=settings.downloader.retry,
-        )
         # We bypass the storage layer; download straight to out_dir.
-        from creator_agent.collector.douyin.meta import DOUYIN_REFERER, USER_AGENT
-        import httpx
         import time as _t
+
+        import httpx
+
+        from creator_agent.collector.douyin.meta import DOUYIN_REFERER, USER_AGENT
 
         cookies = browser.get_cookies("www.douyin.com")
         cookie_dict = {c["name"]: c["value"] for c in cookies}
@@ -105,9 +99,9 @@ def main(target: str | None = None) -> int:
                 break
             except Exception as e:
                 last_exc = e
-                print(f"      download attempt {attempt+1} failed: {e}")
+                print(f"      download attempt {attempt + 1} failed: {e}")
                 if attempt < settings.downloader.retry - 1:
-                    _t.sleep(2 ** attempt)
+                    _t.sleep(2**attempt)
         else:
             print(f"ERROR: download failed after retries: {last_exc}")
             return 1
@@ -129,6 +123,7 @@ def main(target: str | None = None) -> int:
         print(f"ERROR: creator-asr python not found: {env_python!r}")
         return 2
     from creator_agent.asr import worker as _worker
+
     worker_script = settings.asr.worker_script or str(Path(_worker.__file__))
 
     jobs = [{"video_id": video_id, "audio_path": str(audio_path)}]
@@ -139,11 +134,16 @@ def main(target: str | None = None) -> int:
     cmd = [
         env_python,
         worker_script,
-        "--jobs", jobs_path,
-        "--model", settings.asr.model,
-        "--vad-model", settings.asr.vad_model,
-        "--punc-model", settings.asr.punc_model,
-        "--device", settings.asr.device,
+        "--jobs",
+        jobs_path,
+        "--model",
+        settings.asr.model,
+        "--vad-model",
+        settings.asr.vad_model,
+        "--punc-model",
+        settings.asr.punc_model,
+        "--device",
+        settings.asr.device,
     ]
     print(f"      running : {cmd[0]} {Path(worker_script).name} --jobs ... --device {settings.asr.device}")
     env = os.environ.copy()
@@ -164,7 +164,7 @@ def main(target: str | None = None) -> int:
         print("ERROR: ASR worker output missing result markers.")
         print("stdout tail:\n", stdout[-800:])
         return 4
-    payload = json.loads(stdout[begin + len(_RESULT_BEGIN):end].strip())
+    payload = json.loads(stdout[begin + len(_RESULT_BEGIN) : end].strip())
     if not payload or not payload[0].get("ok"):
         print("ERROR: ASR failed:", payload[0].get("error") if payload else "no result")
         return 5

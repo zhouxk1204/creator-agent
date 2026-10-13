@@ -39,7 +39,7 @@ import httpx
 import websocket  # websocket-client
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_WORKFLOW = REPO_ROOT / "ComfyUI_Anime_2x_RealESRGAN_MetaBatch_TotalProgress.json"
+DEFAULT_WORKFLOW = REPO_ROOT / "config" / "comfyui_anime_2x_workflow.json"
 
 # How long the queue must stay empty (after activity) before we call it done.
 # Between meta batches the gap is ~instant, so a few seconds is a safe margin.
