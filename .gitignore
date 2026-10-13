@@ -31,6 +31,13 @@ Thumbs.db
 /input/
 /output/
 
+# Third-party auto-upload tool (installed by bat/setup_publish.bat; has its
+# own venv + git repo, so it must not be tracked here)
+/tools/social-auto-upload/
+
+# Video publish staging dirs (user content; format documented in bat/publish_dual.md)
+/publish/
+
 # Character material library: images are large/local-only; manifests (JSONL
 # index) and the directory skeleton stay in git.
 /character_library/inbox/
