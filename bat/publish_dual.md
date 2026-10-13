@@ -31,16 +31,19 @@ tools\social-auto-upload\.venv\Scripts\sau.exe bilibili login --account default
 
 ## 每次发布
 
-1. 建好发布目录，把素材放进去：
+1. 建好发布目录，把素材放进去。**格式标准见 `docs/publish-package.md`**（唯一权威定义，
+   含给 AI 的生成提示词）；模板可直接复制：`docs/publish-template/`。
 
 ```
 publish\2026-10-13-doraemon-935\
-    video.mp4      必须，且目录里只能有一个视频文件
-    title.txt      必须，第一行 = 标题
-    cover.jpg      可选，封面图（抖音用 3:4 竖版效果最好）
-    desc.txt       可选，整个文件 = 简介（多行可以）
-    tags.txt       可选，标签，逗号/空格/换行分隔都行
-    meta.txt       可选，key=value，见下
+    video.mp4           必须，且目录里只能有一个视频文件
+    title.txt           必须，第一行 = 标题（≤55字）
+    desc.txt            建议，整个文件 = 简介（多行可以）
+    tags.txt            建议，标签，逗号/空格/换行分隔都行（≤12个）
+    cover-douyin.jpg    建议，抖音封面 3:4 竖版
+    cover-bilibili.jpg  建议，B站封面 16:10 横版
+    cover.jpg           可选，通用封面回退
+    meta.txt            可选，key=value 发布参数（tid/schedule/账号/跳过）
 ```
 
 2. 双击 `bat\publish_dual.bat`（publish\ 下只有一个候选目录时自动选中），
@@ -59,21 +62,7 @@ bat\publish_dual.bat publish\xxx --only bilibili
 
 ## meta.txt 支持的键
 
-```ini
-# B站分区号（发B站必填，也可命令行 --tid 指定）
-tid=24
-# 定时发布，两个平台都生效
-schedule=2026-10-14 12:00
-# 非 default 账号时改这里
-douyin_account=default
-bilibili_account=default
-# 本次跳过某个平台
-douyin=0
-bilibili=0
-```
-
-常用 B站分区 tid：`24` 动画·综合、`27` 动画·MAD·AMV、`232` 生活·日常、
-`21` 动画·综合(旧)。完整分区表在 B站投稿页选分区时可查，或搜「bilibili tid 分区表」。
+见 `docs/publish-package.md` 第 2 节（含 B站分区 tid 速查）。
 
 ## 其他参数
 

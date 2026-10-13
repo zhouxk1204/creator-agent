@@ -3,12 +3,16 @@
 Reads a publish directory prepared by the user:
 
     publish/<name>/
-        video.mp4    # required: exactly one video file
-        cover.jpg    # optional: cover image (.jpg/.jpeg/.png)
-        title.txt    # required: first non-empty line = title
-        desc.txt     # optional: whole file = description (multi-line OK)
-        tags.txt     # optional: tags, comma / space / newline separated
-        meta.txt     # optional: key=value lines, see META KEYS below
+        video.mp4          # required: exactly one video file
+        title.txt          # required: first non-empty line = title
+        desc.txt           # optional: whole file = description (multi-line OK)
+        tags.txt           # optional: tags, comma / space / newline separated
+        cover-douyin.jpg   # optional: 3:4 portrait cover for Douyin
+        cover-bilibili.jpg # optional: 16:10 landscape cover for Bilibili
+        cover.jpg          # optional: fallback cover for both platforms
+        meta.txt           # optional: key=value lines, see META KEYS below
+
+The canonical format spec (with AI-generation prompt) is docs/publish-package.md.
 
 META KEYS (meta.txt):
     tid              Bilibili category id (required for bilibili unless --tid)
@@ -80,11 +84,38 @@ def normalize_tags(raw: str) -> str:
     return ",".join(t for t in (x.strip() for x in raw.split(",")) if t)
 
 
+def resolve_covers(folder: Path) -> tuple[Path | None, Path | None]:
+    """Resolve (douyin_cover, bilibili_cover) from the publish folder.
+
+    Priority per platform: cover-<platform>.<ext> -> cover.<ext> -> the only
+    image in the folder. Multiple un-named images are an error (ambiguous).
+    """
+    images = [p for p in sorted(folder.iterdir()) if p.is_file() and p.suffix.lower() in COVER_EXTS]
+
+    def named(stem: str) -> Path | None:
+        return next((p for p in images if p.stem.lower() == stem), None)
+
+    generic = named("cover")
+    douyin = named("cover-douyin") or generic
+    bilibili = named("cover-bilibili") or generic
+    if douyin is None and bilibili is None:
+        unnamed = [p for p in images if not p.stem.lower().startswith("cover-")]
+        if len(unnamed) == 1:
+            douyin = bilibili = unnamed[0]
+        elif len(unnamed) > 1:
+            names = ", ".join(p.name for p in images)
+            raise SystemExit(
+                "[X] 有多张图片，无法判断封面：请命名为 "
+                f"cover-douyin.jpg / cover-bilibili.jpg / cover.jpg（现有: {names}）"
+            )
+    return douyin, bilibili
+
+
 class PublishJob:
     def __init__(self, folder: Path, args: argparse.Namespace):
         self.folder = folder
         self.video = find_single(folder, VIDEO_EXTS, "视频文件", required=True)
-        self.cover = find_single(folder, COVER_EXTS, "封面图", required=False)
+        self.cover_douyin, self.cover_bilibili = resolve_covers(folder)
 
         title_file = folder / "title.txt"
         if not title_file.exists():
@@ -132,8 +163,8 @@ class PublishJob:
                 cmd += ["--desc", self.desc]
             if self.tags:
                 cmd += ["--tags", self.tags]
-            if self.cover:
-                cmd += ["--thumbnail", str(self.cover)]
+            if self.cover_douyin:
+                cmd += ["--thumbnail", str(self.cover_douyin)]
             if self.schedule:
                 cmd += ["--schedule", self.schedule]
             cmd += ["--headed" if headed else "--headless"]
@@ -156,8 +187,8 @@ class PublishJob:
             ]
             if self.tags:
                 cmd += ["--tags", self.tags]
-            if self.cover:
-                cmd += ["--thumbnail", str(self.cover)]
+            if self.cover_bilibili:
+                cmd += ["--thumbnail", str(self.cover_bilibili)]
             if self.schedule:
                 cmd += ["--schedule", self.schedule]
             cmds.append(("B站", cmd))
@@ -222,7 +253,9 @@ def main() -> int:
     print(f"  发布目录 : {folder.relative_to(REPO_ROOT) if folder.is_relative_to(REPO_ROOT) else folder}")
     print(f"  视频     : {job.video.name}")
     print(f"  标题     : {job.title}")
-    print(f"  封面     : {job.cover.name if job.cover else '（无，平台自动截取）'}")
+    cover_d = job.cover_douyin.name if job.cover_douyin else "（无，自动截取）"
+    cover_b = job.cover_bilibili.name if job.cover_bilibili else "（无，自动截取）"
+    print(f"  抖音封面 : {cover_d}   B站封面: {cover_b}")
     print(f"  平台     : {platforms}")
     if job.schedule:
         print(f"  定时     : {job.schedule}")

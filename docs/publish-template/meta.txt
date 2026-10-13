@@ -1,0 +1,13 @@
+# B站分区号（发B站必填）。常用: 24=动画综合 27=MAD/AMV 232=生活日常
+tid=24
+
+# 定时发布（不写=立即发布）。格式: YYYY-MM-DD HH:MM
+# schedule=2026-10-14 12:00
+
+# 非 default 账号时改（对应 sau login --account 的名字）
+# douyin_account=default
+# bilibili_account=default
+
+# 本次跳过某平台
+# douyin=0
+# bilibili=0
