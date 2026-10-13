@@ -290,6 +290,9 @@ worker 的所有进度走 **stderr**（主进程实时转发）；stdout 只放�
 
 - `[ja-asr] …` — 主环境编排（提取、worker 启停、边界检查、写产物）
 - `[ja-worker][<vid>] …` — 视频级步骤（分离 → VAD → 说话人 → 分块 → ASR → 对齐）
+- ` 42%|████▏   | 115/273 [01:32<02:11,  1.20it/s]` — 人声分离的 tqdm 进度行，
+  每 5 秒一行（worker 把 audio-separator 的 `\r` 重绘改成了换行 + 节流，
+  否则主进程按行转发 stderr 时分离阶段会"假死"几分钟，没有任何输出）
 - `[CHUNK nnn/NNN][STAGE] …` — 块级流水线，**grep `CHUNK 005` 可重建一个块走 VAD→ASR→ALIGN→CUE 的完整路径**
 - `[ja-aligner] …` — aligner 子进程（加载、每块对齐耗时）
 - `ASR SUMMARY` — 每视频收尾计数器（见 5.2）
