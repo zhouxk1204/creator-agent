@@ -18,7 +18,7 @@
              │     ├─ BS-RoFormer 人声分离 (audio-separator)
              │     ├─ silero-VAD × 2 遍（宽松 + 紧凑）
              │     ├─ CAM++ 说话人分离（可选）
-             │     ├─ Qwen3-ASR-1.7B 逐块识别
+             │     ├─ Qwen3-ASR-1.7B 逐块识别（JA-Anime-Galgame 微调版）
              │     ├─ 补漏 pass（可选）：无字幕语音区间追加一轮 ASR
              │     ├─ [子进程 2] aligner_worker.py  conda env: creator-asr-ja-aligner
              │     │     └─ Qwen3-ForcedAligner-0.6B 词级对齐（初始+补漏 chunk 同一次运行）
@@ -97,7 +97,10 @@
 
 ### 步骤 4：Qwen3-ASR 逐块识别（worker env）
 
-- 模型 `Qwen/Qwen3-ASR-1.7B-hf`（可换 0.6B 提速），`apply_transcription_request` + generate，
+- 模型当前部署为 `jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`（Qwen3-ASR-1.7B 的日语
+  动漫/Galgame 微调，本地 `C:/models/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`；官方原版
+  `Qwen/Qwen3-ASR-1.7B-hf` 在 settings.yaml 里留注释可回滚，0.6B 可提速），
+  `apply_transcription_request` + generate，
   `max_new_tokens=1024`（512 会截长 chunk）。
 - **幻觉防护 `cut_repeat_tail`**：音乐/噪音上模型会循环同一单元（「バイバイ。バイバイ。…」）。
   结尾同一单元重复 ≥3 次且跨度 ≥6 字符 → 砍回只留一次。**只砍尾巴**——句首结巴（「ねねねね…」）
@@ -262,7 +265,7 @@ CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 | `input_dir` | `C:/test/temps` | 无参运行时扫描此目录（递归） |
 | `out_dir` | "" | 输出根目录；空 = 写到视频旁边 |
 | `work_dir` | "" | 中间产物保留目录；空 = 跑完即删 |
-| `model` | `Qwen/Qwen3-ASR-1.7B-hf` | 可换 `Qwen3-ASR-0.6B-hf` 提速 |
+| `model` | `jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf` | 当前部署（日语动漫/Galgame 微调）；代码默认官方 `Qwen/Qwen3-ASR-1.7B-hf`，可换 0.6B 提速 |
 | `sep_model` | "" | audio-separator 模型文件名；空 = 默认 BS-RoFormer |
 | `device` | `cuda:0` | `mps` / `cpu` 用于 Mac 调试 |
 | `language` | `Japanese` | |

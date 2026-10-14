@@ -17,7 +17,7 @@ rem
 rem Japanese ASR pipeline (six steps):
 rem   1. extract audio       ffmpeg -> 16kHz mono WAV
 rem   2. separate vocals     BS-RoFormer (audio-separator)
-rem   3. recognize Japanese  Qwen3-ASR-1.7B over VAD speech chunks
+rem   3. recognize Japanese  Qwen3-ASR-1.7B (JA-Anime-Galgame fine-tune) over VAD speech chunks
 rem   4. word-level align    Qwen3-ForcedAligner (separate conda env subprocess)
 rem   5. boundary check      vs original video+audio: ffprobe duration check,
 rem                          cue start/end snapped to real silence, suspicious

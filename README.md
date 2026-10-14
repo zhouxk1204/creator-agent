@@ -139,7 +139,8 @@ CAM++ ~28MB 到 `~/.cache/modelscope`）；国内网络可设 `HF_ENDPOINT=https
 ja_asr:
   env_python: "C:/Users/<你>/.conda/envs/creator-asr-ja/python.exe"  # macOS: ~/miniconda3/envs/creator-asr-ja/bin/python
   input_dir: "C:/test/temps"   # 视频丢进这个目录即可
-  model: "Qwen/Qwen3-ASR-1.7B-hf"   # 想快速验证可换 Qwen/Qwen3-ASR-0.6B-hf
+  model: "Qwen/Qwen3-ASR-1.7B-hf"   # 想快速验证可换 Qwen/Qwen3-ASR-0.6B-hf；
+                                    # 日语动漫场景可试微调版 jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf（本地目录亦可）
   device: "cuda:0"                  # Mac 调试用 mps / cpu
   language: "Japanese"
   # 可选：词级对齐（两个 aligner_* 必须同时配置，缺一个就退回按比例分摊时间）
