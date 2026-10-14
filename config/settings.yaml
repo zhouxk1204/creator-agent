@@ -37,7 +37,11 @@ ja_asr:
   # 中间产物保留目录：提取的原始音频 <vid>.wav + 分离后人声 <vid>.vocals.wav
   # + 伴奏/背景音 <vid>.instrumental.wav，用于检查背景音是否去除干净
   work_dir: C:/test/temps/_work
-  model: C:/models/Qwen3-ASR-1.7B-hf   # local dir (ModelScope); C:/models/Qwen3-ASR-0.6B-hf for speed
+  # JA-Anime-Galgame 微调版（HF: jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf）。
+  # 下载：hf download jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf --local-dir C:/models/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf
+  # （HF 不通时先 set HF_ENDPOINT=https://hf-mirror.com）
+  model: C:/models/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf
+  # model: C:/models/Qwen3-ASR-1.7B-hf   # 官方原版（回滚用）；C:/models/Qwen3-ASR-0.6B-hf for speed
   sep_model: ""                   # blank -> audio-separator default BS-RoFormer
   device: cuda:0                  # cpu works too (slow); mps on Mac
   language: Japanese
