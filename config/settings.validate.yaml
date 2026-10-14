@@ -1,0 +1,51 @@
+# settings.validate.yaml —— 04_ja_asr 验证阶段调参文件
+#
+# 位置：config/settings.validate.yaml（与 settings.yaml 并排）。
+# ja-asr 启动时自动加载（双击 04_ja_asr.bat 即生效），只覆盖主配置
+# settings.yaml 的 ja_asr 段；环境路径、模型、设备等不在这里。
+# --config <其他文件> 可换实验配置；文件改名/移走即回到 baseline。
+# 文件里所有值 = 当前默认（旧行为）。原样跑 = baseline。
+# 每次实验只改一行，--force 重跑，--out-dir 按实验分开。
+# 固定不动（对比期间）：model / sep_model / speaker_model / aligner_*
+#
+# 每项注释格式：  默认 | 调节方向 | 重点看哪个指标
+
+ja_asr:
+
+  # ───────── ① 漏字幕：弱语音能否被检出、漏掉的能否补回 ─────────
+  vad_threshold: 0.5          # 调低(0.35)找回弱语音，音乐/噪音误检增多 | 看 SUMMARY: speech not subtitled 时长
+  vad_min_speech_ms: 120      # 调低保住更短的感叹词 | 看 VAD short 段数
+  vad_min_silence_ms: 300     # 调高=少切碎，调低=切更细 | 看 Chunks 总数
+  vad_speech_pad_ms: 150      # 调高保弱起音，过大会吃进噪音 | 看 cue 起点是否被截
+  recover_missed: false       # true=开补漏 pass | 看 chunk_recovered 条数、UNRECOVERED_SPEECH 数
+  recover_min_sec: 0.4        # 短于此的漏检区间不补 | 看补漏 chunk 数是否过多
+
+  # ───────── ② 幻觉与多余字幕 ─────────
+  repeat_tail_max_cps: 0.0    # 0=一律砍重复尾；12.0=按语速判据，保留真「うんうん」 | 看日志 cps= 与 repeat-tail cut 数
+
+  # ───────── ③ 文字准确度（chunk 与生成上限）─────────
+  chunk_target_min_sec: 3.0   # 过短 chunk 识别易缺上下文 | 看 asr_empty / 文本断句
+  chunk_target_max_sec: 8.0
+  max_chunk_sec: 15.0         # 硬上限；forced_split_hard 多说明 VAD 把音乐当语音
+  asr_max_new_tokens: 1024    # 太小会截断长 chunk | 看 cue 是否缺尾
+
+  # ───────── ④ 时间轴准确度 ─────────
+  align_pad_sec: 0.3          # 太大→词锁到相邻句(OUT_OF_WINDOW 多)，太小→找不回起音 | 看 align_fallback_*
+  align_min_coverage: 0.5     # 质量门覆盖率下限 | 看 align_fallback_LOW_COVERAGE
+  boundary_check: true        # 关掉就没有 .check.txt，不建议关
+  boundary_snap_sec: 0.5      # cue 边最远吸附距离 | 看 .check.txt 的 START/END_IN_SILENCE
+  boundary_silence_db: -35.0  # 调高(如 -30)=更多静音被识别，人声弱时更易误判 | 看吸附数
+  boundary_min_silence_sec: 0.12
+  boundary_lead_in_sec: 0.08  # 字幕比语音早出现的余量
+  boundary_tail_sec: 0.10     # 字幕比语音晚消失的余量
+
+  # ───────── ⑤ 分句与可读性 ─────────
+  max_cue_chars: 24           # 每条字幕字数上限 | 人工看断句
+  max_cue_sec: 8.0
+  pause_sec: 0.6              # 词间静音≥此值=硬断点；调低=断得更碎
+  speaker_threshold: 0.5      # 仅配了 speaker_model 才有效；调低=说话人更多
+
+  # ───────── ⑥ 显示时长（只改 .srt，不改 transcript.json / .txt）─────────
+  srt_min_display_sec: 0.0    # 试 0.7，拉长过短 cue | 看短 cue 可读性
+  srt_lead_in_sec: 0.0        # boundary_check 开启时必须保持 0（吸附已含余量）
+  srt_tail_sec: 0.0           # 同上

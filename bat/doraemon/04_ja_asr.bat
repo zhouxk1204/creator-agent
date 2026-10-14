@@ -33,6 +33,10 @@ rem   04_ja_asr.bat video.mp4 --force          ignore existing SRT/audio cache
 rem   04_ja_asr.bat video.mp4 --translate      also translate to .zh.srt
 rem   04_ja_asr.bat video.mp4 --translate --burn   then burn into .zh.mp4
 rem
+rem Tuning: config\settings.validate.yaml (auto-loaded when present) overrides
+rem ONLY the ja_asr section of config\settings.yaml - edit one line, rerun with
+rem --force and --out-dir per experiment. --config <file> uses a different one.
+rem
 rem Translation needs the local LLM server (llama.cpp). The CLI starts it
 rem lazily right before the translate phase and stops it right after -- it
 rem must NOT run during ASR: llama-server + torch/CUDA + vocal separator +

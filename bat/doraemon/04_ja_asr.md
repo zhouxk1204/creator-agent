@@ -243,6 +243,12 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 
 ## 4. 配置项速查（`config/settings.yaml` 的 `ja_asr:` 段）
 
+**调参文件 `config/settings.validate.yaml`**：`ja-asr` 启动时自动加载（存在即应用），
+只覆盖 `ja_asr` 段——环境路径、模型、设备仍看主配置。调参流程：改一行 → `--force` 重跑 →
+`--out-dir` 按实验分目录对比。文件里所有值 = 当前默认，原样跑 = baseline；改名/移走即回
+baseline。`--config <文件>` 可指定其他实验配置；无法识别的键会打印警告并忽略。
+CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
+
 > 所有实验开关（`vad_threshold`/`recover_missed`/`repeat_tail_max_cps`/`srt_*`）默认保持
 > **旧行为**——不改配置跑出的结果与改动前逐字节一致，方便和 baseline 目录逐项对比。
 > 建议一次只开一项：① `vad_threshold: 0.35` → ② `recover_missed: true` →

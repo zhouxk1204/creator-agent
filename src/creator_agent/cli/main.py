@@ -433,6 +433,36 @@ def asr(
         repo.close()
 
 
+def _apply_validate_overrides(ja, config_path: str | None):
+    """Merge a tuning-only yaml (ja_asr section) over the main settings.
+
+    Default location: config/settings.validate.yaml next to settings.yaml —
+    auto-applied when present so double-clicking 04_ja_asr.bat picks up the
+    current experiment. --config points at a different experiment file.
+    """
+    import yaml
+
+    from creator_agent.config import JaAsrSettings
+
+    path = Path(config_path) if config_path else Path("config/settings.validate.yaml")
+    if not path.exists():
+        if config_path:
+            typer.echo(f"  ! validate config not found, using settings.yaml only: {path}")
+        return ja
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    section = data.get("ja_asr") or {}
+    valid, unknown = {}, []
+    for k, v in section.items():
+        if k in JaAsrSettings.model_fields:
+            valid[k] = v
+        else:
+            unknown.append(k)
+    if unknown:
+        typer.echo(f"  ! {path.name}: unknown ja_asr keys ignored: {', '.join(sorted(unknown))}")
+    typer.echo(f"Validate config: {path} ({len(valid)} ja_asr override(s))")
+    return ja.model_copy(update=valid)
+
+
 @app.command(
     name="ja-asr",
     help="Vocal-separated Japanese ASR for local video files (Qwen3-ASR). Writes <name>.txt / .srt / .transcript.json.",
@@ -450,6 +480,12 @@ def ja_asr(
     ),
     translate: bool = typer.Option(False, "--translate", "-t", help="After ASR, translate .srt -> .zh.srt."),
     burn: bool = typer.Option(False, "--burn", "-b", help="After translating, burn zh subs into <name>.zh.mp4."),
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Tuning yaml with a ja_asr section (default: config/settings.validate.yaml if it exists).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging (VAD segments, word times, cues)."),
 ):
     import glob as globmod
@@ -457,7 +493,7 @@ def ja_asr(
     from creator_agent.asr.ja_transcriber import JaTranscriber, scan_videos, split_pending
 
     settings = load_settings()
-    ja = settings.ja_asr
+    ja = _apply_validate_overrides(settings.ja_asr, config)
     overrides = {k: v for k, v in {"language": language, "device": device, "model": model}.items() if v}
     if verbose:
         overrides["verbose"] = True
