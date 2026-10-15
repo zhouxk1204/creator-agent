@@ -224,16 +224,17 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 ├── <stem>.transcript.json  # Transcript 模型全量（含 segments 真实语音时间）
 ├── <stem>.check.txt        # 边界检查报告（吸附数、可疑 cue、UNRECOVERED_SPEECH 清单）
 ├── <stem>.dropped.txt      # 被幻觉过滤丢弃的 cue（仅当有丢弃时生成）
-└── <stem>.review.json      # 听片标注文件：cue（id 与 srt 序号一致）+ 诊断 + question/expected
+└── <stem>.review.<时间戳>.json  # 听片标注文件：cue（id 与 srt 序号一致）+ 诊断 + question/expected
 ```
 
-**review.json（听片标注，`review_json: true` 默认开）**：对着 .srt 听片时发现问题，
+**review.<时间戳>.json（听片标注，`review_json: true` 默认开）**：对着 .srt 听片时发现问题，
 直接在对应 `id` 的条目里填 `question`（现象）/ `expected`（可选，正确台词）；每条 cue
 自带诊断（chunk、对齐回退原因、speech_cov、repeat_tail_cut、boundary），`dropped` /
 `uncovered` 条目也可标注——反馈格式见 `docs/subtitle-issue-template.md`。
-**重跑不会丢标注**：已填的 question 按「文本相同 + 起点 ±0.5s」迁移到新 cue 上
-（cue 序号随参数变化，不能靠序号匹配）；迁移不上的保留在 `meta.orphaned_questions`。
-`meta.overrides` 记录本次运行的调参值，不同实验的结果不会搞混。
+**每次运行生成一个新的带时间戳文件，旧的永远保留**——重跑（--force 调参）不会动
+你填过标注的文件；注意 cue 序号随参数变化，旧文件的标注只对当次运行的 cue 有意义，
+对照最新 .srt 时取时间戳最新的那份。`meta.overrides` 记录当次运行的调参值，
+不同实验的结果不会搞混。
 
 **SRT 显示时间 polish**（`finalize_for_srt`，只作用在 .srt 上，transcript.json/.txt 保持
 真实语音时间）：`srt_min_display_sec` 把过短的 cue 拉到可读时长（不越过下一条 cue 起点 −20ms、

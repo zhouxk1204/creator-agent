@@ -417,8 +417,9 @@ class JaTranscriber:
         if r.get("boundary_report"):
             (target_dir / f"{stem}.check.txt").write_text(r["boundary_report"], encoding="utf-8")
         # Review file: srt-aligned cues + per-cue diagnostics + empty
-        # question/expected fields to annotate while listening. Reruns
-        # migrate hand-filled annotations onto the new cues, never overwrite.
+        # question/expected fields to annotate while listening. Every run
+        # writes a NEW timestamped file — previous runs (and their
+        # hand-filled annotations) are always kept.
         if getattr(st, "review_json", False):
             rv = review.build_review(
                 source=vpath.name,
@@ -431,8 +432,8 @@ class JaTranscriber:
                 dropped=dropped,
                 uncovered=r.get("uncovered") or [],
             )
-            status = review.write_review(target_dir / f"{stem}.review.json", rv)
-            _progress(f"review.json 已生成（{status}）")
+            out = review.write_review(target_dir, stem, rv)
+            _progress(f"review 文件已生成：{out.name}")
 
     @staticmethod
     def _unique_id(stem: str, used: set[str]) -> str:

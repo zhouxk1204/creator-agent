@@ -1,9 +1,10 @@
-"""Unit tests for asr/review.py — review.json build, annotation migration,
-and rerun-safe writing. No worker/subprocess involved: pure dicts."""
+"""Unit tests for asr/review.py — review file build and timestamped,
+never-overwrite writing. No worker/subprocess involved: pure dicts."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from creator_agent.asr import review
 
@@ -91,101 +92,32 @@ class TestBuildReview:
         assert rv["cues"][0]["diag"] == {"boundary": None}
 
 
-class TestMigration:
-    def _annotated_old(self):
-        old = _build()
-        old["cues"][0]["question"] = "字幕比语音晚 0.4s"
-        old["cues"][0]["expected"] = "おはよう！"
-        old["dropped"][0]["question"] = "这句是真台词，被误删"
-        old["uncovered"][0]["question"] = "这里有一句低语漏了"
-        return old
-
-    def test_questions_migrate_by_text_and_time(self):
-        old = self._annotated_old()
-        new = _build()  # same text/times
-        new, moved, orphaned = review.migrate_annotations(old, new)
-        assert (moved, orphaned) == (3, 0)
-        assert new["cues"][0]["question"] == "字幕比语音晚 0.4s"
-        assert new["cues"][0]["expected"] == "おはよう！"
-        assert new["dropped"][0]["question"].startswith("这句是真台词")
-        assert new["uncovered"][0]["question"].startswith("这里有")
-
-    def test_time_drift_beyond_tolerance_orphans(self):
-        old = self._annotated_old()
-        new = _build()
-        new["cues"][0]["start"] = 11.0  # 1.1s away from old 9.9 > 0.5s tol
-        new, moved, orphaned = review.migrate_annotations(old, new)
-        assert moved == 2 and orphaned == 1
-        assert new["cues"][0]["question"] == ""
-        orphans = new["meta"]["orphaned_questions"]
-        assert orphans[0]["kind"] == "cue"
-        assert orphans[0]["question"] == "字幕比语音晚 0.4s"
-
-    def test_changed_text_orphans(self):
-        old = self._annotated_old()
-        new = _build()
-        new["cues"][0]["text"] = "おはようございます"  # ASR recognized differently
-        _, moved, orphaned = review.migrate_annotations(old, new)
-        assert moved == 2 and orphaned == 1
-
-    def test_one_new_cue_absorbs_at_most_one_annotation(self):
-        old = _build()
-        old["cues"][0]["question"] = "q1"
-        old["cues"][1]["question"] = "q2"
-        old["cues"][1]["text"] = old["cues"][0]["text"]  # both old cues look like new cue 1
-        old["cues"][1]["start"] = old["cues"][0]["start"]
-        new = _build()
-        new, moved, orphaned = review.migrate_annotations(old, new)
-        assert moved == 1 and orphaned == 1
-        assert new["cues"][0]["question"] == "q1"
-
-    def test_unannotated_old_is_noop(self):
-        old, new = _build(), _build()
-        new, moved, orphaned = review.migrate_annotations(old, new)
-        assert (moved, orphaned) == (0, 0)
-        assert "orphaned_questions" not in new["meta"]
-
-
 class TestWriteReview:
-    def test_fresh_write(self, tmp_path):
-        p = tmp_path / "ep01.review.json"
-        assert review.write_review(p, _build()) == "fresh"
+    T1 = datetime(2026, 10, 15, 19, 30, 0)
+    T2 = datetime(2026, 10, 15, 21, 5, 42)
+
+    def test_timestamped_filename(self, tmp_path):
+        p = review.write_review(tmp_path, "ep01", _build(), now=self.T1)
+        assert p.name == "ep01.review.20261015-193000.json"
         loaded = json.loads(p.read_text(encoding="utf-8"))
         assert len(loaded["cues"]) == 3
 
-    def test_overwrite_when_no_annotations(self, tmp_path):
-        p = tmp_path / "ep01.review.json"
-        review.write_review(p, _build())
-        assert review.write_review(p, _build()) == "overwritten"
-
-    def test_annotations_survive_rerun(self, tmp_path):
-        p = tmp_path / "ep01.review.json"
+    def test_rerun_keeps_previous_file(self, tmp_path):
         first = _build()
-        first["cues"][1]["question"] = "时间轴偏早"
-        review.write_review(p, first)
-        # Simulate a rerun: same content, regenerated file.
-        status = review.write_review(p, _build())
-        assert status == "migrated:1"
-        assert json.loads(p.read_text(encoding="utf-8"))["cues"][1]["question"] == "时间轴偏早"
+        first["cues"][1]["question"] = "时间轴偏早"  # hand-filled annotation
+        p1 = review.write_review(tmp_path, "ep01", first, now=self.T1)
+        p2 = review.write_review(tmp_path, "ep01", _build(), now=self.T2)
+        assert p1 != p2 and p1.exists() and p2.exists()
+        # The old file keeps its annotation, untouched by the rerun.
+        old = json.loads(p1.read_text(encoding="utf-8"))
+        assert old["cues"][1]["question"] == "时间轴偏早"
+        new = json.loads(p2.read_text(encoding="utf-8"))
+        assert new["cues"][1]["question"] == ""
 
-    def test_corrupt_old_file_backed_up(self, tmp_path):
-        p = tmp_path / "ep01.review.json"
-        p.write_text("{not json", encoding="utf-8")
-        assert review.write_review(p, _build()) == "fresh_after_bak"
-        assert (tmp_path / "ep01.review.bak.json").exists()
-        assert json.loads(p.read_text(encoding="utf-8"))["cues"]
-
-
-class TestHasAnnotations:
-    def test_empty_is_false(self):
-        assert review.has_annotations(_build()) is False
-
-    def test_whitespace_only_is_false(self):
-        rv = _build()
-        rv["cues"][0]["question"] = "   "
-        assert review.has_annotations(rv) is False
-
-    def test_expected_alone_counts(self):
-        rv = _build()
-        rv["cues"][2]["expected"] = "正确台词"
-        assert review.has_annotations(rv) is True
+    def test_same_second_collision_gets_suffix(self, tmp_path):
+        p1 = review.write_review(tmp_path, "ep01", _build(), now=self.T1)
+        p2 = review.write_review(tmp_path, "ep01", _build(), now=self.T1)
+        p3 = review.write_review(tmp_path, "ep01", _build(), now=self.T1)
+        assert p1.name == "ep01.review.20261015-193000.json"
+        assert p2.name == "ep01.review.20261015-193000-2.json"
+        assert p3.name == "ep01.review.20261015-193000-3.json"
