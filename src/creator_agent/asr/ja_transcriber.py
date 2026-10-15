@@ -4,8 +4,9 @@ Standalone file-based tool, NOT wired into the sync pipeline: takes local
 video files, extracts audio (ffmpeg), invokes the ja worker (dedicated
 ``creator-asr-ja`` env) as a subprocess — vocal separation + silero-vad
 chunking + Qwen3-ASR — then writes ``<name>.transcript.json`` / ``<name>.txt``
-/ ``<name>.srt`` (+ ``<name>.check.txt`` boundary report and
-``<name>.dropped.txt`` hallucination-filtered cues when present) next to each
+/ ``<name>.srt`` (+ ``<name>.check.txt`` boundary report,
+``<name>.dropped.txt`` hallucination-filtered cues when present, and
+``<name>.review.json`` per-cue diagnostics + annotation fields) next to each
 video (or into ``<out-dir>/<name>/`` — one subdirectory per video, matching
 the vault's ``episodes/<剧集>/`` layout). The worker loads all models once per
 batch, so pass all files in one call.
@@ -23,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from creator_agent.asr import boundary_check
+from creator_agent.asr import boundary_check, review
 from creator_agent.asr.audio_extractor import extract_audio
 from creator_agent.asr.subtitle import finalize_for_srt, write_srt
 from creator_agent.models.transcript import Transcript, TranscriptSegment
@@ -217,6 +218,19 @@ class JaTranscriber:
                     for old, new in zip(segments, refined)
                     if abs(old["start"] - new["start"]) > 1e-3 or abs(old["end"] - new["end"]) > 1e-3
                 )
+                # Merge the boundary outcome into each cue's diag (review.json):
+                # which edges snapped, plus any suspect-flag reasons.
+                flag_by_idx = {f["index"]: f["reasons"] for f in flags if f["index"] is not None}
+                for i, (old, new) in enumerate(zip(segments, refined)):
+                    diag = new.setdefault("diag", {})
+                    actions = []
+                    if abs(old["start"] - new["start"]) > 1e-3:
+                        actions.append("snapped_start")
+                    if abs(old["end"] - new["end"]) > 1e-3:
+                        actions.append("snapped_end")
+                    diag["boundary"] = "+".join(actions) if actions else None
+                    if i in flag_by_idx:
+                        diag["flags"] = flag_by_idx[i]
                 r["segments"] = refined
                 suspect = sum(1 for f in flags if f["index"] is not None)
                 r["boundary_report"] = boundary_check.format_check_report(
@@ -402,6 +416,23 @@ class JaTranscriber:
         # .srt itself stays clean for 剪映 import.
         if r.get("boundary_report"):
             (target_dir / f"{stem}.check.txt").write_text(r["boundary_report"], encoding="utf-8")
+        # Review file: srt-aligned cues + per-cue diagnostics + empty
+        # question/expected fields to annotate while listening. Reruns
+        # migrate hand-filled annotations onto the new cues, never overwrite.
+        if getattr(st, "review_json", False):
+            rv = review.build_review(
+                source=vpath.name,
+                duration_sec=r.get("duration_sec"),
+                model=self._settings.model,
+                overrides=review.settings_overrides(self._settings),
+                stats=r.get("stats"),
+                segments=r.get("segments") or [],
+                srt_dicts=srt_dicts,
+                dropped=dropped,
+                uncovered=r.get("uncovered") or [],
+            )
+            status = review.write_review(target_dir / f"{stem}.review.json", rv)
+            _progress(f"review.json 已生成（{status}）")
 
     @staticmethod
     def _unique_id(stem: str, used: set[str]) -> str:

@@ -48,11 +48,18 @@ without BOTH, cue times fall back to proportional. Prints results wrapped in
 sentinel markers (identical contract to asr/worker.py):
 
     ===ASR_RESULTS_BEGIN===
-    [{"video_id":..., "ok":true, "text":..., "segments":[{"start","end","text","speaker"?}],
+    [{"video_id":..., "ok":true, "text":...,
+      "segments":[{"start","end","text","speaker"?,
+                   "diag": {"chunk","chunk_reason","time_source","align_fallback",
+                            "speech_cov","repeat_tail_cut"}}],
       "duration_sec":..., "vocals_path":...,
       "dropped":  [{"start","end","text","speech_cov","chunk"}, ...],   # hallucination-filtered cues
-      "uncovered": [[start, end], ...]}, ...]                           # speech left without subtitles
+      "uncovered": [[start, end], ...],                                 # speech left without subtitles
+      "stats": {...}}, ...]                                             # SUMMARY counters (review meta)
     ===ASR_RESULTS_END===
+
+``diag`` / ``stats`` are additive-only: the main env uses them for the
+``.review.json`` diagnostics, older readers ignore unknown keys.
 
 Per-video failures set ``ok: false`` with an ``error`` field; they never abort
 the batch. Exit code 0 even if some videos failed (the caller reads the JSON).
@@ -487,6 +494,7 @@ def _asr_pass(processor, asr_model, chunks: list[dict], args, stats, work: Path,
         stripped = "".join(text.split())
         if len(cut) < len(stripped):
             stats["asr_repeat_cut"] += 1
+            c["repeat_tail_cut"] = True
             cps = len(stripped) / max(speech_dur, 0.5)
             _chunk_log(
                 cid,
@@ -711,6 +719,17 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 seg = {"start": cue["start"], "end": cue["end"], "text": cue["text"]}
                 if c["speaker"]:
                     seg["speaker"] = c["speaker"]
+                # Per-cue diagnostics for the main env's .review.json — the
+                # CHUNK nnn log facts, attached so an annotated cue needs no
+                # log archaeology. Extra key: old readers ignore it.
+                seg["diag"] = {
+                    "chunk": c["idx"],
+                    "chunk_reason": c["reason"],
+                    "time_source": "word_timed" if words else "proportional",
+                    "align_fallback": None if words else (check.reason if align_on else "DISABLED"),
+                    "speech_cov": round(speech_coverage(cue["start"], cue["end"], tight), 3),
+                    "repeat_tail_cut": bool(c.get("repeat_tail_cut")),
+                }
                 segments.append(seg)
 
         # Word-timed cues may spill slightly past their chunk (the align
@@ -743,6 +762,9 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         "vocals_path": str(vocals_out) if vocals_out else None,
         "dropped": dropped,
         "uncovered": [[round(s, 3), round(e, 3)] for s, e in uncovered],
+        # SUMMARY counters as data (the .review.json meta.summary); the
+        # human-readable SUMMARY keeps printing to stderr as before.
+        "stats": dict(stats),
     }
 
 

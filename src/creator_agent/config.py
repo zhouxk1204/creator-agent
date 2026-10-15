@@ -119,6 +119,11 @@ class JaAsrSettings(BaseModel):
     boundary_min_silence_sec: float = 0.12  # silencedetect min silence duration
     boundary_lead_in_sec: float = 0.08  # subtitle appears this far before speech onset
     boundary_tail_sec: float = 0.10  # ... and lingers this far after speech offset
+    # <stem>.review.json: srt-aligned cues + pipeline diagnostics + empty
+    # question/expected fields to annotate while listening (see
+    # docs/subtitle-issue-template.md). Reruns migrate hand-filled
+    # annotations onto the new cues (text + ±0.5s match), never overwrite.
+    review_json: bool = True
     verbose: bool = False  # debug logging in the worker (VAD segments, word times, cues)
 
 
