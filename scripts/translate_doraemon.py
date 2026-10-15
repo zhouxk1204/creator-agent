@@ -1,10 +1,15 @@
-"""Translate Doraemon episode notes (title + synopsis) JA -> ZH.
+"""Translate Doraemon episode notes (title + synopsis) JA -> ZH, plus tags.
 
 Reads the per-story notes written by ``fetch_doraemon.py``
 (``<vault>/简介/{ep}/{ep}_{i}.md``, '# <title>' + cover embed + synopsis body)
 and writes a Chinese sibling next to each one::
 
     <vault>/简介/{ep}/{ep}_{i}_zh.md   # '# <中文标题>' + cover embed + 中文简介
+                                      # + 最后一行 '标签：#xx #yy ...'（发布话题标签）
+
+Tags are generated from the *translated* title+synopsis (Douyin/Bilibili style
+hashtags): a couple of base hot tags plus story-specific ones (characters,
+props, plot hooks) — never just generic "#动漫 #动画" filler.
 
 Uses the same local OpenAI-compatible LLM server as the subtitle translator
 (``translate`` section of config/settings.yaml — llama.cpp Qwen3.5-9B by
@@ -48,6 +53,80 @@ SYSTEM_PROMPT = """你是一名专业日中翻译，负责翻译动漫《哆啦A
 
 _KANA = re.compile(r"[぀-ヿ]")
 _COVER_EMBED = re.compile(r"^\s*!\[\[.+\]\]\s*$")
+
+TAG_SYSTEM_PROMPT = """你是一名短视频运营专家，为《哆啦A梦》剧集视频生成发布话题标签（抖音 / B站风格）。
+
+要求：
+1. 总共 8~12 个标签
+2. 基础热门标签 2~3 个：结合剧集气质挑选，如 #哆啦A梦 #新番 #童年动画 #治愈系动画 #搞笑动画
+3. 内容专属标签占其余全部（至少 5 个）：必须来自本集剧情 —— 出场角色名、秘密道具名、
+   核心情节关键词、情绪/看点钩子（如 #大雄逆袭 #时光机失控 #静香的秘密）
+4. 严禁整组都是 #动漫 #动画 #二次元 这类空泛标签；每个内容标签都要让人一眼看出是"这一集"
+5. 每个标签 2~12 个汉字，不含空格、标点、日文假名
+6. 只输出一行，以"标签："开头，各标签以 # 开头、用空格分隔，不输出任何其他内容"""
+
+_TAG_LINE = re.compile(r"^\s*标签\s*[:：]\s*(.+?)\s*$")
+_TAG_TOKEN = re.compile(r"#([^\s#，,。、；;！!？?]+)")
+
+# Generic filler that adds no reach but makes the set look lazy; dropped when
+# the model ignores rule 4 and pads with them anyway.
+_GENERIC_TAGS = {"动漫", "动画", "二次元", "动画片", "日本动漫", "日本动画", "动漫推荐"}
+
+
+def build_tag_prompt(zh_title: str, zh_synopsis: str) -> str:
+    return (
+        "根据下面的中文标题和简介生成发布标签：\n\n"
+        f"标题：{zh_title}\n"
+        "简介：\n"
+        f"{zh_synopsis}"
+    )
+
+
+def parse_tags(reply: str) -> list[str]:
+    """Extract the tag list from the model reply.
+
+    Accepts a '标签：#a #b ...' line (or any line carrying #tokens), drops
+    generic filler and kana-contaminated tags, dedupes, and requires at
+    least 5 surviving tags — else ValueError so the caller retries.
+    """
+    raw: str | None = None
+    for line in reply.splitlines():
+        m = _TAG_LINE.match(line)
+        if m:
+            raw = m.group(1)
+            break
+        if _TAG_TOKEN.search(line) and raw is None:
+            raw = line
+    if raw is None:
+        raise ValueError("reply has no 标签： line")
+
+    tags: list[str] = []
+    for token in _TAG_TOKEN.findall(raw):
+        token = token.strip()
+        if not token or _KANA.search(token):
+            continue
+        if len(token) > 12:
+            continue
+        if token in _GENERIC_TAGS:
+            continue
+        if token not in tags:
+            tags.append(token)
+    if len(tags) < 5:
+        raise ValueError(f"too few usable tags ({len(tags)}): {tags}")
+    return tags[:12]
+
+
+def generate_tags(settings, zh_title: str, zh_synopsis: str) -> list[str]:
+    """Generate publish tags for one story, retrying once on a bad reply."""
+    user = build_tag_prompt(zh_title, zh_synopsis)
+    last_err: ValueError | None = None
+    for temperature in (0.6, 0.3):
+        reply = chat(settings, TAG_SYSTEM_PROMPT, user, temperature=temperature)
+        try:
+            return parse_tags(reply)
+        except ValueError as exc:
+            last_err = exc
+    raise ValueError(f"tag generation failed after retry: {last_err}")
 
 
 def _too_much_kana(text: str) -> bool:
@@ -162,12 +241,30 @@ def main(episode: str) -> None:
             failed += 1
             print(f"  FAILED    : {note.name} ({exc})")
             continue
+
+        # Tags ride along with the translation; a tag failure still writes the
+        # translated file (without the tag line) but marks the story failed so
+        # the run reports it and the user can re-run.
+        tags: list[str] = []
+        tag_err: Exception | None = None
+        try:
+            tags = generate_tags(settings, zh_title, zh_synopsis)
+        except (ValueError, httpx.HTTPError) as exc:
+            tag_err = exc
+
         out_lines = [f"# {zh_title}", ""]
         if cover:
             out_lines += [cover, ""]
         out_lines += zh_synopsis.splitlines()
+        if tags:
+            out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
         zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
-        print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
+        if tag_err is None:
+            print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
+        else:
+            failed += 1
+            print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
+            print(f"  TAG FAILED: {note.name} ({tag_err})")
 
     if failed:
         print(f"\n{failed}/{len(notes)} stories failed to translate.")
