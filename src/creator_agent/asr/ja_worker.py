@@ -547,6 +547,11 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             _TIGHT_SPEECH_PAD_MS,
             threshold=_TIGHT_THRESHOLD,
         )
+        # Recovery-detection pass: same as tight unless --recover-vad-threshold
+        # lowers it (computed lazily in the recovery block below). Recovered
+        # chunks are timed/audited against this pass so their weak speech isn't
+        # dropped as hallucination by the tighter baseline.
+        recovery = tight
         stats["vad_segments"] = len(intervals)
         stats["vad_short"] = sum(1 for s, e in intervals if e - s < _SHORT_SEG_SEC)
         stats["vad_long"] = sum(1 for s, e in intervals if e - s > args.max_chunk)
@@ -601,24 +606,36 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # Phase 1: ASR every chunk on the vocal stem.
         asr_chunks = _asr_pass(processor, asr_model, chunks, args, stats, work, vocals, tight, total=len(chunks))
 
-        # Phase 1.5 (optional recovery pass): tight-VAD speech that NO
-        # successful ASR chunk covers (the permissive VAD missed it, or its
-        # chunk came back empty) gets one more ASR attempt as extra chunks
-        # (reason="recovered"). This runs BEFORE the aligner subprocess is
-        # launched, so recovered chunks align in the same run — no second
-        # model load. Coverage proxy = successful chunk spans: with the
-        # speech-aware cue timeline, every tight speech interval inside a
-        # transcribed chunk ends up covered by some cue, so chunk spans are
-        # an exact stand-in for cue spans at this stage. (Speech whose cues
+        # Phase 1.5 (optional recovery pass): speech that NO successful ASR
+        # chunk covers (the permissive VAD missed it, or its chunk came back
+        # empty) gets one more ASR attempt as extra chunks (reason="recovered").
+        # Detection runs on a dedicated pass at --recover-vad-threshold: LOWER it
+        # (e.g. 0.35) to catch weak/distant lines the main chunking pass missed
+        # WITHOUT disturbing the main chunk boundaries (lowering the chunking
+        # threshold instead would over-merge chunks and hurt ASR). This runs
+        # BEFORE the aligner subprocess is launched, so recovered chunks align
+        # in the same run — no second model load. Coverage proxy = successful
+        # chunk spans: with the speech-aware cue timeline, every speech interval
+        # inside a transcribed chunk ends up covered by some cue, so chunk spans
+        # are an exact stand-in for cue spans at this stage. (Speech whose cues
         # are ALL dropped later by the hallucination filter is not retried —
         # it lands in the UNRECOVERED_SPEECH list instead.)
         if args.recover_missed and tight:
+            if args.recover_vad_threshold < _TIGHT_THRESHOLD - 1e-9:
+                recovery = _speech_intervals(
+                    vad_model,
+                    vocals,
+                    _TIGHT_MIN_SPEECH_MS,
+                    _TIGHT_MIN_SILENCE_MS,
+                    _TIGHT_SPEECH_PAD_MS,
+                    threshold=args.recover_vad_threshold,
+                )
             covered = [(c["start"], c["end"]) for c in asr_chunks]
-            missed = subtract_intervals(tight, covered, args.recover_min_sec)
+            missed = subtract_intervals(recovery, covered, args.recover_min_sec)
             # Pieces closer than 2x the recovery pad would get overlapping
             # ASR windows; merge them first.
             missed = merge_close(missed, max_gap=0.6)
-            _progress(vid, f"补漏检测：{len(missed)} 段有语音无字幕（>= {args.recover_min_sec}s）")
+            _progress(vid, f"补漏检测（阈值 {args.recover_vad_threshold}）：{len(missed)} 段有语音无字幕")
             if missed:
                 extra = [
                     {
@@ -673,6 +690,11 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             else:
                 stats["align_fallback_DISABLED"] += 1
 
+            # Speech baseline for cue timing + the no-speech audit: tight, but
+            # RECOVERED chunks use the (lower-threshold) recovery pass — their
+            # weak speech is invisible to the tight pass, so auditing them
+            # against tight would drop them as hallucination.
+            cov_intervals = recovery if c["reason"] == "recovered" else tight
             cues = split_cues(
                 c["text"],
                 c["start"],
@@ -682,17 +704,17 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 max_sec=args.max_cue_sec,
                 pause_sec=args.pause_sec,
                 # Speech-aware fallback: when word alignment is rejected, cues
-                # are spread over the tight speech intervals only (never over
+                # are spread over the speech intervals only (never over
                 # silence), with hard breaks at inter-utterance gaps.
-                speech=[(s, e) for s, e in tight if e > c["start"] and s < c["end"]],
+                speech=[(s, e) for s, e in cov_intervals if e > c["start"] and s < c["end"]],
             )
-            # Drop cues covering (almost) no speech under the tight VAD pass:
+            # Drop cues covering (almost) no speech under the baseline VAD pass:
             # hallucinated text on music/silence, or words the aligner locked
             # onto the wrong utterance. Real dialogue is essentially never
             # below this floor, and every drop is logged + counted.
             kept = []
             for cue in cues:
-                cov = speech_coverage(cue["start"], cue["end"], tight)
+                cov = speech_coverage(cue["start"], cue["end"], cov_intervals)
                 if cov < _MIN_CUE_SPEECH_COV:
                     stats["cues_dropped_no_speech"] += 1
                     dropped.append(
@@ -930,6 +952,14 @@ def main() -> int:
     # Recovery pass: re-ASR tight-VAD speech no successful chunk covers.
     parser.add_argument("--recover-missed", action="store_true", help="enable the missed-speech recovery pass")
     parser.add_argument("--recover-min-sec", type=float, default=0.4, help="min missed range length to recover")
+    parser.add_argument(
+        "--recover-vad-threshold",
+        type=float,
+        default=0.5,
+        help="VAD threshold for the recovery detection pass (default 0.5 = same as the tight audit pass, "
+        "old behavior). Lower it (e.g. 0.35) to catch weak/distant speech the main chunking pass missed; "
+        "recovered chunks are then also audited against this pass so they aren't dropped as hallucination.",
+    )
     parser.add_argument(
         "--repeat-tail-max-cps",
         type=float,

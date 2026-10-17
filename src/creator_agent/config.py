@@ -86,6 +86,13 @@ class JaAsrSettings(BaseModel):
     # the same aligner subprocess (no second model load).
     recover_missed: bool = False
     recover_min_sec: float = 0.4  # missed ranges shorter than this are not recovered
+    # VAD threshold for the recovery DETECTION pass (independent of the main
+    # chunking threshold). 0.5 = same as the tight audit pass (old behavior:
+    # only recovers speech tight already saw but no chunk covered). Lower it
+    # (e.g. 0.35) to also catch weak/distant lines the chunking pass missed —
+    # recovered chunks are then audited against this pass too, so their weak
+    # speech isn't dropped as hallucination.
+    recover_vad_threshold: float = 0.5
     # Repeat-tail hallucination guard by speaking rate: >0 enables the cps
     # criterion — a repeat tail is only cut when chars/sec over the chunk's
     # speech duration exceeds this (12.0 is a good trial value); real

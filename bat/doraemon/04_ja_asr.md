@@ -118,8 +118,13 @@ aligner 运行，不重复加载模型）：
 
 1. 覆盖代理 = 所有成功 ASR chunk 的跨度（speech-aware 时间轴下，成功 chunk 内的紧凑 VAD
    语音必然被某条 cue 覆盖，chunk 跨度是精确代理，无需等真实 cue）。
-2. `subtract_intervals(tight, covered, recover_min_sec)` → 有语音但没人识别的区间；
+2. `subtract_intervals(recovery, covered, recover_min_sec)` → 有语音但没人识别的区间；
    间隔 ≤0.6s 的相邻段先 `merge_close` 合并（否则 0.3s 双侧 pad 的 ASR 窗口会重叠重复识别）。
+   这里的 `recovery` 是**独立的补漏检测 pass**：默认 = `tight`（threshold 0.5），把
+   `recover_vad_threshold` 调低（如 0.35）可找回主分块阈值漏掉的**弱/远语音行**（告别、远处
+   喊话）。关键：只调这个补漏阈值，**别动主分块 `vad_threshold`**——实测把主阈值降到 0.3 会把
+   间隔桥接成超长 `forced_split_hard` 块、ASR 幻觉反而更糟；低补漏阈值只追加小补漏块，不动主分块。
+   补漏 chunk 的 cue 时间轴回退与幻觉过滤也改用这个低阈值 pass（否则弱语音行会被当成幻觉丢掉）。
 3. 每段生成 pad 0.3s 的补漏 chunk（`reason="recovered"`，进 SUMMARY 计数 `chunk_recovered`），
    走同一个 `_asr_pass`（ASR + repeat-tail 防护），随后与初始 chunk 一起对齐、过质量门、
    切 cue、**同样过幻觉过滤**；与已有 cue 的微小重叠交给 `resolve_overlaps`。
@@ -291,11 +296,12 @@ CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 | `aligner_env_python` | "" | creator-asr-ja-aligner env 的 python。**两者都配**才启用词级对齐，否则 cue 时间按比例分摊 |
 | `speaker_model` | "" | ModelScope CAM++ id；空 = 不做说话人分离 |
 | `speaker_threshold` | 0.5 | 聚类 cosine 距离阈值，越低说话人越多 |
-| `max_cue_chars` / `max_cue_sec` | 24 / 8.0 | cue 字数/时长上限 |
+| `max_cue_chars` / `max_cue_sec` | 30 / 5.0 | cue 字数/时长上限（30 按人工修正字幕行长调） |
 | `pause_sec` | 0.6 | 词间静音 ≥ 此值 = 硬 cue 边界 |
 | `vad_min_speech_ms` / `vad_min_silence_ms` / `vad_speech_pad_ms` | 120 / 300 / 150 | 宽松 VAD（分块用） |
-| `vad_threshold` | 0.5 | 宽松 pass 概率阈值；调低（如 0.35）找回弱语音，误检增多。紧凑 pass 固定 0.5 不动 |
-| `recover_missed` / `recover_min_sec` | false / 0.4 | 补漏 pass 开关；短于此的漏检区间不补 |
+| `vad_threshold` | 0.5 | 宽松 pass 概率阈值；**别低于 ~0.4**（实测 0.3 桥接成超长块、ASR 更糟）。弱语音行走 `recover_vad_threshold`。紧凑 pass 固定 0.5 不动 |
+| `recover_missed` / `recover_min_sec` | true / 0.4 | 补漏 pass 开关；短于此的漏检区间不补 |
+| `recover_vad_threshold` | 0.35 | 补漏**检测**阈值（独立于主分块阈值）：调低找回弱/远语音行；补漏 chunk 的时间轴回退 + 幻觉过滤同用此阈值 |
 | `repeat_tail_max_cps` | 0.0 | >0 启用语速判据（建议试 12.0）：字/秒 ≤ 此值的真实重复（「うんうん」）不砍；0 = 一律砍 |
 | `srt_min_display_sec` / `srt_lead_in_sec` / `srt_tail_sec` | 0.0 / 0.0 / 0.0 | .srt 显示时间 polish。边界检查开启时 lead/tail 保持 0 避免重复加余量 |
 | `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 3.0 / 8.0 / 15.0 | 分块目标区间 + 硬上限 |

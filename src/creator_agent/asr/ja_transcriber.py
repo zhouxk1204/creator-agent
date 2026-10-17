@@ -299,6 +299,8 @@ class JaTranscriber:
                 str(s.vad_threshold),
                 "--recover-min-sec",
                 str(s.recover_min_sec),
+                "--recover-vad-threshold",
+                str(s.recover_vad_threshold),
                 "--repeat-tail-max-cps",
                 str(s.repeat_tail_max_cps),
                 "--chunk-target-min",

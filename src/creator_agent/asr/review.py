@@ -41,6 +41,7 @@ OVERRIDE_FIELDS = (
     "pause_sec",
     "recover_missed",
     "recover_min_sec",
+    "recover_vad_threshold",
     "repeat_tail_max_cps",
     "chunk_target_min_sec",
     "chunk_target_max_sec",

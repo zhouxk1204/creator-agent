@@ -17,8 +17,9 @@ ja_asr:
   vad_min_speech_ms: 120      # 调低保住更短的感叹词 | 看 VAD short 段数
   vad_min_silence_ms: 300     # 调高=少切碎，调低=切更细 | 看 Chunks 总数
   vad_speech_pad_ms: 150      # 调高保弱起音，过大会吃进噪音 | 看 cue 起点是否被截
-  recover_missed: false       # true=开补漏 pass | 看 chunk_recovered 条数、UNRECOVERED_SPEECH 数
+  recover_missed: true        # true=开补漏 pass | 看 chunk_recovered 条数、UNRECOVERED_SPEECH 数
   recover_min_sec: 0.4        # 短于此的漏检区间不补 | 看补漏 chunk 数是否过多
+  recover_vad_threshold: 0.35 # 补漏检测阈值：调低找回弱/远语音行（主分块阈值保持 0.5 不乱） | 看 recovered 条的文本是否幻觉
 
   # ───────── ② 幻觉与多余字幕 ─────────
   repeat_tail_max_cps: 0.0    # 0=一律砍重复尾；12.0=按语速判据，保留真「うんうん」 | 看日志 cps= 与 repeat-tail cut 数
@@ -40,7 +41,7 @@ ja_asr:
   boundary_tail_sec: 0.10     # 字幕比语音晚消失的余量
 
   # ───────── ⑤ 分句与可读性 ─────────
-  max_cue_chars: 24           # 每条字幕字数上限 | 人工看断句
+  max_cue_chars: 30           # 每条字幕字数上限（按人工修正字幕行长 ~30 字） | 人工看断句
   max_cue_sec: 8.0
   pause_sec: 0.6              # 词间静音≥此值=硬断点；调低=断得更碎
   speaker_threshold: 0.5      # 仅配了 speaker_model 才有效；调低=说话人更多
