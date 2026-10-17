@@ -5,6 +5,11 @@ deps, so the splitting policy is unit-testable on its own. Used by the ja
 worker after Qwen3-ASR (+ optional ForcedAligner): one ASR chunk may contain
 several sentences (or several speakers' lines), these break it into cues of
 at most ``max_chars`` / ``max_sec``, splitting at sentence punctuation first.
+
+Proportional-fallback pause boundaries (no aligner words) are snapped to a
+nearby punctuation edge — or dropped when none is close — so a pause cut can
+never land inside a word (``_snap_offsets_to_breaks``). Finished cues are
+stripped of leading punctuation/whitespace (``_strip_cue_head``).
 """
 
 from __future__ import annotations
@@ -16,6 +21,10 @@ _SENT_END = "。！？!?"
 # Secondary boundaries, used only when a sentence still exceeds max_chars.
 _SOFT_BREAK = "、，,…・：:"
 _BREAK_CHARS = _SENT_END + _SOFT_BREAK
+
+# How far (chars) an estimated proportional pause offset may travel to reach a
+# punctuation boundary before we give up and drop that pause cut.
+_PAUSE_SNAP_WINDOW = 3
 
 # A word with its absolute time range, as produced by the forced aligner.
 Word = tuple[str, float, float]  # (text, start_sec, end_sec)
@@ -110,7 +119,15 @@ def split_cues(
     for ptext, poff in pieces:
         split_pieces.extend(_enforce_max_sec(ptext, poff, timeline, max_sec))
 
-    cues = [_cue(ptext, poff, timeline, start, end, clamp=not word_timed) for ptext, poff in split_pieces]
+    # Strip leading punctuation/whitespace from each finished cue; advance the
+    # offset so timing anchors on the first content char. A cue reduced to
+    # nothing was pure residual punctuation (no spoken content) and is dropped.
+    cues: list[dict] = []
+    for ptext, poff in split_pieces:
+        cleaned, lead = _strip_cue_head(ptext)
+        if not cleaned:
+            continue
+        cues.append(_cue(cleaned, poff + lead, timeline, start, end, clamp=not word_timed))
 
     # Enforce monotonic, non-overlapping, non-empty time ranges.
     prev_end = 0.0
@@ -163,6 +180,19 @@ def _cue(text: str, off: int, timeline: _Timeline, lo: float, hi: float, clamp: 
     else:  # word times are real; keep edges that fall outside the chunk
         s, e = max(s, 0.0), max(e, 0.0)
     return {"start": round(s, 3), "end": round(e, 3), "text": text}
+
+
+def _strip_cue_head(text: str) -> tuple[str, int]:
+    """Return (text without leading break-chars/whitespace, chars stripped).
+
+    Only break-chars (。！？!?、，,…・：:) and whitespace are stripped — never
+    kana, small kana (っゃゅょ…) or the long-vowel mark ー, which are spoken
+    content and must be kept (and flagged for review elsewhere if suspect).
+    """
+    i = 0
+    while i < len(text) and (text[i] in _BREAK_CHARS or text[i].isspace()):
+        i += 1
+    return text[i:], i
 
 
 def _enforce_max_sec(text: str, off: int, timeline: _Timeline, max_sec: float) -> list[tuple[str, int]]:
@@ -323,6 +353,67 @@ def _word_timeline(
     return start_at, end_at, True, pauses
 
 
+def _snap_offsets_to_breaks(
+    text: str, offsets: Sequence[int], window: int
+) -> tuple[list[int], list[dict]]:
+    """Snap each estimated pause offset to a punctuation-safe cut position.
+
+    A cut at ``p`` splits ``text`` so the right piece starts at ``text[p]``; it
+    is SAFE only when ``text[p-1]`` is a break char (punctuation stays on the
+    left, and punctuation never occurs inside a word). For every estimated
+    offset ``est`` we search ``[est-window, est+window]`` for safe positions and
+    pick the best by (distance to est, sentence-end preferred, position). If
+    none is safe within the window the pause is DROPPED — conservative: the
+    text stays merged rather than cutting a word in half.
+
+    Returns ``(snapped_offsets, records)`` where each record is
+    ``{"raw", "snapped", "action", "punct", "distance"}`` for reporting
+    (``snapped``/``punct``/``distance`` are None when ``action == "drop"``).
+    """
+    n = len(text)
+    snapped: list[int] = []
+    records: list[dict] = []
+    for est in offsets:
+        best: int | None = None
+        best_key: tuple[int, int, int] | None = None
+        lo = max(1, est - window)
+        hi = min(n - 1, est + window)
+        for p in range(lo, hi + 1):
+            if text[p - 1] not in _BREAK_CHARS:
+                continue
+            key = (abs(p - est), 0 if text[p - 1] in _SENT_END else 1, p)
+            if best_key is None or key < best_key:
+                best_key, best = key, p
+        if best is None:
+            records.append({"raw": est, "snapped": None, "action": "drop",
+                            "punct": None, "distance": None})
+        else:
+            snapped.append(best)
+            records.append({
+                "raw": est, "snapped": best,
+                "action": "keep" if best == est else "snap",
+                "punct": text[best - 1], "distance": best - est,
+            })
+    return sorted(set(snapped)), records
+
+
+def _raw_pause_offsets(
+    n: int, ivs: Sequence[tuple[float, float]], cum: Sequence[float], total: float, pause_sec: float
+) -> list[int]:
+    """Raw character-proportional pause offsets (unsnapped).
+
+    Factored out so diagnostics can introspect raw -> snapped. ``cum[i]`` =
+    compressed speech-only seconds before interval ``i``; ``total`` = cum[-1].
+    """
+    offsets: list[int] = []
+    for i in range(len(ivs) - 1):
+        if ivs[i + 1][0] - ivs[i][1] >= pause_sec:
+            off = round(n * cum[i + 1] / total)
+            if 0 < off < n:
+                offsets.append(off)
+    return offsets
+
+
 def _speech_timeline(
     text: str,
     start: float,
@@ -338,7 +429,8 @@ def _speech_timeline(
     never hang over inter-utterance silence, and cue boundaries snap to
     utterance edges (cue end = left interval's end, next cue's start = right
     interval's start). Gaps >= ``pause_sec`` between intervals become hard
-    cue boundaries at the char offset the gap maps to.
+    cue boundaries, whose char offset is snapped to a nearby punctuation edge
+    (or dropped when no punctuation is close — see ``_snap_offsets_to_breaks``).
 
     Returns None when no speech interval overlaps [start, end] (caller falls
     back to plain linear).
@@ -373,12 +465,10 @@ def _speech_timeline(
     def end_at(off: float) -> float:
         return _map(total * min(max(off, 0.0), n) / n, from_left=False)
 
-    pauses: list[int] = []
-    for i in range(last):
-        if ivs[i + 1][0] - ivs[i][1] >= pause_sec:
-            off = round(n * cum[i + 1] / total)
-            if 0 < off < n:
-                pauses.append(off)
+    # Raw character-proportional pause offsets, then snap each to a nearby
+    # punctuation boundary (or drop it) so no cut lands inside a word.
+    raw = _raw_pause_offsets(n, ivs, cum, total, pause_sec)
+    pauses, _records = _snap_offsets_to_breaks(text, raw, _PAUSE_SNAP_WINDOW)
 
     return start_at, end_at, False, pauses
 
