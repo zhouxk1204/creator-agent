@@ -3,11 +3,18 @@
 The aligner never raises on bad audio — it can also return plausible-looking
 garbage (words locked onto a neighbouring utterance, degenerate timestamps).
 Feeding those into the cue splitter produces subtitles whose times drift off
-the actual speech, and the old midpoint de-overlap then "repaired" the
-overlap symmetrically, corrupting BOTH cues. This module instead REJECTS
-untrustworthy alignments up front (caller falls back to proportional cue
-times for that chunk), so ``resolve_overlaps`` stays a last-resort insurance
-for tiny genuine edge overlaps.
+the actual speech. But it ALSO routinely emits a few harmless ZERO-DURATION
+tokens (「は」「の」「っ」…) inside an otherwise accurate alignment — rejecting
+the whole chunk over one such token forces an inaccurate proportional
+fallback and is the main cause of drifted cue times.
+
+So the flow is repair-then-reject: ``repair_word_timing`` patches the harmless
+glitches (zero/short durations, sub-100ms overlaps), then ``check_alignment``
+validates the result and REJECTS only genuinely untrustworthy alignments
+(large overlaps, low coverage, out-of-window, abnormal durations). The caller
+falls back to proportional cue times for rejected chunks, so
+``resolve_overlaps`` stays a last-resort insurance for tiny genuine edge
+overlaps.
 
 Pure functions, no heavy deps — unit-testable on its own. Imported by the
 ja worker through the same sys.path shim as cue_splitter.
@@ -37,6 +44,78 @@ class AlignCheck:
     reason: str = ""  # one of the constants above when ok is False
     coverage: float = 0.0  # fraction of text chars matched to a word
     detail: str = ""  # human-readable specifics for the log line
+
+
+def repair_word_timing(
+    words: Sequence[Word] | None,
+    min_word_sec: float = 0.05,
+    max_overlap_sec: float = 0.1,
+    max_repair_frac: float = 0.5,
+) -> tuple[list[Word], int] | None:
+    """Repair minor word-timing glitches so a good alignment survives the gate.
+
+    The Qwen3 ForcedAligner emits ZERO-DURATION words (``start == end``) for
+    short function morae it cannot place (「は」「の」「っ」「じゃ」…), plus the
+    occasional tiny overlap between adjacent tokens. These are harmless — the
+    token sits at the right spot, sandwiched between well-placed neighbours —
+    but the strict monotonic / positive-duration gate would reject the WHOLE
+    chunk over a single such token, forcing an inaccurate proportional
+    fallback (the cause of badly-drifted cue times). Repair them instead:
+
+    - a word starting slightly before its predecessor ends is clamped forward
+      (overlap <= ``max_overlap_sec``);
+    - a word shorter than ``min_word_sec`` (zero / negative duration included)
+      is expanded to ``min_word_sec``.
+
+    ``min_word_sec`` defaults to 0.05 — a realistic short-mora duration that
+    also clears ``check_alignment``'s 0.02s ``ABNORMAL_DURATION`` floor with
+    margin. (Expanding to exactly the gate's floor would re-trip that check:
+    ``(ws + 0.02) - ws`` is a hair under 0.02 in floating point.)
+
+    Returns ``(repaired_words, n_repaired)`` — monotonically non-decreasing,
+    every duration >= ``min_word_sec`` — or ``None`` when the timing is
+    genuinely broken and must NOT be trusted:
+
+    - a word overlapping its predecessor by more than ``max_overlap_sec`` (it
+      locked onto a neighbouring utterance; clamping would drag real cues off
+      their audio), or
+    - more than ``max_repair_frac`` of the words needed repair (a mostly-
+      degenerate timeline, e.g. an alignment that collapsed onto one point —
+      no better than the proportional fallback it would replace).
+
+    ``check_alignment`` still runs on the repaired list afterwards: coverage
+    and the out-of-window guard are unaffected by timing repair, so genuine
+    garbage is rejected exactly as before.
+    """
+    if not words:
+        return None
+    out: list[Word] = []
+    prev_end: float | None = None
+    n_repaired = 0
+    for wtext, ws, we in words:
+        ws, we = float(ws), float(we)
+        real_dur = we - ws  # original extent; ~0 marks an unplaced token
+        fixed = False
+        if prev_end is not None and ws < prev_end - 1e-3:
+            # A REAL word (with extent) starting well before its predecessor
+            # locked onto a neighbouring utterance — unrepairable. Zero-duration
+            # tokens have no extent to overlap with; they are merely unplaced,
+            # so clamp them without distrusting the whole chunk (this also keeps
+            # a cluster of them — laughter/moaning — from tripping the guard as
+            # the clamps cascade forward).
+            if real_dur > 1e-3 and prev_end - ws > max_overlap_sec:
+                return None
+            ws = prev_end
+            fixed = True
+        if we < ws + min_word_sec:
+            we = ws + min_word_sec
+            fixed = True
+        n_repaired += fixed
+        out.append((wtext, ws, we))
+        prev_end = we
+    if n_repaired > max_repair_frac * len(words):
+        return None
+    return out, n_repaired
 
 
 def check_alignment(

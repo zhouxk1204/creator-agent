@@ -141,23 +141,31 @@ UNRECOVERED 清单）——这是刻意的，重试同样的音频大概率还�
   `chunk_start` 换算成绝对秒。
 - aligner 异常/缺失只降级该 chunk，绝不中断批次。
 
-**对齐质量门（`align_check.check_alignment`，五项按序检查，首败即拒）：**
+**先修复再过门（`align_check.repair_word_timing`）**：ForcedAligner 经常在一组本来很准的
+词时间里夹几个**零时长 token**（「は」「の」「っ」「じゃ」等短功能 mora 对不齐就塌缩成
+start==end），偶尔还有相邻词毫秒级重叠。这些无害（词就在正确位置、夹在放准的词之间），
+但若直接整 chunk 拒掉，14/19 的块会被迫退回比例分摊——这正是早期字幕时间轴整体漂移的根因。
+所以过门前先修复：零/负时长词扩到 0.05s、≤0.1s 的小重叠前向钳齐。只有**真坏**才返回 None
+交回退：有真实时长的词回跳超过 0.1s（锁到相邻语句），或超过一半的词都要修（整条塌缩、
+不比比例分摊强）。修复不改变词文本，故覆盖率 / 出窗判定不受影响。
+
+**再过对齐质量门（`align_check.check_alignment`，五项按序检查，首败即拒）：**
 
 | 常量 | 含义 |
 |---|---|
 | `NO_WORD_TIMESTAMPS` | 对齐器没返回任何词 |
 | `LOW_COVERAGE` | ASR 文本匹配到词的字符占比 < `align_min_coverage`（0.5） |
 | `OUT_OF_WINDOW` | 词超出 [chunk_start−pad, chunk_end+pad] |
-| `INVALID_TIMING` | start ≥ end，或非单调递增 |
+| `INVALID_TIMING` | start ≥ end，或非单调递增（修复后仍如此，或修复返回 None） |
 | `ABNORMAL_DURATION` | 词时长不在 [0.02s, 3.0s] |
 
 被拒的对齐**带原因回退**到 speech-aware 比例分摊（绝不静默），计数进 SUMMARY 的
 `align_fallback_<REASON>`。子进程提前死掉没返回的块记 `SUBPROCESS`，对齐器内部异常记
 `EXCEPTION`。
 
-**为什么不在此“修复”重叠**：对齐器可能返回貌似合理的垃圾（词锁到相邻语句）。旧实现用中点
-对称去重会同时弄坏两条 cue；现在质量门先拒，`resolve_overlaps` 只做微小真实边缘重叠的
-最后保险。
+**为什么只小修、不无条件信**：对齐器可能返回貌似合理的垃圾（词锁到相邻语句）。旧实现用中点
+对称去重会同时弄坏两条 cue；现在是「小修零时长/微重叠 + 大回跳/大面积塌缩仍拒」，
+`resolve_overlaps` 只做微小真实边缘重叠的最后保险。
 
 ### 步骤 5 收尾（worker 内）：cue 切分（`cue_splitter.split_cues`）
 

@@ -9,6 +9,7 @@ from creator_agent.asr.align_check import (
     NO_WORDS,
     OUT_OF_WINDOW,
     check_alignment,
+    repair_word_timing,
 )
 
 TEXT = "ドラえもん、どこにいるの？"
@@ -81,3 +82,63 @@ def test_first_failure_wins():
     # Low coverage AND out of window: coverage is checked first.
     r = check_alignment([("ドラえもん", 0.1, 0.5)], TEXT, **KW)
     assert r.reason == LOW_COVERAGE
+
+
+# --- repair_word_timing ----------------------------------------------------
+
+
+def test_repair_clean_words_pass_through_untouched():
+    res = repair_word_timing(WORDS)
+    assert res is not None
+    repaired, n = res
+    assert repaired == [(t, s, e) for t, s, e in WORDS]
+    assert n == 0
+
+
+def test_repair_empty_returns_none():
+    assert repair_word_timing(None) is None
+    assert repair_word_timing([]) is None
+
+
+def test_repair_zero_duration_word_expanded():
+    # A zero-duration token sandwiched between two well-placed words (the
+    # exact Qwen3-ForcedAligner failure behind the drifted cue times).
+    words = [("ドラえもん", 1.31, 2.10), ("どこに", 2.10, 2.10), ("いるの", 2.85, 3.42)]
+    repaired, n = repair_word_timing(words)
+    assert n == 1
+    assert repaired[1] == ("どこに", 2.10, 2.15)  # expanded to min_word_sec (0.05)
+    # Result is now valid for check_alignment (monotonic, positive durations).
+    assert check_alignment(repaired, TEXT, **KW).ok
+
+
+def test_repair_small_overlap_clamped():
+    words = [("ドラえもん", 1.31, 2.10), ("どこに", 2.05, 2.80), ("いるの", 2.85, 3.42)]
+    repaired, n = repair_word_timing(words)
+    assert n == 1
+    assert repaired[1][1] == 2.10  # clamped forward to the previous end
+    assert check_alignment(repaired, TEXT, **KW).ok
+
+
+def test_repair_large_overlap_rejected():
+    # Word locked onto the PREVIOUS utterance (overlap > max_overlap_sec):
+    # unrepairable, must not be trusted.
+    words = [("ドラえもん", 1.31, 2.10), ("どこに", 1.50, 2.80), ("いるの", 2.85, 3.42)]
+    assert repair_word_timing(words) is None
+
+
+def test_repair_mostly_degenerate_rejected():
+    # More than half the words need repair -> a collapsed, untrustworthy timeline.
+    words = [("あ", 1.0, 1.0), ("い", 1.0, 1.0), ("う", 1.0, 1.0), ("え", 1.0, 1.5)]
+    assert repair_word_timing(words, max_repair_frac=0.5) is None
+
+
+def test_repair_cascade_of_zero_durations_stays_monotonic():
+    # Several zero-duration tokens at one point (laughter/moaning chunks):
+    # each is nudged forward by min_word_sec, keeping the list monotonic.
+    words = [("ん", 1.0, 1.1), ("っ", 1.1, 1.1), ("っ", 1.1, 1.1), ("っ", 1.1, 1.1), ("え", 2.0, 2.5)]
+    res = repair_word_timing(words, max_repair_frac=0.9)
+    assert res is not None
+    repaired, _ = res
+    for (_, s0, e0), (_, s1, _) in zip(repaired, repaired[1:]):
+        assert s0 < e0  # positive duration
+        assert s1 >= s0  # non-decreasing starts

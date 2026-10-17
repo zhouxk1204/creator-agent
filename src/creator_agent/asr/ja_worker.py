@@ -29,8 +29,9 @@ VAD, ASR and the aligner all share one audio source and one timeline):
        join the SAME aligner run below
     -> Qwen3-ForcedAligner per chunk (separate aligner-env SUBPROCESS, one per
        video, per-chunk results streamed back)
-    -> alignment quality gate per chunk (coverage / window / timing /
-       duration) — rejected alignments fall back to SPEECH-AWARE proportional
+    -> per chunk: repair harmless zero-duration / tiny-overlap word times,
+       then an alignment quality gate (coverage / window / timing / duration) —
+       genuinely-broken alignments fall back to SPEECH-AWARE proportional
        cue times (spread over the tight VAD intervals, never over silence)
        WITH a logged reason, never silently
     -> cue splitting at punctuation + long pauses -> drop cues covering no
@@ -96,7 +97,7 @@ _SHORT_SEG_SEC = 0.5  # VAD segments below this are counted as "short" in the su
 # Pure-policy modules shared with the main env via this sys.path shim (they
 # live in creator_agent, which is not installed here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from align_check import NO_WORDS, AlignCheck, check_alignment  # noqa: E402
+from align_check import INVALID_TIMING, NO_WORDS, AlignCheck, check_alignment, repair_word_timing  # noqa: E402
 from cue_splitter import cut_repeat_tail, resolve_overlaps, split_cues  # noqa: E402
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
 from vad_chunker import build_chunks, merge_close, speech_coverage, subtract_intervals, uncovered_ranges  # noqa: E402
@@ -649,15 +650,15 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             cid = f"CHUNK {c['idx'] + 1:03d}/{len(chunks):03d}"
             words = None
             if align_on:
-                check = _gate_alignment(align_results.get(c["idx"]), c, args)
+                check, words = _gate_alignment(align_results.get(c["idx"]), c, args)
                 if check.ok:
-                    words = [tuple(w) for w in align_results[c["idx"]]["words"]]
                     stats["align_ok"] += 1
                     ws, we = words[0][1], words[-1][2]
+                    note = f" ({check.detail})" if check.detail else ""
                     _chunk_log(
                         cid,
                         "ALIGN",
-                        f"OK words={len(words)} coverage={check.coverage:.0%} timing={ws:.2f}-{we:.2f}",
+                        f"OK words={len(words)} coverage={check.coverage:.0%} timing={ws:.2f}-{we:.2f}{note}",
                     )
                     _debug(
                         args,
@@ -768,23 +769,46 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     }
 
 
-def _gate_alignment(rec: dict | None, c: dict, args) -> AlignCheck:
-    """Quality-gate one chunk's aligner result (see align_check for the five
-    checks). ``rec`` None means the subprocess never returned this chunk."""
+def _gate_alignment(rec: dict | None, c: dict, args) -> tuple[AlignCheck, list[tuple] | None]:
+    """Quality-gate one chunk's aligner result; returns ``(check, words)``.
+
+    ``words`` is the timing-REPAIRED word list to feed the cue splitter when
+    ``check.ok`` (else None). The aligner routinely emits a few zero-duration
+    tokens in an otherwise accurate alignment; ``repair_word_timing`` patches
+    those so the chunk stays word-timed instead of degrading to proportional
+    cue times. Genuine garbage (large overlaps / mostly-degenerate timing /
+    low coverage / out-of-window) is still rejected. ``rec`` None means the
+    subprocess never returned this chunk.
+    """
     if rec is None:
-        return AlignCheck(False, "SUBPROCESS", detail="aligner subprocess exited before returning this chunk")
+        return (
+            AlignCheck(False, "SUBPROCESS", detail="aligner subprocess exited before returning this chunk"),
+            None,
+        )
     if rec.get("error"):
-        return AlignCheck(False, "EXCEPTION", detail=str(rec["error"])[:200])
+        return AlignCheck(False, "EXCEPTION", detail=str(rec["error"])[:200]), None
     if not rec.get("ok") or not rec.get("words"):
-        return AlignCheck(False, NO_WORDS)
-    return check_alignment(
-        [tuple(w) for w in rec["words"]],
+        return AlignCheck(False, NO_WORDS), None
+    rep = repair_word_timing([tuple(w) for w in rec["words"]])
+    if rep is None:
+        return (
+            AlignCheck(False, INVALID_TIMING, detail="unrepairable word timing (large overlap / mostly degenerate)"),
+            None,
+        )
+    words, n_repaired = rep
+    check = check_alignment(
+        words,
         c["text"],
         c["start"],
         c["end"],
         pad=args.align_pad,
         min_coverage=args.align_min_coverage,
     )
+    if not check.ok:
+        return check, None
+    if n_repaired:
+        check.detail = f"repaired {n_repaired} zero/short word time(s)"
+    return check, words
 
 
 def _print_summary(
