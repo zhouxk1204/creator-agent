@@ -9,6 +9,17 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 
+rem --- Output location: Desktop, one timestamped subfolder per run. ----------
+rem A caller-supplied --out-dir still wins (we only inject ours when absent).
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%I"
+set "OUTDIR=%USERPROFILE%\Desktop\ja_asr_%STAMP%"
+set "ARGS=%*"
+echo %* | findstr /i /c:"--out-dir" >nul
+if errorlevel 1 (
+    set "ARGS=--out-dir "%OUTDIR%" %*"
+    mkdir "%OUTDIR%" 2>nul
+)
+
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. cmd.exe mis-parses multibyte characters
 rem under chcp 65001 and eats the rem/echo prefixes, which makes the window
@@ -27,11 +38,15 @@ rem                          to check the timeline)
 rem
 rem Double-click (no args) = process every video in ja_asr.input_dir
 rem (C:\test\temps): ASR + boundary check only, producing Japanese SRTs.
+rem Output goes to a NEW timestamped folder on the Desktop each run
+rem (Desktop\ja_asr_yyyyMMdd-HHmmss\<name>\<name>.srt), so runs never
+rem overwrite each other - handy for comparing tuning experiments.
 rem Pass your own args to override, e.g.:
 rem   04_ja_asr.bat video.mp4                  only this video
 rem   04_ja_asr.bat video.mp4 --force          ignore existing SRT/audio cache
 rem   04_ja_asr.bat video.mp4 --translate      also translate to .zh.srt
 rem   04_ja_asr.bat video.mp4 --translate --burn   then burn into .zh.mp4
+rem   04_ja_asr.bat video.mp4 --out-dir D:\somewhere   bypass the Desktop default
 rem
 rem Tuning: config\settings.validate.yaml (auto-loaded when present) overrides
 rem ONLY the ja_asr section of config\settings.yaml - edit one line, rerun with
@@ -52,17 +67,17 @@ echo ========================================
 echo.
 if "%~1"=="" (
     echo  Double-click = ASR + boundary check for every video in C:\test\temps\
-    echo  Outputs      -^> vault episodes dir ^(ja_asr.out_dir in config\settings.yaml^)
+    echo  Outputs      -^> Desktop\ja_asr_^<timestamp^>\  ^(this run: %OUTDIR%^)
     echo    ^<name^>.srt        Japanese subtitles ^(import into JianYing to check the timeline^)
     echo    ^<name^>.check.txt  suspicious-boundary report
     echo  Intermediates ^(mix + vocals + instrumental^) kept in C:\test\temps\_work.
     echo  Already-done videos are skipped automatically.
     echo  ^(Add --translate yourself if you also want .zh.srt.^)
 ) else (
-    echo  Running: ja-asr %*
+    echo  Running: ja-asr %ARGS%
 )
 echo.
-"%PY%" -m creator_agent.cli.main ja-asr %*
+"%PY%" -m creator_agent.cli.main ja-asr %ARGS%
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
