@@ -14,15 +14,15 @@ echo   + translate title/synopsis to Chinese
 echo ========================================
 echo.
 set ep=%~1
-if "%ep%"=="" set /p ep="Episode number (e.g. 934): "
-if "%ep%"=="" (
-    echo No episode number given.
-    pause >nul
-    exit /b 1
-)
+if "%ep%"=="" set /p ep="Episode number (e.g. 934, Enter = latest aired): "
+if "%ep%"=="" set "ep=--latest"
 "%PY%" scripts\fetch_doraemon.py %ep%
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :done
+
+rem When --latest resolved the number for us, read it back from the state
+rem file so the translation step runs on the fetched episode.
+if "%ep%"=="--latest" set /p ep=<"%REPO_ROOT%\storage\doraemon\.last_fetched"
 
 rem ---------------------------------------------------------------------------
 rem Step 2: translate the per-story notes ({ep}_{i}.md -> {ep}_{i}_zh.md).

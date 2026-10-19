@@ -20,8 +20,19 @@ Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
 
 Usage:
     uv run python scripts/fetch_doraemon.py 934
+    uv run python scripts/fetch_doraemon.py --latest # fetch the latest episode
+                                                     # already broadcast (<= today JST)
     uv run python scripts/fetch_doraemon.py --auto   # fetch every aired episode
                                                      # after the newest local one
+
+--latest resolves the episode number from the same index that renders the
+backnumber page (https://www.tv-asahi.co.jp/doraemon/story/bk/): the site's own
+JSON at doraemon/json/story.json — each entry is the ``story-item`` the page
+shows, with ``id`` (the ``../0938/`` href) and ``date`` (the story-item__date
+text). The newest entry whose broadcast date is not in the future wins, so the
+announced-but-unaired episode at the top of the list is skipped. The fetched
+episode number is written to storage/doraemon/.last_fetched so callers
+(02_fetch_doraemon.bat/.sh) can chain the translation step.
 
 --auto is for the weekly scheduled task (bat/doraemon/weekly_sync.bat): it
 finds the highest episode already in storage/doraemon, then fetches n+1, n+2,
@@ -48,9 +59,11 @@ from pathlib import Path
 import httpx
 
 BASE_URL = "https://www.tv-asahi.co.jp/doraemon/story/{ep}/"
+# Index behind the backnumber page (story/bk/): what its JS renders into the
+# story-item elements. Newest first; may start with an unaired episode.
+STORY_JSON_URL = "https://www.tv-asahi.co.jp/doraemon/json/story.json"
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "doraemon"
 # Per-story outputs: synopsis notes and covers go to the Obsidian vault
@@ -59,15 +72,17 @@ OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "doraemon"
 VAULT_SYNOPSIS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\简介")
 VAULT_COVERS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\封面")
 DESKTOP_DIR = Path.home() / "Desktop"
+# Human-facing outputs (story.md, metadata.json, story images) are mirrored
+# here so the fetched content is on the Desktop by default; storage/doraemon
+# stays the canonical store that --auto counts from.
+DESKTOP_STORY_DIR = DESKTOP_DIR / "doraemon_story"
 # ComfyUI upscales covers to "4K" by executing the user's own workflow file
 # (COMFYUI_WORKFLOW, UI format -> converted to an API prompt here). Discovery
 # order: $COMFYUI_URL if set, then a running Desktop app (:8000), then a
 # manually started server (:8188); if none answers we boot our own headless
 # server from the cloned core (COMFYUI_CORE) with the Desktop venv's python
 # and shut it down again at the end.
-COMFYUI_WORKFLOW = Path(
-    r"C:\Users\34696\Documents\ComfyUI\user\default\workflows\doraemonn_cover.json"
-)
+COMFYUI_WORKFLOW = Path(r"C:\Users\34696\Documents\ComfyUI\user\default\workflows\doraemonn_cover.json")
 COMFYUI_CORE = Path(r"C:\agents\ComfyUI")  # git clone of comfyanonymous/ComfyUI
 COMFYUI_VENV_PY = Path(r"C:\Users\34696\Documents\ComfyUI\.venv\Scripts\python.exe")
 COMFYUI_BASE = Path(r"C:\Users\34696\Documents\ComfyUI")
@@ -193,15 +208,22 @@ def ensure_comfyui(client: httpx.Client, boot_timeout: int = 240) -> tuple[str |
     cmd = [
         str(COMFYUI_VENV_PY),
         str(COMFYUI_CORE / "main.py"),
-        "--base-directory", str(COMFYUI_BASE),  # models/, custom_nodes/ etc. live here
-        "--user-directory", str(COMFYUI_BASE / "user"),
-        "--input-directory", str(COMFYUI_BASE / "input"),
-        "--output-directory", str(COMFYUI_BASE / "output"),
-        "--extra-model-paths-config", str(COMFYUI_EXTRA_MODELS),
+        "--base-directory",
+        str(COMFYUI_BASE),  # models/, custom_nodes/ etc. live here
+        "--user-directory",
+        str(COMFYUI_BASE / "user"),
+        "--input-directory",
+        str(COMFYUI_BASE / "input"),
+        "--output-directory",
+        str(COMFYUI_BASE / "output"),
+        "--extra-model-paths-config",
+        str(COMFYUI_EXTRA_MODELS),
         "--disable-auto-launch",
         "--disable-all-custom-nodes",
-        "--listen", "127.0.0.1",
-        "--port", COMFYUI_OWN_URL.rsplit(":", 1)[1],
+        "--listen",
+        "127.0.0.1",
+        "--port",
+        COMFYUI_OWN_URL.rsplit(":", 1)[1],
     ]
     with log_path.open("wb") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(COMFYUI_CORE))
@@ -300,9 +322,7 @@ def fetch_one(episode: str) -> int:
             story["image_file"] = img_path.name
             print(f"  image     : {img_path}")
 
-        (out_dir / "metadata.json").write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        (out_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
         lines = [
             f"# 第{ep}话 {data['episode_title']}",
@@ -322,14 +342,29 @@ def fetch_one(episode: str) -> int:
                 lines += [f"> {story['copyright']}", ""]
         (out_dir / "story.md").write_text("\n".join(lines), encoding="utf-8")
 
+        # Mirror the human-facing outputs to the Desktop (default output
+        # location); storage/doraemon stays the canonical store.
+        desk_dir = DESKTOP_STORY_DIR / ep
+        desk_dir.mkdir(parents=True, exist_ok=True)
+        for name in ["metadata.json", "story.md"] + [s["image_file"] for s in data["stories"] if s.get("image_file")]:
+            shutil.copy2(out_dir / name, desk_dir / name)
+        print(f"  desktop   : {desk_dir}")
+
         # Split per-story: <ep>_<i>.md synopsis notes under 简介/<ep>/ (named
         # to match episodes/<ep>_<i>/ dirs, e.g. 935_1.md), covers to Desktop
         # + 封面/<ep>/ so the note can embed them via an Obsidian wikilink.
+        # Skipped when the vault isn't there (e.g. running off the Windows box).
+        # NOTE: must check os.name — on POSIX the Windows path is a single
+        # relative component, so .parent is "." and is_dir() always passes.
         ep_short = str(int(episode))
-        note_dir = VAULT_SYNOPSIS_DIR / ep_short
-        cover_dir = VAULT_COVERS_DIR / ep_short
-        note_dir.mkdir(parents=True, exist_ok=True)
-        cover_dir.mkdir(parents=True, exist_ok=True)
+        vault_ok = os.name == "nt" and VAULT_SYNOPSIS_DIR.parent.is_dir()
+        if vault_ok:
+            note_dir = VAULT_SYNOPSIS_DIR / ep_short
+            cover_dir = VAULT_COVERS_DIR / ep_short
+            note_dir.mkdir(parents=True, exist_ok=True)
+            cover_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            print("  vault     : Obsidian vault not available on this host - skipping synopsis notes")
         comfy_url, comfy_proc = ensure_comfyui(client)
         try:
             for i, story in enumerate(data["stories"], 1):
@@ -347,20 +382,22 @@ def fetch_one(episode: str) -> int:
                         shutil.copy2(src_img, dst_img)
                         print(f"  cover     : {dst_img}")
                         cover_name = dst_img.name
-                    # Mirror into the vault so 简介 notes can embed the cover.
-                    shutil.copy2(DESKTOP_DIR / cover_name, cover_dir / cover_name)
-                    print(f"  vault     : {cover_dir / cover_name}")
+                    if vault_ok:
+                        # Mirror into the vault so 简介 notes can embed the cover.
+                        shutil.copy2(DESKTOP_DIR / cover_name, cover_dir / cover_name)
+                        print(f"  vault     : {cover_dir / cover_name}")
 
-                # '# <title>' heading + cover embed + synopsis body (see
-                # learn.parse_synopsis_md); strip the site's 「」 brackets so
-                # the heading is the bare title.
-                note_lines = [f"# {story['title'].strip('「」')}", ""]
-                if cover_name:
-                    note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
-                note_lines += story["synopsis"].splitlines()
-                note_path = note_dir / f"{ep_short}_{i}.md"
-                note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
-                print(f"  synopsis  : {note_path}")
+                if vault_ok:
+                    # '# <title>' heading + cover embed + synopsis body (see
+                    # learn.parse_synopsis_md); strip the site's 「」 brackets so
+                    # the heading is the bare title.
+                    note_lines = [f"# {story['title'].strip('「」')}", ""]
+                    if cover_name:
+                        note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
+                    note_lines += story["synopsis"].splitlines()
+                    note_path = note_dir / f"{ep_short}_{i}.md"
+                    note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
+                    print(f"  synopsis  : {note_path}")
         finally:
             if comfy_proc is not None:  # only stop the server WE started
                 comfy_proc.terminate()
@@ -370,6 +407,9 @@ def fetch_one(episode: str) -> int:
     for story in data["stories"]:
         print(f"  story     : {story['title']}  ({len(story['synopsis'])} chars)")
     print(f"\nSaved to: {out_dir.resolve()}")
+    # Remember what we fetched so callers that passed --latest can chain the
+    # translation step on the resolved number.
+    (OUT_ROOT / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
     return 0
 
 
@@ -380,6 +420,45 @@ def fetch_one(episode: str) -> int:
 JST = timezone(timedelta(hours=9))
 # '2026年9月19日放送' -> (2026, 9, 19). Matches the <p class="date"> format.
 BROADCAST_DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
+# Episode number fetched by the last successful run, one line; read by
+# 02_fetch_doraemon.bat/.sh to chain the translation step after --latest.
+FETCHED_STATE_NAME = ".last_fetched"
+
+
+def resolve_latest_episode(client: httpx.Client) -> dict | None:
+    """Newest story.json entry whose broadcast date is today (JST) or earlier.
+
+    The list is what the backnumber page renders as story-item blocks:
+    ``id`` is the episode number from the ``../0938/`` href, ``date`` the
+    story-item__date text ("YYYY-MM-DD"). Entries dated in the future (the
+    announced-but-unaired episode sits at the top) are skipped.
+    """
+    resp = client.get(STORY_JSON_URL)
+    resp.raise_for_status()
+    today_jst = datetime.now(JST).date()
+    aired = []
+    for item in resp.json():
+        try:
+            aired_date = date.fromisoformat(item["date"])
+        except (KeyError, ValueError):
+            continue
+        if item.get("id", "").isdigit() and aired_date <= today_jst:
+            aired.append((aired_date, item))
+    if not aired:
+        return None
+    return max(aired, key=lambda pair: pair[0])[1]
+
+
+def latest_fetch() -> int:
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=30) as client:
+        item = resolve_latest_episode(client)
+    if item is None:
+        print("No already-broadcast episode found in the story index.")
+        return 1
+    print(f"Latest broadcast: episode {int(item['id'])} (aired {item['date']} JST)")
+    return fetch_one(item["id"])
+
+
 # Safety bound so a wrong starting point can't fetch the entire backlog.
 MAX_AUTO_CATCHUP = 8
 # Numbers fetched by the last --auto run, one per line; read by weekly_sync.bat.
@@ -441,8 +520,10 @@ def auto_fetch() -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: fetch_doraemon.py <episode_number|--auto>  (e.g. 934)")
+        print("Usage: fetch_doraemon.py <episode_number|--latest|--auto>  (e.g. 934)")
         sys.exit(2)
     if sys.argv[1] == "--auto":
         sys.exit(auto_fetch())
+    if sys.argv[1] == "--latest":
+        sys.exit(latest_fetch())
     sys.exit(fetch_one(sys.argv[1]))
