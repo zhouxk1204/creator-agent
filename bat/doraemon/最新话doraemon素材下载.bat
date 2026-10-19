@@ -74,11 +74,12 @@ if errorlevel 1 (
     if errorlevel 1 echo [translate] failed - continuing pipeline.
 )
 
-rem --- gather story materials + covers into Desktop\doraemon_<ep> ---
+rem --- materials folder: Desktop\doraemon_<ep> ---
+rem Already populated by fetch_doraemon.py (story.md, metadata.json, images,
+rem covers) and translate_doraemon.py (translated {ep}_{i}_zh.md notes with
+rem tags); the download + split steps below add the video to the SAME folder.
 set "MAT=%USERPROFILE%\Desktop\doraemon_%ep%"
 if not exist "%MAT%" mkdir "%MAT%"
-if exist "%USERPROFILE%\Desktop\doraemon_story\%ep%" copy /y "%USERPROFILE%\Desktop\doraemon_story\%ep%\*" "%MAT%\" >nul
-for %%F in ("%USERPROFILE%\Desktop\%ep%_*") do if exist "%%F" copy /y "%%F" "%MAT%\" >nul
 echo [materials] %MAT%
 
 rem --- download the TVer episode aired on the story date as <ep>.mp4 ---

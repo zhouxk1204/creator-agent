@@ -7,6 +7,10 @@ and writes a Chinese sibling next to each one::
     <vault>/简介/{ep}/{ep}_{i}_zh.md   # '# <中文标题>' + cover embed + 中文简介
                                       # + 最后一行 '标签：#xx #yy ...'（发布话题标签）
 
+Each translated note is also mirrored into the per-episode Desktop materials
+folder (``~/Desktop/doraemon_{ep}/``, when it exists) so the launcher never
+has to gather the 简介/标签 files from the vault by hand.
+
 Tags are generated from the *translated* title+synopsis (Douyin/Bilibili style
 hashtags): a couple of base hot tags plus story-specific ones (characters,
 props, plot hooks) — never just generic "#动漫 #动画" filler.
@@ -23,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,7 +35,7 @@ import httpx
 
 # scripts/ is on sys.path when run as `python scripts/translate_doraemon.py`,
 # so the vault dir stays single-sourced in fetch_doraemon.py.
-from fetch_doraemon import VAULT_SYNOPSIS_DIR
+from fetch_doraemon import VAULT_SYNOPSIS_DIR, desktop_episode_dir
 
 from creator_agent.config import load_settings
 from creator_agent.translate.llm import chat
@@ -80,12 +85,7 @@ _GENERIC_TAGS = {"动漫", "动画", "二次元", "动画片", "日本动漫", "
 
 
 def build_tag_prompt(zh_title: str, zh_synopsis: str) -> str:
-    return (
-        "根据下面的中文标题和简介生成发布标签：\n\n"
-        f"标题：{zh_title}\n"
-        "简介：\n"
-        f"{zh_synopsis}"
-    )
+    return f"根据下面的中文标题和简介生成发布标签：\n\n标题：{zh_title}\n简介：\n{zh_synopsis}"
 
 
 def parse_tags(reply: str) -> list[str]:
@@ -143,6 +143,8 @@ def _too_much_kana(text: str) -> bool:
     """
     kana = len(_KANA.findall(text))
     return kana > 10 or (kana > 0 and kana / len(text) > 0.1)
+
+
 _TITLE_LINE = re.compile(r"^\s*标题\s*[:：]\s*(.+?)\s*$")
 _SYNOPSIS_LINE = re.compile(r"^\s*简介\s*[:：]\s*(.*)$")
 
@@ -265,6 +267,11 @@ def main(episode: str) -> None:
         if tags:
             out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
         zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
+        # Mirror into the per-episode Desktop materials folder (when fetch has
+        # created it) so 简介/标签 land next to the covers and video.
+        mat_dir = desktop_episode_dir(ep_short)
+        if mat_dir.is_dir():
+            shutil.copy2(zh_path, mat_dir / zh_path.name)
         if tag_err is None:
             print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
         else:

@@ -49,11 +49,10 @@ echo "========================================"
 translate_ep "$EP" || echo "[translate] failed - continuing pipeline."
 
 MAT="$HOME/Desktop/doraemon_$EP"
+# Already populated by fetch_doraemon.py (story.md, metadata.json, images,
+# covers) and translate_doraemon.py (translated {ep}_{i}_zh.md notes with
+# tags); the download + split steps below add the video to the SAME folder.
 mkdir -p "$MAT"
-cp "$HOME/Desktop/doraemon_story/$EP/"* "$MAT/" 2>/dev/null || true
-for f in "$HOME/Desktop/${EP}_"*; do
-    [ -e "$f" ] && cp "$f" "$MAT/"
-done
 echo "[materials] $MAT"
 
 DATEARG=()

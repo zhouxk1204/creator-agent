@@ -8,7 +8,8 @@
 # With no argument the episode is resolved from the backnumber index
 # (doraemon/json/story.json): the newest entry whose broadcast date is not in
 # the future. Fetched content lands in storage/doraemon/{ep}/ and is mirrored
-# to ~/Desktop/doraemon_story/{ep}/. The translation step runs only when the
+# to ~/Desktop/doraemon_{ep}/ (story.md, images, covers; the translated _zh
+# notes join them there). The translation step runs only when the
 # local LLM server (llama.cpp on 127.0.0.1:8080) is already up — unlike the
 # .bat, this script never starts/stops the server itself.
 set -euo pipefail
