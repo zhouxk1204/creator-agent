@@ -659,9 +659,14 @@ def save_preview(
 
 
 def _open_in_shell(path: Path) -> None:
-    """Open a file/dir with the Windows shell (image viewer / Explorer)."""
+    """Open a file/dir with the OS shell (image viewer / file manager)."""
     try:
-        os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only tool
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
     except Exception as e:
         print(f"  无法自动打开 {path}: {e}")
 

@@ -74,7 +74,9 @@ VAULT_COVERS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subti
 DESKTOP_DIR = Path.home() / "Desktop"
 # Human-facing outputs (story.md, metadata.json, story images) are mirrored
 # here so the fetched content is on the Desktop by default; storage/doraemon
-# stays the canonical store that --auto counts from.
+# stays the canonical store that --auto counts from. The mirror dir uses the
+# unpadded episode number (doraemon_story/938) so launchers can locate it
+# without zero-padding arithmetic.
 DESKTOP_STORY_DIR = DESKTOP_DIR / "doraemon_story"
 # ComfyUI upscales covers to "4K" by executing the user's own workflow file
 # (COMFYUI_WORKFLOW, UI format -> converted to an API prompt here). Discovery
@@ -344,7 +346,7 @@ def fetch_one(episode: str) -> int:
 
         # Mirror the human-facing outputs to the Desktop (default output
         # location); storage/doraemon stays the canonical store.
-        desk_dir = DESKTOP_STORY_DIR / ep
+        desk_dir = DESKTOP_STORY_DIR / str(int(episode))
         desk_dir.mkdir(parents=True, exist_ok=True)
         for name in ["metadata.json", "story.md"] + [s["image_file"] for s in data["stories"] if s.get("image_file")]:
             shutil.copy2(out_dir / name, desk_dir / name)
@@ -408,8 +410,13 @@ def fetch_one(episode: str) -> int:
         print(f"  story     : {story['title']}  ({len(story['synopsis'])} chars)")
     print(f"\nSaved to: {out_dir.resolve()}")
     # Remember what we fetched so callers that passed --latest can chain the
-    # translation step on the resolved number.
+    # translation step on the resolved number, and the download step on the
+    # broadcast date.
     (OUT_ROOT / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
+    date_m = BROADCAST_DATE_RE.search(data["broadcast_date"])
+    if date_m:
+        iso = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
+        (OUT_ROOT / FETCHED_DATE_STATE_NAME).write_text(iso + "\n", encoding="utf-8")
     return 0
 
 
@@ -423,6 +430,9 @@ BROADCAST_DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
 # Episode number fetched by the last successful run, one line; read by
 # 02_fetch_doraemon.bat/.sh to chain the translation step after --latest.
 FETCHED_STATE_NAME = ".last_fetched"
+# Its broadcast date in ISO form (2026-10-17); read by the materials-pipeline
+# launcher to pick the matching TVer episode (--broadcast-date).
+FETCHED_DATE_STATE_NAME = ".last_fetched_date"
 
 
 def resolve_latest_episode(client: httpx.Client) -> dict | None:

@@ -17,6 +17,15 @@ Usage:
     uv run python scripts/download_tver.py --all           # all available episodes
     uv run python scripts/download_tver.py --series <id_or_series_url>
     uv run python scripts/download_tver.py --episode epenb4xglc
+    uv run python scripts/download_tver.py --out-dir DIR --name 938 \
+        --broadcast-date 2026-10-17                        # pipeline mode: pick the
+                                                           # episode aired that day,
+                                                           # save as DIR/938.mp4
+
+--broadcast-date guards against a TVer/story-page mismatch: TVer's latest can
+lag the aired episode by a day or two, so the materials pipeline passes the
+broadcast date from the story page and only an episode whose
+broadcastDateLabel matches (e.g. "10月17日(土)放送分") is downloaded.
 """
 
 from __future__ import annotations
@@ -81,24 +90,40 @@ def _ffmpeg_location() -> str | None:
     return None
 
 
-def download(episode_id: str, out_dir: Path) -> None:
+def _open_dir(path: Path) -> None:
+    """Open the download folder for the user (Windows shell only)."""
+    if os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+
+
+def download(episode_id: str, out_dir: Path, name: str | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable, "-m", "yt_dlp",
+        sys.executable,
+        "-m",
+        "yt_dlp",
         "--write-thumbnail",
-        "--convert-thumbnails", "jpg",
+        "--convert-thumbnails",
+        "jpg",
         "--write-info-json",
         # TVer serves H.264/AAC HLS, so a remux is enough — no re-encode.
-        "--merge-output-format", "mp4",
-        "--remux-video", "mp4",
+        "--merge-output-format",
+        "mp4",
+        "--remux-video",
+        "mp4",
         # Parallel HLS fragments — needs pycryptodomex (decrypts AES-128 in
         # process; without it yt-dlp delegates to ffmpeg, which is sequential).
-        "-N", "8",
+        "-N",
+        "8",
         # TVer connection is flaky; retry metadata + fragments harder.
-        "--retries", "10",
-        "--fragment-retries", "10",
-        "-o", "%(title)s [%(id)s].%(ext)s",
-        "--paths", str(out_dir),
+        "--retries",
+        "10",
+        "--fragment-retries",
+        "10",
+        "-o",
+        f"{name}.%(ext)s" if name else "%(title)s [%(id)s].%(ext)s",
+        "--paths",
+        str(out_dir),
     ]
     ffmpeg = _ffmpeg_location()
     if ffmpeg:
@@ -118,21 +143,35 @@ def download(episode_id: str, out_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download TVer episodes (default: latest Doraemon).")
-    parser.add_argument("--series", default=DEFAULT_SERIES,
-                        help="Series id or full URL (default: Doraemon srtsxzl3si).")
+    parser.add_argument(
+        "--series", default=DEFAULT_SERIES, help="Series id or full URL (default: Doraemon srtsxzl3si)."
+    )
     parser.add_argument("--episode", help="Download one episode id directly, skip listing.")
     parser.add_argument("--all", action="store_true", help="Download all available episodes.")
     parser.add_argument("--list", action="store_true", help="List available episodes and exit.")
+    parser.add_argument(
+        "--out-dir", type=Path, default=None, help="Download here instead of the fixed raw-video folder."
+    )
+    parser.add_argument(
+        "--name", default=None, help="Output filename without extension (default: '<title> [<episode id>]')."
+    )
+    parser.add_argument(
+        "--broadcast-date",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Only download the available episode aired on this date "
+        "(matches broadcastDateLabel, e.g. 2026-10-17 -> '10月17日').",
+    )
     args = parser.parse_args()
 
     series_id = _series_id(args.series)
     # The default Doraemon series lands directly in the fixed folder; any other
     # series gets its own subdir under it to keep files from mixing.
-    out_dir = OUT_ROOT if series_id == DEFAULT_SERIES else OUT_ROOT / series_id
+    out_dir = args.out_dir or (OUT_ROOT if series_id == DEFAULT_SERIES else OUT_ROOT / series_id)
 
     if args.episode:
-        download(args.episode, out_dir)
-        os.startfile(out_dir)  # open the download folder for the user
+        download(args.episode, out_dir, name=args.name)
+        _open_dir(out_dir)
         return
 
     with httpx.Client(timeout=30, follow_redirects=True) as client:
@@ -147,19 +186,31 @@ def main() -> None:
     for ep in available:
         end = datetime.fromtimestamp(ep["endAt"]).strftime("%Y-%m-%d %H:%M") if ep.get("endAt") else "?"
         mins = (ep.get("duration") or 0) // 60
-        print(f"  {ep['id']}  {ep.get('broadcastDateLabel', '')}  "
-              f"{mins}min  until {end}  {ep.get('title', '')}")
+        print(f"  {ep['id']}  {ep.get('broadcastDateLabel', '')}  {mins}min  until {end}  {ep.get('title', '')}")
 
     if args.list:
         return
 
     targets = available if args.all else available[:1]
+    if args.broadcast_date:
+        try:
+            _, b_month, b_day = (int(p) for p in args.broadcast_date.split("-"))
+        except ValueError:
+            sys.exit(f"Invalid --broadcast-date {args.broadcast_date!r} (expected YYYY-MM-DD)")
+        needle = f"{b_month}月{b_day}日"
+        targets = [ep for ep in available if needle in ep.get("broadcastDateLabel", "")]
+        if not targets:
+            print(f"\nNo available episode matches broadcast date {args.broadcast_date} ({needle}).")
+            print("TVer may not have posted it yet — retry later.")
+            sys.exit(1)
+        if not args.all:
+            targets = targets[:1]
     for ep in targets:
         print(f"\nDownloading {ep['id']}: {ep.get('title', '')}")
-        download(ep["id"], out_dir)
+        download(ep["id"], out_dir, name=args.name)
 
     print(f"\nSaved to: {out_dir.resolve()}")
-    os.startfile(out_dir)  # open the download folder for the user
+    _open_dir(out_dir)
 
 
 if __name__ == "__main__":
