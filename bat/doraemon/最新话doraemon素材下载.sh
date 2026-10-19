@@ -5,7 +5,8 @@
 #   ./最新话doraemon素材下载.sh         no number: FULL pipeline for the latest
 #                                      aired episode - fetch story info ->
 #                                      translate -> TVer download (<ep>.mp4)
-#                                      -> split (contact-sheet y/n confirm)
+#                                      -> split (cuts directly; anomalies pop
+#                                         a contact sheet for y/n)
 #   ./最新话doraemon素材下载.sh 934    number given: story info + translation
 #                                      only - no download, no split
 #
@@ -62,7 +63,7 @@ fi
 uv run python scripts/download_tver.py --out-dir "$MAT" --name "$EP" "${DATEARG[@]}"
 
 RC=0
-uv run python scripts/split_episode.py "$MAT/$EP.mp4" -o "$MAT" --confirm || RC=$?
+uv run python scripts/split_episode.py "$MAT/$EP.mp4" -o "$MAT" --confirm-anomaly || RC=$?
 if [ "$RC" = "2" ]; then
     echo "Split cancelled - preview folder: $MAT/preview"
     RC=0

@@ -15,7 +15,7 @@ rem Latest-episode Doraemon materials pipeline.
 rem
 rem   double-click / no number: FULL pipeline for the latest aired episode -
 rem       fetch story info -> translate -> TVer download (<ep>.mp4) ->
-rem       split (contact sheet pops up, answer y to cut)
+rem       split (cuts directly; anomalies pop a contact sheet for y/n)
 rem   with a number (e.g. 934): story info + translation only - no download,
 rem       no split
 rem
@@ -88,8 +88,9 @@ if not "%airdate%"=="" set "DATEARG=--broadcast-date %airdate%"
 "%PY%" scripts\download_tver.py --out-dir "%MAT%" --name %ep% %DATEARG%
 if errorlevel 1 ( set "RC=1" & goto :done )
 
-rem --- split: contact sheet pops up, answer y to cut (n cancels, RC 2) ---
-"%PY%" scripts\split_episode.py "%MAT%\%ep%.mp4" -o "%MAT%" --confirm
+rem --- split: cuts directly; only anomalies (card count / end snap / story
+rem     length outside 8~13 min) pop the contact sheet for a y/n (n -> RC 2) ---
+"%PY%" scripts\split_episode.py "%MAT%\%ep%.mp4" -o "%MAT%" --confirm-anomaly
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="2" (
     echo  Split cancelled - preview folder: %MAT%\preview

@@ -48,6 +48,10 @@ Usage:
     uv run python scripts/split_episode.py input/935.mp4 --preview   # detect + report + images only
     uv run python scripts/split_episode.py input/935.mp4             # detect + cut + write 935_split.json
     uv run python scripts/split_episode.py input/935.mp4 --confirm   # detect + show contact sheet, y/n -> cut
+    uv run python scripts/split_episode.py input/935.mp4 --confirm-anomaly
+        # cut directly when the split looks healthy; only anomalies (title-card
+        # count != 2, a story end not snapped to a black run, a story outside
+        # 8~13 minutes) pop the contact sheet for a y/n decision
     uv run python scripts/split_episode.py input/935.mp4 -o output --episodes 2 --copy
 
 First run on a new source should always be --preview: it writes
@@ -115,6 +119,15 @@ END_BLACK_MIN_RUN = 0.15  # ignore sub-0.15s black flickers
 # the last clearly visible content frame instead. The CUT point is unaffected.
 END_PREVIEW_MIN_MEAN = 35.0
 END_PREVIEW_MAX_BACKTRACK = 2.0
+
+
+# --- anomaly gate for --confirm-anomaly --------------------------------------
+# A normal broadcast episode: 2 title cards (2 stories), every story end
+# snapped to a black run, and each story runs 8~13 minutes. Anything else is
+# worth a human glance (contact sheet + y/n) before cutting.
+EXPECTED_TITLE_CARDS = 2
+STORY_MIN_MINUTES = 8.0
+STORY_MAX_MINUTES = 13.0
 
 
 @dataclass
@@ -499,6 +512,29 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
         cap.release()
 
 
+def split_anomalies(split_cards: list[Candidate], episodes: list[dict]) -> list[str]:
+    """Anomalies worth a human confirmation before cutting (--confirm-anomaly).
+
+    Checks the three things a healthy Doraemon split always satisfies: the
+    usual title-card count, every story end snapped to a black run
+    (``end_frame`` set by adjust_episode_ends), and each story 8~13 minutes.
+    """
+    issues: list[str] = []
+    if len(split_cards) != EXPECTED_TITLE_CARDS:
+        issues.append(f"标题卡数量异常: {len(split_cards)} 个 (通常为 {EXPECTED_TITLE_CARDS} 个)")
+    missing_end = [ep["name"] for ep in episodes if "end_frame" not in ep]
+    if missing_end:
+        issues.append(f"尾帧数量异常: {len(missing_end)}/{len(episodes)} 集结尾未对齐到黑帧 ({', '.join(missing_end)})")
+    for ep in episodes:
+        minutes = (ep["end"] - ep["start"]) / 60.0
+        if not (STORY_MIN_MINUTES <= minutes <= STORY_MAX_MINUTES):
+            issues.append(
+                f"单集时长异常: {ep['name']} {minutes:.1f} 分钟 "
+                f"(正常 {STORY_MIN_MINUTES:.0f}~{STORY_MAX_MINUTES:.0f} 分钟)"
+            )
+    return issues
+
+
 def detect_title_cards(
     video: Path, interval: float, anchor_sim: float, min_duration: float, pad: float, text_filter: bool = True
 ):
@@ -788,6 +824,12 @@ def main() -> int:
         action="store_true",
         help="切割前打开标题卡联系表并在控制台等待 y/n 确认 (取消时退出码 2 并打开预览目录)",
     )
+    p.add_argument(
+        "--confirm-anomaly",
+        action="store_true",
+        help="无异常时直接切割不询问; 仅当检测到异常 (标题卡数量非 2 / 有集结尾未对齐黑帧 / "
+        "单集时长不在 8~13 分钟) 时弹出联系表等待 y/n (取消时退出码 2 并打开预览目录)",
+    )
     args = p.parse_args()
 
     if not args.video.is_file():
@@ -875,7 +917,7 @@ def main() -> int:
         print("预览模式, 未切割。确认候选无误后去掉 --preview 重新运行。")
         return 0
 
-    if n_ep > 3:
+    if n_ep > 3 and not (args.confirm or args.confirm_anomaly):
         # Refusing to cut without evidence is only useful if the user can
         # inspect the candidates NOW — detection takes minutes, so save the
         # preview frames here instead of making them re-run with --preview.
@@ -885,7 +927,18 @@ def main() -> int:
         print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
         return 1
 
-    if args.confirm:
+    # --confirm: always ask. --confirm-anomaly: ask only on anomalies (the
+    # user sees the contact sheet and decides even when >3 episodes, so the
+    # hard refusal above is skipped in both confirm modes).
+    issues: list[str] = []
+    if args.confirm_anomaly:
+        issues = split_anomalies(split_cards, episodes)
+        if issues:
+            print("\n⚠️ 检测到异常, 需人工确认:")
+            for issue in issues:
+                print(f"   - {issue}")
+
+    if args.confirm or issues:
         preview_dir = args.output_dir / "preview"
         save_preview(args.video, fps, cards, preview_dir, episodes)
         _open_in_shell(preview_dir / "contact_sheet.jpg")
