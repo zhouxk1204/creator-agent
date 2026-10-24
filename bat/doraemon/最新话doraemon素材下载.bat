@@ -21,6 +21,7 @@ rem       no split
 rem
 rem All materials for the episode land in one folder:
 rem   Desktop\doraemon_<ep>\   story.md, metadata.json, story images, covers,
+rem                            <ep>_1_jp.md / <ep>_1_zh.md per-story notes,
 rem                            <ep>.mp4 (+ thumbnail/info-json), split clips
 rem                            (<ep>_1.mp4 ...), <ep>_split.json, preview\
 rem
@@ -76,8 +77,9 @@ if errorlevel 1 (
 
 rem --- materials folder: Desktop\doraemon_<ep> ---
 rem Already populated by fetch_doraemon.py (story.md, metadata.json, images,
-rem covers) and translate_doraemon.py (translated {ep}_{i}_zh.md notes with
-rem tags); the download + split steps below add the video to the SAME folder.
+rem covers, Japanese {ep}_{i}_jp.md notes) and translate_doraemon.py
+rem (translated {ep}_{i}_zh.md notes with tags); the download + split steps
+rem below add the video to the SAME folder.
 set "MAT=%USERPROFILE%\Desktop\doraemon_%ep%"
 if not exist "%MAT%" mkdir "%MAT%"
 echo [materials] %MAT%

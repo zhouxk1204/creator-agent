@@ -20,7 +20,8 @@ Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
                                    # workflow doraemonn_cover.json — a headless
                                    # server is auto-started when none is running;
                                    # plain {ep}_{i}.jpg copy as fallback) + the
-                                   # translated notes mirrored by
+                                   # per-story Japanese notes ({ep}_{i}_jp.md)
+                                   # + the translated notes mirrored by
                                    # translate_doraemon.py ({ep}_{i}_zh.md).
 
 Usage:
@@ -405,17 +406,24 @@ def fetch_one(episode: str) -> int:
                         shutil.copy2(desk_dir / cover_name, cover_dir / cover_name)
                         print(f"  vault     : {cover_dir / cover_name}")
 
+                # '# <title>' heading + cover embed + synopsis body (see
+                # learn.parse_synopsis_md); strip the site's 「」 brackets so
+                # the heading is the bare title.
+                note_lines = [f"# {story['title'].strip('「」')}", ""]
+                if cover_name:
+                    note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
+                note_lines += story["synopsis"].splitlines()
                 if vault_ok:
-                    # '# <title>' heading + cover embed + synopsis body (see
-                    # learn.parse_synopsis_md); strip the site's 「」 brackets so
-                    # the heading is the bare title.
-                    note_lines = [f"# {story['title'].strip('「」')}", ""]
-                    if cover_name:
-                        note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
-                    note_lines += story["synopsis"].splitlines()
                     note_path = note_dir / f"{ep_short}_{i}.md"
                     note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
                     print(f"  synopsis  : {note_path}")
+                # Mirror the Japanese note into the Desktop materials folder as
+                # {ep}_{i}_jp.md — the JA counterpart of the {ep}_{i}_zh.md that
+                # translate_doraemon.py mirrors, so the publishing flow has both
+                # languages side by side.
+                jp_path = desk_dir / f"{ep_short}_{i}_jp.md"
+                jp_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
+                print(f"  synopsis  : {jp_path}")
         finally:
             if comfy_proc is not None:  # only stop the server WE started
                 comfy_proc.terminate()
