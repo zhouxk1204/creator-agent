@@ -12,7 +12,8 @@
 #
 # All materials land in ~/Desktop/doraemon_<ep>/. Differences from the .bat:
 # the translation LLM server is never started/stopped here - translation runs
-# only when a server is already healthy on 127.0.0.1:8080.
+# only when a server is already healthy on 127.0.0.1:8080. The Windows-only
+# Real-ESRGAN post-processing step is not run by this script.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

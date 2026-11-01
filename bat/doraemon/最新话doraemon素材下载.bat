@@ -15,7 +15,8 @@ rem Latest-episode Doraemon materials pipeline.
 rem
 rem   double-click / no number: FULL pipeline for the latest aired episode -
 rem       fetch story info -> translate -> TVer download (<ep>.mp4) ->
-rem       split (cuts directly; anomalies pop a contact sheet for y/n)
+rem       split (cuts directly; anomalies pop a contact sheet for y/n) ->
+rem       copy the two clips to C:\test\temps -> Real-ESRGAN upscale
 rem   with a number (e.g. 934): story info + translation only - no download,
 rem       no split
 rem
@@ -32,7 +33,7 @@ rem ---------------------------------------------------------------------------
 
 echo ========================================
 echo   Doraemon latest-episode materials
-echo   fetch -^> translate -^> TVer -^> split
+echo   fetch -^> translate -^> TVer -^> split -^> upscale
 echo ========================================
 echo.
 echo  Enter = latest aired episode, full pipeline.
@@ -47,7 +48,7 @@ set "STARTED_SERVER=0"
 if not "%ep%"=="" goto :story_only
 
 rem ===========================================================================
-rem  Full pipeline: latest story -> translate -> TVer download -> split
+rem  Full pipeline: latest story -> translate -> TVer download -> split -> upscale
 rem ===========================================================================
 "%PY%" scripts\fetch_doraemon.py --latest
 if errorlevel 1 ( set "RC=1" & goto :done )
@@ -97,7 +98,39 @@ set "RC=%ERRORLEVEL%"
 if "%RC%"=="2" (
     echo  Split cancelled - preview folder: %MAT%\preview
     set "RC=0"
+    goto :done
 )
+if not "%RC%"=="0" goto :done
+
+rem --- upscale both split clips; outputs: C:\test\<ep>_<i>_4K.mp4 ---
+for %%I in (1 2) do (
+    if not exist "%MAT%\%ep%_%%I.mp4" (
+        echo [upscale] Missing split clip: %MAT%\%ep%_%%I.mp4
+        set "RC=1"
+    )
+)
+if not "%RC%"=="0" goto :done
+
+if not exist "C:\test\temps" mkdir "C:\test\temps"
+for %%I in (1 2) do (
+    copy /Y "%MAT%\%ep%_%%I.mp4" "C:\test\temps\" >nul
+    if errorlevel 1 (
+        echo [upscale] Failed to copy %ep%_%%I.mp4 to C:\test\temps
+        set "RC=1"
+    )
+)
+if not "%RC%"=="0" goto :done
+
+rem Free translation VRAM before Real-ESRGAN starts.
+call :stop_server
+echo [upscale] Running Real-ESRGAN on %ep%_1.mp4 and %ep%_2.mp4...
+call "%~dp0run_upscale.bat"
+if errorlevel 1 (
+    echo [upscale] Failed - see C:\test\run_log.txt
+    set "RC=1"
+    goto :done
+)
+echo [upscale] Outputs: C:\test\%ep%_1_4K.mp4 and C:\test\%ep%_2_4K.mp4
 goto :done
 
 rem ===========================================================================
@@ -112,11 +145,7 @@ if errorlevel 1 ( set "RC=1" & goto :done )
 set "RC=%ERRORLEVEL%"
 
 :done
-if "%STARTED_SERVER%"=="1" (
-    echo.
-    echo [server] stopping translation LLM to free VRAM/RAM...
-    taskkill /IM llama-server.exe /F >nul 2>&1
-)
+call :stop_server
 echo.
 echo ========================================
 if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
@@ -130,6 +159,16 @@ if "%RC%"=="0" (
 echo ========================================
 pause >nul
 exit /b %RC%
+
+rem ---------------------------------------------------------------------------
+:stop_server
+if "%STARTED_SERVER%"=="1" (
+    echo.
+    echo [server] stopping translation LLM to free VRAM/RAM...
+    taskkill /IM llama-server.exe /F >nul 2>&1
+    set "STARTED_SERVER=0"
+)
+exit /b 0
 
 rem ---------------------------------------------------------------------------
 :ensure_server

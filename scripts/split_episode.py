@@ -29,14 +29,15 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      「ドラえもん 「A」「B」.mp4」 -> A.mp4 / B.mp4; falls back to <stem>_N
      when the title count doesn't match the episode count.
   9. Snap each story's END to the nearest black frame: for non-last stories
-     the last black run (>=0.15s) in the [card-60s, card-20s] window before
-     the next title card — a black run closer to the card is its transition-
-     in, not the story end (cutting there keeps sponsor/eyecatch junk); for
-     the last story the last black run 2~3 minutes before the video ends —
-     the trailing black is the tail transition, and ED/preview interstitials
-     after the story are excluded. If no black run is found the original
-     boundary is kept. END rows in the contact sheet show the last visible
-     frame before the aligned black run (end_XX.jpg too).
+     the last black run (>=0.15s) at least 120s before the next title card.
+     Black runs in the roughly two minutes nearest the
+     card belong to sponsor/eyecatch transitions, not the story end; cutting
+     there keeps that interstitial junk. For the last story use the last black
+     run 2~3 minutes before the video ends; the trailing black is the tail
+     transition, and ED/preview interstitials after the story are excluded.
+     If no black run is found the original boundary is kept (there is no
+     fallback to a nearer run). END rows in the contact sheet show the last
+     visible frame before the aligned black run (end_XX.jpg too).
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -101,12 +102,14 @@ TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
 
 # --- episode end snapping (step 9) -------------------------------------------
-# Non-last stories: the end black run must sit in [card-60s, card-20s].
-# A black run CLOSER than 20s to the next title card is the card's own
-# transition-in, not the story end (cutting there keeps sponsor/eyecatch
-# interstitials); further than 60s is mid-story flicker.
-END_BLACK_BEFORE_CARD_MIN = 20.0
-END_BLACK_BEFORE_CARD_MAX = 60.0
+# Non-last stories: the end black run must start at least two minutes before
+# the next title card. Search through that cutoff and use the last qualifying
+# run, but not before the earliest healthy story end (STORY_MIN_MINUTES), which
+# guards against mid-story black frames. Sponsor cards / bumpers / the next
+# story's transition-in occupy the roughly two minutes before the card, so
+# black runs in that region must NOT be treated as the previous story's end.
+# There is no fallback to a nearer black run.
+END_BLACK_BEFORE_CARD_MIN = 120.0
 # Last story: same idea against the video tail — the end black run must sit
 # 2~3 minutes before the video ends. The trailing seconds of black are the
 # transition into the tail; ED/preview interstitials after the story are cut.
@@ -494,7 +497,8 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
     try:
         for i, ep in enumerate(episodes):
             if i < len(episodes) - 1:
-                t0, t1 = ep["end"] - END_BLACK_BEFORE_CARD_MAX, ep["end"] - END_BLACK_BEFORE_CARD_MIN
+                t0 = ep["start"] + STORY_MIN_MINUTES * 60.0
+                t1 = ep["end"] - END_BLACK_BEFORE_CARD_MIN
             else:
                 t0, t1 = ep["end"] - END_BLACK_BEFORE_END_MAX, ep["end"] - END_BLACK_BEFORE_END_MIN
             black_f = find_black_run_end(cap, fps, t0, t1)
