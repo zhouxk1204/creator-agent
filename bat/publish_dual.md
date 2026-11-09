@@ -11,8 +11,8 @@ vendored 在 `tools/social-auto-upload/`，独立 Python 3.12 venv，与主项�
 bat\setup_publish.bat
 ```
 
-它会自动：clone sau 仓库 → 建 Python 3.12 venv → 装 sau + playwright → 装 patchright
-chromium 浏览器 → 生成 conf.py。可以重复运行，已完成的步骤会跳过。
+它会自动：clone sau 仓库 → 应用抖音双封面补丁 → 建 Python 3.12 venv → 装 sau + playwright →
+装 patchright chromium 浏览器 → 生成 conf.py。可以重复运行，已完成的步骤会跳过。
 
 ## 首次登录（只做一次，需要扫码）
 
@@ -40,20 +40,33 @@ publish\2026-10-13-doraemon-935\
     title.txt           必须，第一行 = 标题（≤55字）
     desc.txt            建议，整个文件 = 简介（多行可以）
     tags.txt            建议，标签，逗号/空格/换行分隔都行（≤12个）
-    cover-douyin.jpg    建议，抖音封面 3:4 竖版
-    cover-bilibili.jpg  建议，B站封面 16:10 横版
-    cover.jpg           可选，通用封面回退
+    cover-douyin-portrait.jpg  建议，抖音竖封面 3:4
+    cover-douyin-landscape.jpg 建议，抖音横封面 4:3
+    cover-douyin.jpg           兼容旧格式，抖音竖封面 3:4
+    cover-bilibili.jpg         建议，B站封面 16:10 横版
+    cover.jpg                  可选，通用封面回退
     meta.txt            可选，key=value 发布参数（tid/schedule/账号/跳过）
 ```
 
-2. 双击 `bat\publish_dual.bat`（publish\ 下只有一个候选目录时自动选中），
+抖音支持两张可复用公共封面，放到：
+
+```text
+C:\Users\34696\Desktop\publish-template\
+    cover-douyin-portrait.jpg     竖封面，建议 1080×1440（3:4）
+    cover-douyin-landscape.jpg    横封面，建议 1440×1080（4:3）
+```
+
+每次上传会自动使用这两张图；发布目录中的同名文件优先。也支持 `.jpeg` / `.png`。
+不需要每次复制公共封面，旧的 `cover-douyin.jpg` 仍可作为竖封面使用。
+
+1. 双击 `bat\publish_dual.bat`（publish\ 下只有一个候选目录时自动选中），
    或显式指定：
 
 ```bat
 bat\publish_dual.bat publish\2026-10-13-doraemon-935
 ```
 
-3. 屏幕上会列出 目录/视频/标题/封面/平台 摘要，输入 `Y` 确认后开始发。
+1. 屏幕上会列出 目录/视频/标题/封面/平台 摘要，输入 `Y` 确认后开始发。
    先发抖音，再发B站；一个失败不影响另一个，失败的可以单独重跑：
 
 ```bat

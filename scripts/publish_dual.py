@@ -7,10 +7,15 @@ Reads a publish directory prepared by the user:
         title.txt          # required: first non-empty line = title
         desc.txt           # optional: whole file = description (multi-line OK)
         tags.txt           # optional: tags, comma / space / newline separated
-        cover-douyin.jpg   # optional: 3:4 portrait cover for Douyin
-        cover-bilibili.jpg # optional: 16:10 landscape cover for Bilibili
-        cover.jpg          # optional: fallback cover for both platforms
-        meta.txt           # optional: key=value lines, see META KEYS below
+        cover-douyin-portrait.jpg  # optional: 3:4 portrait cover for Douyin
+        cover-douyin-landscape.jpg # optional: 4:3 landscape cover for Douyin
+        cover-douyin.jpg           # optional legacy portrait cover
+        cover-bilibili.jpg         # optional: 16:10 landscape cover for Bilibili
+        cover.jpg                  # optional: fallback cover
+        meta.txt                   # optional: key=value lines, see META KEYS below
+
+Reusable Douyin covers can live in ~/Desktop/publish-template with the same
+portrait/landscape filenames. Per-video covers take precedence.
 
 The canonical format spec (with AI-generation prompt) is docs/publish-package.md.
 
@@ -34,9 +39,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAU_ROOT = REPO_ROOT / "tools" / "social-auto-upload"
 PUBLISH_ROOT = REPO_ROOT / "publish"
+SHARED_COVER_ROOT = Path.home() / "Desktop" / "publish-template"
 
 VIDEO_EXTS = {".mp4", ".mov", ".flv", ".mkv", ".avi"}
 COVER_EXTS = {".jpg", ".jpeg", ".png"}
+DOUYIN_PORTRAIT_STEM = "cover-douyin-portrait"
+DOUYIN_LANDSCAPE_STEM = "cover-douyin-landscape"
 
 
 def sau_exe() -> Path:
@@ -84,38 +92,53 @@ def normalize_tags(raw: str) -> str:
     return ",".join(t for t in (x.strip() for x in raw.split(",")) if t)
 
 
-def resolve_covers(folder: Path) -> tuple[Path | None, Path | None]:
-    """Resolve (douyin_cover, bilibili_cover) from the publish folder.
+def resolve_covers(folder: Path) -> tuple[Path | None, Path | None, Path | None]:
+    """Resolve (Douyin portrait, Douyin landscape, Bilibili) covers.
 
-    Priority per platform: cover-<platform>.<ext> -> cover.<ext> -> the only
-    image in the folder. Multiple un-named images are an error (ambiguous).
+    Per-video files take precedence over reusable covers in the Desktop template.
+    Legacy cover-douyin/cover files remain portrait/Bilibili fallbacks.
     """
-    images = [p for p in sorted(folder.iterdir()) if p.is_file() and p.suffix.lower() in COVER_EXTS]
 
-    def named(stem: str) -> Path | None:
+    def images_in(directory: Path) -> list[Path]:
+        if not directory.is_dir():
+            return []
+        return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in COVER_EXTS)
+
+    def named(images: list[Path], stem: str) -> Path | None:
         return next((p for p in images if p.stem.lower() == stem), None)
 
-    generic = named("cover")
-    douyin = named("cover-douyin") or generic
-    bilibili = named("cover-bilibili") or generic
-    if douyin is None and bilibili is None:
+    images = images_in(folder)
+    generic = named(images, "cover")
+    douyin_portrait = named(images, DOUYIN_PORTRAIT_STEM) or named(images, "cover-douyin") or generic
+    douyin_landscape = named(images, DOUYIN_LANDSCAPE_STEM)
+    bilibili = named(images, "cover-bilibili") or generic
+
+    if douyin_portrait is None and bilibili is None:
         unnamed = [p for p in images if not p.stem.lower().startswith("cover-")]
         if len(unnamed) == 1:
-            douyin = bilibili = unnamed[0]
+            douyin_portrait = bilibili = unnamed[0]
         elif len(unnamed) > 1:
             names = ", ".join(p.name for p in images)
-            raise SystemExit(
-                "[X] 有多张图片，无法判断封面：请命名为 "
-                f"cover-douyin.jpg / cover-bilibili.jpg / cover.jpg（现有: {names}）"
-            )
-    return douyin, bilibili
+            raise SystemExit(f"[X] 有多张图片，无法判断封面：请按 docs/publish-package.md 命名 （现有: {names}）")
+
+    shared = images_in(SHARED_COVER_ROOT)
+    douyin_portrait = douyin_portrait or named(shared, DOUYIN_PORTRAIT_STEM)
+    douyin_landscape = douyin_landscape or named(shared, DOUYIN_LANDSCAPE_STEM)
+    return douyin_portrait, douyin_landscape, bilibili
+
+
+def cover_label(path: Path | None) -> str:
+    if path is None:
+        return "（无，自动截取）"
+    source = "公共" if path.is_relative_to(SHARED_COVER_ROOT) else "本次"
+    return f"{path.name}（{source}）"
 
 
 class PublishJob:
     def __init__(self, folder: Path, args: argparse.Namespace):
         self.folder = folder
         self.video = find_single(folder, VIDEO_EXTS, "视频文件", required=True)
-        self.cover_douyin, self.cover_bilibili = resolve_covers(folder)
+        self.cover_douyin_portrait, self.cover_douyin_landscape, self.cover_bilibili = resolve_covers(folder)
 
         title_file = folder / "title.txt"
         if not title_file.exists():
@@ -163,8 +186,10 @@ class PublishJob:
                 cmd += ["--desc", self.desc]
             if self.tags:
                 cmd += ["--tags", self.tags]
-            if self.cover_douyin:
-                cmd += ["--thumbnail", str(self.cover_douyin)]
+            if self.cover_douyin_portrait:
+                cmd += ["--thumbnail-portrait", str(self.cover_douyin_portrait)]
+            if self.cover_douyin_landscape:
+                cmd += ["--thumbnail-landscape", str(self.cover_douyin_landscape)]
             if self.schedule:
                 cmd += ["--schedule", self.schedule]
             cmd += ["--headed" if headed else "--headless"]
@@ -253,9 +278,9 @@ def main() -> int:
     print(f"  发布目录 : {folder.relative_to(REPO_ROOT) if folder.is_relative_to(REPO_ROOT) else folder}")
     print(f"  视频     : {job.video.name}")
     print(f"  标题     : {job.title}")
-    cover_d = job.cover_douyin.name if job.cover_douyin else "（无，自动截取）"
-    cover_b = job.cover_bilibili.name if job.cover_bilibili else "（无，自动截取）"
-    print(f"  抖音封面 : {cover_d}   B站封面: {cover_b}")
+    print(f"  抖音竖封面 : {cover_label(job.cover_douyin_portrait)}")
+    print(f"  抖音横封面 : {cover_label(job.cover_douyin_landscape)}")
+    print(f"  B站封面   : {cover_label(job.cover_bilibili)}")
     print(f"  平台     : {platforms}")
     if job.schedule:
         print(f"  定时     : {job.schedule}")

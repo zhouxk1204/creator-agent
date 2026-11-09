@@ -14,10 +14,11 @@ rem Chinese usage docs live in publish_dual.md next to publish_dual.bat.
 rem
 rem One-time setup for social-auto-upload (sau):
 rem   1. clone the repo into tools\social-auto-upload (if missing)
-rem   2. create a dedicated Python 3.12 venv (sau requires <3.13)
-rem   3. install sau + playwright into that venv
-rem   4. install the patchright chromium browser
-rem   5. create conf.py from the example
+rem   2. apply the tracked Douyin dual-cover compatibility patch
+rem   3. create a dedicated Python 3.12 venv (sau requires <3.13)
+rem   4. install sau + playwright into that venv
+rem   5. install the patchright chromium browser
+rem   6. create conf.py from the example
 rem Safe to re-run: every step is skipped when already done.
 rem ---------------------------------------------------------------------------
 
@@ -31,6 +32,25 @@ if not exist "%SAU_DIR%\.git" (
     if errorlevel 1 goto :fail
 ) else (
     echo [OK] repo already cloned: %SAU_DIR%
+)
+
+rem Apply our dual-cover fix without tracking the third-party repo in this one.
+set "SAU_PATCH=%REPO_ROOT%\patches\social-auto-upload\douyin-dual-cover.patch"
+if exist "%SAU_PATCH%" (
+    git -C "%SAU_DIR%" apply --reverse --check "%SAU_PATCH%" >nul 2>&1
+    if not errorlevel 1 (
+        echo [OK] douyin dual-cover patch already applied
+    ) else (
+        git -C "%SAU_DIR%" apply --check "%SAU_PATCH%" >nul 2>&1
+        if errorlevel 1 (
+            echo [X] douyin dual-cover patch does not match this sau revision.
+            echo     Update the patch before publishing with both covers.
+            goto :fail
+        )
+        git -C "%SAU_DIR%" apply "%SAU_PATCH%"
+        if errorlevel 1 goto :fail
+        echo [OK] douyin dual-cover patch applied
+    )
 )
 
 set "SAU_PY=%SAU_DIR%\.venv\Scripts\python.exe"

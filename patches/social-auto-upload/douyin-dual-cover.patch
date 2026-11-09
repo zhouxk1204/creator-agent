@@ -1,0 +1,12 @@
+diff --git a/uploader/douyin_uploader/main.py b/uploader/douyin_uploader/main.py
+--- a/uploader/douyin_uploader/main.py
++++ b/uploader/douyin_uploader/main.py
+@@ -894,7 +894,7 @@ class DouYinVideo:
+             await cover_upload.set_input_files(self.thumbnail_portrait_path)
+             await page.wait_for_timeout(3000)
+             douyin_logger.info(_msg("🖼️", "竖版封面已上传到预览"))
+-        elif self.thumbnail_landscape_path:
++        if self.thumbnail_landscape_path:
+             try:
+                 await cover_locator.get_by_text("设置横封面", exact=True).first.click(timeout=3000)
+                 await page.wait_for_timeout(800)

@@ -11,9 +11,11 @@ publish/<slug>/                  # slug 建议: 日期-内容，如 2026-10-14-d
 ├── title.txt                    # 【必填】标题
 ├── desc.txt                     # 【建议】简介/描述
 ├── tags.txt                     # 【建议】标签
-├── cover-douyin.jpg             # 【建议】抖音封面，3:4 竖版
-├── cover-bilibili.jpg           # 【建议】B站封面，16:10 横版
-├── cover.jpg                    # 【可选】通用封面（上面两个缺失时的回退）
+├── cover-douyin-portrait.jpg     # 【建议】抖音竖封面，3:4
+├── cover-douyin-landscape.jpg    # 【建议】抖音横封面，4:3
+├── cover-douyin.jpg              # 【兼容旧格式】抖音竖封面，3:4
+├── cover-bilibili.jpg            # 【建议】B站封面，16:10 横版
+├── cover.jpg                     # 【可选】通用封面（旧格式回退）
 └── meta.txt                     # 【可选】发布参数
 ```
 
@@ -44,17 +46,24 @@ publish/<slug>/                  # slug 建议: 日期-内容，如 2026-10-14-d
 - **≤ 12 个，每个 ≤ 20 字**（B站限制；抖音话题建议 3~6 个）。
 - 不需要 `#` 前缀。
 
-### 封面图（建议，三张都可省略）
+### 封面图（建议，均可省略）
 
 | 文件名 | 用途 | 比例 | 建议尺寸 |
 |---|---|---|---|
-| `cover-douyin.jpg` | 抖音封面 | **3:4 竖版** | 1080×1440 |
+| `cover-douyin-portrait.jpg` | 抖音竖封面 | **3:4 竖版** | 1080×1440 |
+| `cover-douyin-landscape.jpg` | 抖音横封面 | **4:3 横版** | 1440×1080 |
+| `cover-douyin.jpg` | 旧格式抖音竖封面 | **3:4 竖版** | 1080×1440 |
 | `cover-bilibili.jpg` | B站封面 | **16:10 横版** | 1280×800（≥1146×717） |
-| `cover.jpg` | 通用回退 | 任意 | 上面缺失时两个平台都用它 |
+| `cover.jpg` | 通用回退 | 任意 | 旧格式回退 |
 
-- 支持 `.jpg .jpeg .png`。
-- 查找顺序：`cover-<平台>.<ext>` → `cover.<ext>` → 目录里唯一的图片文件。
-- 目录里有多张图但不按上述命名 → 报错（防止用错封面）。
+抖音公共封面目录固定为 `C:\Users\34696\Desktop\publish-template`。只需把
+`cover-douyin-portrait.jpg` 和 `cover-douyin-landscape.jpg` 放进去，之后每次发布都会
+自动使用，不必复制到每个视频目录。也支持 `.jpeg` / `.png`。
+
+- 查找顺序：发布目录的新版横/竖封面 → 旧 `cover-douyin` / `cover` 回退（仅竖图）
+  → 桌面公共目录的对应封面；发布目录中的同名文件优先于公共文件。
+- B站仍使用 `cover-bilibili` → `cover`，不受抖音公共封面目录影响。
+- 目录里有多张无法识别用途的图片 → 报错（防止用错封面）。
 - 一张都不提供 → 平台自动截帧，B站/抖音审核后也可再改。
 
 ### meta.txt — 发布参数（可选）
@@ -85,7 +94,9 @@ bilibili=0
 | title.txt | `--title`（必填） | `--title`（必填） |
 | desc.txt | `--desc` | `--desc`（必填，缺省用标题） |
 | tags.txt | `--tags`（话题） | `--tags`（≤12） |
-| cover-*.jpg | `--thumbnail`（3:4） | `--thumbnail` |
+| cover-douyin-portrait.* | `--thumbnail-portrait`（3:4） | — |
+| cover-douyin-landscape.* | `--thumbnail-landscape`（4:3） | — |
+| cover-bilibili.* | — | `--thumbnail` |
 | meta.txt tid | — | `--tid`（必填） |
 | meta.txt schedule | `--schedule` | `--schedule` |
 
@@ -112,8 +123,8 @@ bilibili=0
 - 风格：<如 温馨治愈 / 搞笑解说>
 ````
 
-封面图建议用视频关键帧 + 大字标题制作：抖音版裁 3:4、B站版裁 16:10，
-分别存为 `cover-douyin.jpg` / `cover-bilibili.jpg`。
+封面图建议用视频关键帧 + 大字标题制作：抖音竖版裁 3:4、横版裁 4:3、B站版裁 16:10，
+分别存为 `cover-douyin-portrait.jpg` / `cover-douyin-landscape.jpg` / `cover-bilibili.jpg`。
 
 ## 5. 校验与发布
 
