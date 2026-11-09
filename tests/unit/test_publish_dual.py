@@ -42,6 +42,15 @@ def test_douyin_declaration_is_fictional_performance(tmp_path):
     assert_flag(command, "--declaration", "虚构演绎，仅供娱乐")
 
 
+def test_douyin_collection_defaults_to_doraemon_2026(tmp_path):
+    folder = make_publish_dir(tmp_path)
+    job = make_job(folder)
+
+    command = job.build_commands(headed=False)[0][1]
+
+    assert_flag(command, "--collection", "哆啦A梦2026合集")
+
+
 def test_shared_douyin_covers_are_used_and_forwarded(tmp_path):
     folder = make_publish_dir(tmp_path)
     shared = tmp_path / "shared"
