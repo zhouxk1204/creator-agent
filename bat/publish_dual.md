@@ -30,6 +30,12 @@ tools\social-auto-upload\.venv\Scripts\sau.exe bilibili login --account default
 - 想换账号名就把 `default` 改成别的名字（如 `main`），发布时在 meta.txt 里对应改
   `douyin_account=` / `bilibili_account=`。
 
+## 抖音单平台快捷入口
+
+只想发抖音时，双击 `bat\publish_douyin.bat`，粘贴发布文件夹路径并回车即可。
+它会固定使用有头浏览器，仍会在发布前显示摘要并要求输入 `Y` 确认。详见
+`bat/publish_douyin.md`。
+
 ## 每次发布
 
 1. 建好发布目录，把素材放进去。**格式标准见 `docs/publish-package.md`**（唯一权威定义，
