@@ -11,7 +11,7 @@ vendored 在 `tools/social-auto-upload/`，独立 Python 3.12 venv，与主项�
 bat\setup_publish.bat
 ```
 
-它会自动：clone sau 仓库 → 应用抖音双封面补丁 → 建 Python 3.12 venv → 装 sau + playwright →
+它会自动：clone sau 仓库 → 应用抖音双封面和上传稳定性补丁 → 建 Python 3.12 venv → 装 sau + playwright →
 装 patchright chromium 浏览器 → 生成 conf.py。可以重复运行，已完成的步骤会跳过。
 
 ## 首次登录（只做一次，需要扫码）

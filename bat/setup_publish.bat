@@ -14,7 +14,7 @@ rem Chinese usage docs live in publish_dual.md next to publish_dual.bat.
 rem
 rem One-time setup for social-auto-upload (sau):
 rem   1. clone the repo into tools\social-auto-upload (if missing)
-rem   2. apply the tracked Douyin dual-cover compatibility patch
+rem   2. apply the tracked Douyin compatibility patches
 rem   3. create a dedicated Python 3.12 venv (sau requires <3.13)
 rem   4. install sau + playwright into that venv
 rem   5. install the patchright chromium browser
@@ -34,23 +34,12 @@ if not exist "%SAU_DIR%\.git" (
     echo [OK] repo already cloned: %SAU_DIR%
 )
 
-rem Apply our dual-cover fix without tracking the third-party repo in this one.
-set "SAU_PATCH=%REPO_ROOT%\patches\social-auto-upload\douyin-dual-cover.patch"
-if exist "%SAU_PATCH%" (
-    git -C "%SAU_DIR%" apply --reverse --check "%SAU_PATCH%" >nul 2>&1
-    if not errorlevel 1 (
-        echo [OK] douyin dual-cover patch already applied
-    ) else (
-        git -C "%SAU_DIR%" apply --check "%SAU_PATCH%" >nul 2>&1
-        if errorlevel 1 (
-            echo [X] douyin dual-cover patch does not match this sau revision.
-            echo     Update the patch before publishing with both covers.
-            goto :fail
-        )
-        git -C "%SAU_DIR%" apply "%SAU_PATCH%"
-        if errorlevel 1 goto :fail
-        echo [OK] douyin dual-cover patch applied
-    )
+rem Apply our Douyin fixes without tracking the third-party repo in this one.
+rem Keep these as separate patches so existing installs with the cover patch
+rem can add the upload reliability fix without reverting anything first.
+for %%P in (douyin-dual-cover douyin-upload-reliability) do (
+    call :apply_sau_patch "%%~P"
+    if errorlevel 1 goto :fail
 )
 
 set "SAU_PY=%SAU_DIR%\.venv\Scripts\python.exe"
@@ -108,6 +97,28 @@ echo.
 echo Then publish with:  bat\publish_dual.bat
 echo.
 pause >nul
+exit /b 0
+
+:apply_sau_patch
+set "SAU_PATCH=%REPO_ROOT%\patches\social-auto-upload\%~1.patch"
+if not exist "%SAU_PATCH%" (
+    echo [X] Missing compatibility patch: %SAU_PATCH%
+    exit /b 1
+)
+git -C "%SAU_DIR%" apply --reverse --check "%SAU_PATCH%" >nul 2>&1
+if not errorlevel 1 (
+    echo [OK] %~1 patch already applied
+    exit /b 0
+)
+git -C "%SAU_DIR%" apply --check "%SAU_PATCH%" >nul 2>&1
+if errorlevel 1 (
+    echo [X] %~1 patch does not match this sau revision.
+    echo     Update the patch before publishing.
+    exit /b 1
+)
+git -C "%SAU_DIR%" apply "%SAU_PATCH%"
+if errorlevel 1 exit /b 1
+echo [OK] %~1 patch applied
 exit /b 0
 
 :fail

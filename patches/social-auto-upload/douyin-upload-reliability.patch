@@ -1,0 +1,146 @@
+diff --git a/uploader/douyin_uploader/main.py b/uploader/douyin_uploader/main.py
+index f6ac2be..87b7034 100644
+--- a/uploader/douyin_uploader/main.py
++++ b/uploader/douyin_uploader/main.py
+@@ -23,6 +23,9 @@ from utils.log import douyin_logger
+ 
+ DOUYIN_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
+ DOUYIN_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
++DOUYIN_UPLOAD_MAX_ATTEMPTS = 3
++DOUYIN_UPLOAD_TIMEOUT_SECONDS = 30 * 60
++DOUYIN_UPLOAD_PROGRESS_INTERVAL_SECONDS = 10
+ 
+ 
+ def _msg(emoji: str, text: str) -> str:
+@@ -790,7 +793,100 @@ class DouYinVideo(DouYinBaseUploader):
+ 
+     async def handle_upload_error(self, page):
+         douyin_logger.warning(_msg("😵", "视频上传摔了一跤，小人马上重新上传"))
+-        await page.locator('div.progress-div [class^="upload-btn-input"]').set_input_files(self.file_path)
++        retry_input = page.locator('div.progress-div input[type="file"]').last
++        if await retry_input.count() == 0:
++            # 抖音改版后 input 的 hash class 可能变化，accept 比 class 名稳定。
++            retry_input = page.locator('input[type="file"][accept*="video"]').last
++        if await retry_input.count() == 0:
++            raise RuntimeError("上传失败后找不到视频重传输入框，请使用 --headed 检查页面是否改版")
++        await retry_input.set_input_files(self.file_path)
++
++    @staticmethod
++    async def _upload_status_text(page: Page) -> str:
++        try:
++            text = await page.locator("div.progress-div").last.inner_text(timeout=1000)
++            return " ".join(text.split())[:500]
++        except Exception:
++            return ""
++
++    async def _save_upload_failure_screenshot(self, page: Page, attempt: int) -> Path | None:
++        path = BASE_DIR / "logs" / f"douyin_upload_failure_{datetime.now():%Y%m%d_%H%M%S}_{attempt}.png"
++        try:
++            await page.screenshot(path=str(path), full_page=True)
++            return path
++        except Exception as exc:
++            douyin_logger.warning(_msg("⚠️", f"上传失败截图保存失败: {exc}"))
++            return None
++
++    @staticmethod
++    def _attach_upload_network_logging(page: Page) -> None:
++        """记录上传请求的底层网络错误；签名 URL 去掉 query，避免泄露临时凭证。"""
++
++        def is_upload_url(url: str) -> bool:
++            return "upload" in url.lower() or "douyinvod" in url.lower()
++
++        def on_request_failed(request) -> None:
++            if is_upload_url(request.url):
++                douyin_logger.error(
++                    _msg("🌐", f"上传网络请求失败: {request.failure}；{request.url.split('?', 1)[0]}")
++                )
++
++        def on_response(response) -> None:
++            if response.status >= 400 and is_upload_url(response.url):
++                douyin_logger.error(
++                    _msg("🌐", f"上传服务返回 HTTP {response.status}；{response.url.split('?', 1)[0]}")
++                )
++
++        page.on("requestfailed", on_request_failed)
++        page.on("response", on_response)
++
++    async def _wait_for_video_upload(self, page: Page) -> None:
++        """等待视频上传，输出页面真实进度；失败有界重试，不静默无限循环。"""
++        loop = asyncio.get_running_loop()
++        deadline = loop.time() + DOUYIN_UPLOAD_TIMEOUT_SECONDS
++        next_progress_log = 0.0
++        failed_attempts = 0
++
++        while True:
++            if loop.time() >= deadline:
++                raise TimeoutError(f"等待抖音视频上传超过 {DOUYIN_UPLOAD_TIMEOUT_SECONDS // 60} 分钟，已停止发布")
++
++            uploaded = page.locator('[class*="long-card"] div:has-text("重新上传")')
++            if await uploaded.count() > 0:
++                douyin_logger.success(_msg("🥳", "视频已经传完啦"))
++                return
++
++            failed = page.locator('div.progress-div > div:has-text("上传失败")')
++            if await failed.count() > 0:
++                failed_attempts += 1
++                detail = await self._upload_status_text(page) or "页面未给出具体原因"
++                screenshot = await self._save_upload_failure_screenshot(page, failed_attempts)
++                screenshot_hint = f"；截图: {screenshot}" if screenshot else ""
++                douyin_logger.error(
++                    _msg(
++                        "😵",
++                        f"第 {failed_attempts}/{DOUYIN_UPLOAD_MAX_ATTEMPTS} 次上传失败: {detail}{screenshot_hint}",
++                    )
++                )
++                if failed_attempts >= DOUYIN_UPLOAD_MAX_ATTEMPTS:
++                    raise RuntimeError(
++                        f"抖音视频连续上传失败 {failed_attempts} 次，已停止重试。"
++                        f"页面提示: {detail}。请用 --headed 重跑查看进度条，并检查上述失败详情。"
++                    )
++                await self.handle_upload_error(page)
++                # 等旧的“上传失败”状态清掉，避免把同一次失败重复计数。
++                try:
++                    await failed.first.wait_for(state="hidden", timeout=10000)
++                except Exception:
++                    pass
++                continue
++
++            now = loop.time()
++            if now >= next_progress_log:
++                status = await self._upload_status_text(page)
++                douyin_logger.info(_msg("🏃", f"视频上传状态: {status}" if status else "小人正在努力上传视频"))
++                next_progress_log = now + DOUYIN_UPLOAD_PROGRESS_INTERVAL_SECONDS
++            await asyncio.sleep(2)
+ 
+     async def handle_auto_video_cover(self, page):
+         if await page.get_by_text("请设置封面后再发布").first.is_visible():
+@@ -981,6 +1077,7 @@ class DouYinVideo(DouYinBaseUploader):
+         context = await set_init_script(context)
+ 
+         page = await context.new_page()
++        self._attach_upload_network_logging(page)
+         await page.goto("https://creator.douyin.com/creator-micro/content/upload", wait_until="domcontentloaded", timeout=90000)
+         douyin_logger.info(_msg("🏃", f"小人开始搬运视频: {self.title}.mp4"))
+         douyin_logger.info(_msg("🧭", "小人正在赶往上传主页"))
+@@ -1026,20 +1123,7 @@ class DouYinVideo(DouYinBaseUploader):
+         await self.fill_title_and_description(page, self.title, self.desc, self.tags)
+         douyin_logger.info(_msg("🏷️", f"小人一共贴了 {len(self.tags)} 个话题"))
+ 
+-        while True:
+-            try:
+-                number = await page.locator('[class^="long-card"] div:has-text("重新上传")').count()
+-                if number > 0:
+-                    douyin_logger.success(_msg("🥳", "视频已经传完啦"))
+-                    break
+-                douyin_logger.info(_msg("🏃", "小人正在努力上传视频"))
+-                await asyncio.sleep(2)
+-                if await page.locator('div.progress-div > div:has-text("上传失败")').count():
+-                    douyin_logger.error(_msg("😵", "检测到上传失败，小人准备重试"))
+-                    await self.handle_upload_error(page)
+-            except Exception:
+-                douyin_logger.debug(_msg("🧍", "小人还在等视频上传完成"))
+-                await asyncio.sleep(2)
++        await self._wait_for_video_upload(page)
+ 
+         if self.productLink and self.productTitle:
+             douyin_logger.info(_msg("🛒", "小人正在设置商品链接"))
