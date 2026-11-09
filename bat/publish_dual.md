@@ -88,6 +88,15 @@ bat\publish_dual.bat publish\xxx --schedule "2026-10-14 12:00"
 
 ## 常见问题
 
+- **看不到抖音上传进度条**：默认使用无头浏览器，不会显示窗口。重跑时加 `--headed`：
+  ```bat
+  bat\publish_dual.bat publish\xxx --only douyin --headed
+  ```
+  终端也会每 10 秒打印页面实际上传状态（包含页面提供的百分比）。
+- **抖音反复显示“上传失败”**：当前版本最多尝试 3 次、总等待上限 30 分钟，不会无限重传。
+  失败时终端会打印页面原因及上传网络错误，并在 `tools\social-auto-upload\logs\` 保存
+  `douyin_upload_failure_*.png` 截图。请先看具体错误，不要盲目重复发布；必要时用上面的
+  `--headed` 命令观察页面。视频建议转为 H.264 + AAC、`yuv420p` 的 MP4 后重试。
 - **抖音触发短信验证**：sau 会等待验证码——把收到的验证码写进
   `tools\social-auto-upload\verify_code.txt`，或在终端提示时手动输入。
 - **登录过期**：重新跑上面的 `sau ... login` 命令即可。可用
