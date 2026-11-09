@@ -12,7 +12,8 @@ bat\setup_publish.bat
 ```
 
 它会自动：clone sau 仓库 → 应用抖音双封面和上传稳定性补丁 → 建 Python 3.12 venv → 装 sau + playwright →
-装 patchright chromium 浏览器 → 生成 conf.py。可以重复运行，已完成的步骤会跳过。
+安装修复抖音 0% 上传问题的 Patchright 1.64.4 → 装 patchright chromium 浏览器 → 生成 conf.py。
+可以重复运行，已完成的步骤会跳过。
 
 ## 首次登录（只做一次，需要扫码）
 
@@ -88,6 +89,10 @@ bat\publish_dual.bat publish\xxx --schedule "2026-10-14 12:00"
 
 ## 常见问题
 
+- **一直显示“文件解析中 0%”，约 60 秒后报“网络异常”**：这是 Patchright 1.58.2
+  改写页面 CSP、阻止抖音上传组件启动 `blob:` Worker 导致的，并不是视频真的已经上传但网速慢。
+  运行一次 `bat\setup_publish.bat`，它会安装上游验证过的 Patchright **1.64.4** 和匹配浏览器。
+  上传没有越过这一步时，视频预览和封面设置也不会生成；先修复上传，再检查封面。
 - **看不到抖音上传进度条**：默认使用无头浏览器，不会显示窗口。重跑时加 `--headed`：
   ```bat
   bat\publish_dual.bat publish\xxx --only douyin --headed

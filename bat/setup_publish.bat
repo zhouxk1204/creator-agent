@@ -60,6 +60,18 @@ if errorlevel 1 (
     echo [OK] sau package installed
 )
 
+rem Patchright 1.58.2 rewrites Douyin's CSP and blocks the upload blob Worker,
+rem leaving "parsing file" at 0%% until the page reports a network failure.
+rem Pin the upstream-verified fixed version even if the cloned sau still pins 1.58.2.
+"%SAU_PY%" -c "import importlib.metadata as m,sys;sys.exit(0 if m.version('patchright')=='1.64.4' else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo [*] Installing Patchright 1.64.4 for Douyin upload compatibility ...
+    uv pip install --python "%SAU_PY%" "patchright==1.64.4"
+    if errorlevel 1 goto :fail
+) else (
+    echo [OK] Patchright 1.64.4 already installed
+)
+
 rem sau_cli eagerly imports playwright.async_api (baijiahao uploader) even
 rem though the runtime browser is patchright - install plain playwright too.
 "%SAU_PY%" -c "import importlib.util as u,sys;sys.exit(0 if u.find_spec('playwright') else 1)" >nul 2>&1
