@@ -45,6 +45,7 @@ VIDEO_EXTS = {".mp4", ".mov", ".flv", ".mkv", ".avi"}
 COVER_EXTS = {".jpg", ".jpeg", ".png"}
 DOUYIN_PORTRAIT_STEM = "cover-douyin-portrait"
 DOUYIN_LANDSCAPE_STEM = "cover-douyin-landscape"
+DEFAULT_DOUYIN_DECLARATION = "虚构演绎，仅供娱乐"
 
 
 def sau_exe() -> Path:
@@ -186,6 +187,7 @@ class PublishJob:
                 cmd += ["--desc", self.desc]
             if self.tags:
                 cmd += ["--tags", self.tags]
+            cmd += ["--declaration", DEFAULT_DOUYIN_DECLARATION]
             if self.cover_douyin_portrait:
                 cmd += ["--thumbnail-portrait", str(self.cover_douyin_portrait)]
             if self.cover_douyin_landscape:
@@ -278,6 +280,8 @@ def main() -> int:
     print(f"  发布目录 : {folder.relative_to(REPO_ROOT) if folder.is_relative_to(REPO_ROOT) else folder}")
     print(f"  视频     : {job.video.name}")
     print(f"  标题     : {job.title}")
+    if job.do_douyin:
+        print(f"  抖音声明 : {DEFAULT_DOUYIN_DECLARATION}")
     print(f"  抖音竖封面 : {cover_label(job.cover_douyin_portrait)}")
     print(f"  抖音横封面 : {cover_label(job.cover_douyin_landscape)}")
     print(f"  B站封面   : {cover_label(job.cover_bilibili)}")

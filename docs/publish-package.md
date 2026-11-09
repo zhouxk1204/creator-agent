@@ -46,6 +46,12 @@ publish/<slug>/                  # slug 建议: 日期-内容，如 2026-10-14-d
 - **≤ 12 个，每个 ≤ 20 字**（B站限制；抖音话题建议 3~6 个）。
 - 不需要 `#` 前缀。
 
+### 抖音自主声明
+
+发布脚本固定显式选择 **「虚构演绎，仅供娱乐」**（`--declaration`），不会使用上传器的
+其他默认声明。若抖音页面上找不到或无法设置该选项，发布会停止并报错，不会静默跳过。
+B站发布不涉及此选项。
+
 ### 封面图（建议，均可省略）
 
 | 文件名 | 用途 | 比例 | 建议尺寸 |
@@ -94,14 +100,14 @@ bilibili=0
 | title.txt | `--title`（必填） | `--title`（必填） |
 | desc.txt | `--desc` | `--desc`（必填，缺省用标题） |
 | tags.txt | `--tags`（话题） | `--tags`（≤12） |
+| 固定自主声明 | `--declaration`（虚构演绎，仅供娱乐） | — |
 | cover-douyin-portrait.* | `--thumbnail-portrait`（3:4） | — |
 | cover-douyin-landscape.* | `--thumbnail-landscape`（4:3） | — |
 | cover-bilibili.* | — | `--thumbnail` |
 | meta.txt tid | — | `--tid`（必填） |
 | meta.txt schedule | `--schedule` | `--schedule` |
 
-未接入的 sau 能力（需要时再扩展）：抖音带货链接 `--product-link`、
-声明 `--declaration`、合集 `--collection`。
+未接入的 sau 能力（需要时再扩展）：抖音带货链接 `--product-link`、合集 `--collection`。
 
 ## 4. 给 AI 的生成提示词（直接复制使用）
 

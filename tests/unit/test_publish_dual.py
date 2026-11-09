@@ -33,6 +33,15 @@ def assert_flag(command, flag, expected):
     assert command[command.index(flag) + 1] == str(expected)
 
 
+def test_douyin_declaration_is_fictional_performance(tmp_path):
+    folder = make_publish_dir(tmp_path)
+    job = make_job(folder)
+
+    command = job.build_commands(headed=False)[0][1]
+
+    assert_flag(command, "--declaration", "虚构演绎，仅供娱乐")
+
+
 def test_shared_douyin_covers_are_used_and_forwarded(tmp_path):
     folder = make_publish_dir(tmp_path)
     shared = tmp_path / "shared"
