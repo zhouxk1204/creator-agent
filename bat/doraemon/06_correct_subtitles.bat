@@ -10,11 +10,12 @@ if errorlevel 1 (
 call .venv\Scripts\activate.bat >nul 2>&1
 
 echo ========================================
-echo   Doraemon subtitle correction + JA-ZH
+echo   Synopsis + tags -^> subtitle correction + JA-ZH
 echo ========================================
 echo.
 echo  Input : *_origin.srt + matching *_jp.md
-echo  Output: *_jp_fixed.srt + *_zh_fixed.srt
+echo  Output: *_zh.md + *_jp_fixed.srt + *_zh_fixed.srt
+echo  One LLM server is shared by all stages.
 echo.
 
 if not "%~1"=="" goto :with_args

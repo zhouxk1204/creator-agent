@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Correct JianYing bilingual Japanese ASR subtitles with the local LLM, then
-# retranslate them to Chinese.
+# Translate synopsis and tags, then correct and retranslate subtitles with one LLM server.
 #
 #   ./06_correct_subtitles.sh ~/Desktop/doraemon_941
 #   ./06_correct_subtitles.sh ~/Desktop/doraemon_941/941_1_origin.srt

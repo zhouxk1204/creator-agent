@@ -210,6 +210,33 @@ def translate_story(settings, title: str, synopsis: str) -> tuple[str, str]:
     raise ValueError(f"translation failed after retry: {last_err}")
 
 
+def translate_note(note: Path, settings) -> tuple[str, str, bool]:
+    title, synopsis, cover = parse_note(note)
+    zh_title, zh_synopsis = translate_story(settings, title, synopsis)
+    zh_path = note.with_name(f"{note.stem.removesuffix('_jp')}_zh.md")
+
+    tags: list[str] = []
+    tag_err: Exception | None = None
+    try:
+        tags = generate_tags(settings, zh_title, zh_synopsis)
+    except (ValueError, httpx.HTTPError) as exc:
+        tag_err = exc
+
+    out_lines = [f"# {zh_title}", ""]
+    if cover:
+        out_lines += [cover, ""]
+    out_lines += zh_synopsis.splitlines()
+    if tags:
+        out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
+    zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
+    if tag_err is None:
+        print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
+    else:
+        print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
+        print(f"  TAG FAILED: {note.name} ({tag_err})")
+    return zh_title, zh_synopsis, tag_err is None
+
+
 def main(episode: str) -> None:
     if not episode.strip().isdigit():
         print(f"Invalid episode number: {episode!r} (expected e.g. 934)")
@@ -226,38 +253,14 @@ def main(episode: str) -> None:
     settings = load_settings().translate
     failed = 0
     for note in notes:
-        zh_path = note.with_name(f"{note.stem.removesuffix('_jp')}_zh.md")
         try:
-            title, synopsis, cover = parse_note(note)
-            zh_title, zh_synopsis = translate_story(settings, title, synopsis)
-        except (ValueError, httpx.HTTPError) as exc:
+            _, _, tags_ok = translate_note(note, settings)
+        except (ValueError, httpx.HTTPError, OSError) as exc:
             failed += 1
             print(f"  FAILED    : {note.name} ({exc})")
             continue
-
-        # Tags ride along with the translation; a tag failure still writes the
-        # translated file (without the tag line) but marks the story failed so
-        # the run reports it and the user can re-run.
-        tags: list[str] = []
-        tag_err: Exception | None = None
-        try:
-            tags = generate_tags(settings, zh_title, zh_synopsis)
-        except (ValueError, httpx.HTTPError) as exc:
-            tag_err = exc
-
-        out_lines = [f"# {zh_title}", ""]
-        if cover:
-            out_lines += [cover, ""]
-        out_lines += zh_synopsis.splitlines()
-        if tags:
-            out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
-        zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
-        if tag_err is None:
-            print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
-        else:
+        if not tags_ok:
             failed += 1
-            print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
-            print(f"  TAG FAILED: {note.name} ({tag_err})")
 
     if failed:
         print(f"\n{failed}/{len(notes)} stories failed to translate.")

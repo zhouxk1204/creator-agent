@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from translate_doraemon import translate_note
+
 from creator_agent.config import load_settings
 from creator_agent.translate.corrector import SubtitleCorrectionError, SubtitleCorrectionPipeline
 from creator_agent.translate.server import ensure_server, stop_server
@@ -38,7 +40,7 @@ def discover_inputs(target: Path) -> list[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="用本地模型矫正剪映日文 ASR 双语字幕，再重新翻译为中文")
+    parser = argparse.ArgumentParser(description="先翻译标题/简介并生成标签，再矫正剪映双语字幕并重新翻译为中文")
     parser.add_argument(
         "target",
         nargs="?",
@@ -67,7 +69,23 @@ def main() -> int:
         for position, origin in enumerate(inputs, 1):
             print(f"\n===== {position}/{len(inputs)} {origin.name} =====")
             try:
-                result = pipeline.process_file(origin, force=args.force)
+                base = origin.name.removesuffix("_origin.srt")
+                if not args.force and any(
+                    origin.with_name(f"{base}_{suffix}_fixed.srt").exists() for suffix in ("jp", "zh")
+                ):
+                    raise SubtitleCorrectionError("字幕输出已存在，请使用 --force 明确覆盖")
+                note = origin.with_name(f"{base}_jp.md")
+                print(f"[简介] 翻译 {note.name} 并生成发布标签...")
+                zh_title, zh_synopsis, tags_ok = translate_note(note, settings)
+                if not tags_ok:
+                    print("[警告] 发布标签生成失败，继续字幕处理；本次运行将返回失败状态", file=sys.stderr)
+                result = pipeline.process_file(
+                    origin,
+                    force=args.force,
+                    translated_context={"title": zh_title, "synopsis": zh_synopsis},
+                )
+                if not tags_ok:
+                    failed += 1
             except Exception as exc:
                 failed += 1
                 print(f"[失败] {origin.name}：{exc}", file=sys.stderr)

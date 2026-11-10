@@ -178,9 +178,15 @@ def _cue_lines(cues: list[SourceCue], start: int, end: int) -> str:
 
 
 def _context_section(context: dict[str, str]) -> str:
-    return (
-        f"【剧情背景，仅供理解专名和上下文，严禁从中补写台词】\n标题：{context['title']}\n简介：{context['synopsis']}"
-    )
+    sections = [
+        f"【剧情背景，仅供理解专名和上下文，严禁从中补写台词】\n日文标题：{context['title']}\n日文简介：{context['synopsis']}"
+    ]
+    if context.get("zh_title") or context.get("zh_synopsis"):
+        sections.append(
+            "【中文简介译文，仅供统一译名；与日文原文冲突时以原文为准】\n"
+            f"中文标题：{context.get('zh_title', '')}\n中文简介：{context.get('zh_synopsis', '')}"
+        )
+    return "\n\n".join(sections)
 
 
 def build_correction_prompt(
@@ -412,7 +418,12 @@ class SubtitleCorrectionPipeline:
             raise SubtitleCorrectionError("中文字幕数量与修正日文字幕不一致")
         return translations, questions
 
-    def process_file(self, origin: Path, force: bool = False) -> CorrectionResult:
+    def process_file(
+        self,
+        origin: Path,
+        force: bool = False,
+        translated_context: dict[str, str] | None = None,
+    ) -> CorrectionResult:
         origin = Path(origin)
         if not origin.name.endswith("_origin.srt"):
             raise SubtitleCorrectionError(f"输入文件名必须以 _origin.srt 结尾：{origin.name}")
@@ -426,6 +437,9 @@ class SubtitleCorrectionPipeline:
 
         source_cues = extract_japanese_track(parse_strict_srt(origin))
         episode_context = load_episode_context(synopsis_path)
+        if translated_context is not None:
+            episode_context["zh_title"] = translated_context["title"]
+            episode_context["zh_synopsis"] = translated_context["synopsis"][:2000]
         fixed, correction_questions = self.correct_japanese(source_cues, episode_context)
         translations, translation_questions = self.translate_chinese(fixed, episode_context)
         questions = correction_questions + translation_questions
