@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,7 +46,7 @@ def correction_run(tmp_path, monkeypatch):
         prompts.append(user)
         if system == corrector.CORRECTION_SYSTEM_PROMPT:
             events.append("correct")
-            return json.dumps({"groups": [{"source_ids": [i], "text": "どこでもドアだよ。"} for i in (1, 2, 3)]})
+            return "\n".join(f"{i}|どこでもドアだよ。" for i in (1, 2, 3))
         assert system == corrector.TRANSLATION_SYSTEM_PROMPT
         events.append("translate")
         return json.dumps({"translations": [{"id": i, "text": "这是任意门。"} for i in (1, 2, 3)]})
@@ -162,3 +163,240 @@ def test_materials_launchers_do_not_invoke_translation():
         assert "scripts\\translate_doraemon.py" not in script
         assert "scripts/translate_doraemon.py" not in script
         assert "ensure_server" not in script and "stop_server" not in script
+
+
+def make_cues(count: int) -> list[corrector.SourceCue]:
+    return [
+        corrector.SourceCue(
+            index,
+            f"00:00:{index:02d},000",
+            f"00:00:{index + 1:02d},000",
+            index * 1000,
+            (index + 1) * 1000,
+            f"行{index}",
+        )
+        for index in range(1, count + 1)
+    ]
+
+
+def test_parse_correction_lines_is_one_to_one():
+    cues = make_cues(6)
+    fixed, questions, consumed = corrector.parse_correction_lines("1|あ\n2|い\n3|う\n4|え\n5|お\n6|か", cues, 0, 6)
+    assert [cue.source_ids for cue in fixed] == [(1,), (2,), (3,), (4,), (5,), (6,)]
+    assert fixed[0].start == cues[0].start and fixed[0].end == cues[0].end
+    assert consumed == 6
+    assert questions == []
+
+
+def test_parse_correction_lines_rejects_merging():
+    # Merging changes the timeline the human re-splits by hand in JianYing.
+    with pytest.raises(corrector.SubtitleCorrectionError, match="禁止合并"):
+        corrector.parse_correction_lines("1-2|あ、い\n3|う", make_cues(6), 0, 3)
+
+
+def test_parse_correction_lines_rejects_early_stop():
+    # The exact failure that killed the 941 run: the model closes after one sentence.
+    with pytest.raises(corrector.SubtitleCorrectionError, match="只处理到 3"):
+        corrector.parse_correction_lines("1|ナマステ！\n2|のび太、\n3|インドに留学", make_cues(6), 0, 6)
+
+
+def test_parse_correction_lines_rejects_gaps_and_noise():
+    with pytest.raises(corrector.SubtitleCorrectionError, match="未连续覆盖"):
+        corrector.parse_correction_lines("1|あ\n3|い", make_cues(6), 0, 3)
+    with pytest.raises(corrector.SubtitleCorrectionError, match="无法解析"):
+        corrector.parse_correction_lines("1|あ\n以上が結果です", make_cues(6), 0, 3)
+
+
+def test_parse_correction_lines_keeps_question_lines_advisory():
+    fixed, questions, consumed = corrector.parse_correction_lines(
+        "1|あ。\n?2|「ア」と「イ」のどちらか判断できない\n2|い。\n3|う。\n4|え。\n?9|本批之外，丢弃",
+        make_cues(4),
+        0,
+        4,
+    )
+    assert consumed == 4
+    assert len(fixed) == 4
+    assert [question.ids for question in questions] == [(2,)]
+    assert questions[0].stage == "日文矫正"
+
+
+def test_parse_correction_lines_fills_short_tail_with_raw_text():
+    # 941 batches repeatedly stopped one cue short; the tail stays as raw ASR.
+    fixed, questions, consumed = corrector.parse_correction_lines("1|あ\n2|い\n3|う", make_cues(4), 0, 4)
+    assert consumed == 4
+    assert [cue.source_ids for cue in fixed] == [(1,), (2,), (3,), (4,)]
+    assert fixed[3].text == "行4"
+    assert questions == []
+
+
+def test_guard_correction_reverts_damage_but_keeps_fixes():
+    # 941 run: head character dropped, and one kana swapped into a worse form.
+    assert corrector.guard_correction("のびのび太だろ", "びのび太だろ") == "のびのび太だろ"
+    assert corrector.guard_correction("勝させてあげよう", "勝らせてあげよう") == "勝させてあげよう"
+    # Padding: the model pasted the next cue's words into a 2-character cue.
+    assert corrector.guard_correction("よし留", "よし、留学先が登録された") == "よし留"
+    assert corrector.guard_correction("インドの", "デリーに決まった") == "インドの"
+    # 「相変わらず単」+「純だねギュミは」: the tail came from the next cue.
+    assert (
+        corrector.guard_correction("相変わらず単", "相変わらず単純だね", ("おっ", "純だねギュミは")) == "相変わらず単"
+    )
+    # Two cues replaced wholesale by neighbouring lines.
+    assert corrector.guard_correction("よーし新しい", "僕を見つけるぞ") == "よーし新しい"
+    assert corrector.guard_correction("ちょっと待ってよ", "一人じゃ無理無理") == "ちょっと待ってよ"
+    # Real fixes survive: punctuation, kana->kanji, added characters.
+    assert corrector.guard_correction("えっ二桁", "えっ、二桁") == "えっ、二桁"
+    assert corrector.guard_correction("きたんでしょ", "来たんでしょ") == "来たんでしょ"
+    assert corrector.guard_correction("ナマステ", "ナマステ！") == "ナマステ！"
+    assert corrector.guard_correction("う", "うん") == "うん"
+    assert corrector.guard_correction("のび", "のび太") == "のび太"
+
+
+def test_correct_japanese_keeps_one_cue_when_model_damages_text(tmp_path):
+    cues = make_cues(3)
+
+    def chat(_settings, system, prompt, temperature=0.2):
+        assert system == corrector.CORRECTION_SYSTEM_PROMPT
+        return "1|行\n2|行\n3| 行"
+
+    messages: list[str] = []
+    pipeline = corrector.SubtitleCorrectionPipeline(
+        TranslateSettings(project_dir=str(tmp_path), batch_size=12),
+        chat_fn=chat,
+        echo=messages.append,
+    )
+    fixed, questions = pipeline.correct_japanese(cues, {"title": "标题", "synopsis": "简介"})
+    assert len(fixed) == 3
+    assert fixed[2].text == "行3"
+    assert questions == []
+
+
+def test_repair_known_misreads_restores_nobita_homophone():
+    # 941 cue 8: ASR wrote 「伸びた」 for 「のび太」.
+    assert corrector.repair_known_misreads("伸びたんだも") == "のび太だも"
+    assert corrector.repair_known_misreads("のびたんだもん") == "のび太だもん"
+    # The real verb keeps its reading.
+    assert corrector.repair_known_misreads("背が伸びたんだもん") == "背が伸びたんだもん"
+    assert corrector.repair_known_misreads("のび太だも") == "のび太だも"
+
+
+def test_correction_splits_batch_when_model_stops_early(tmp_path):
+    cues = make_cues(12)
+    messages: list[str] = []
+    batch_ids: list[int] = []
+
+    def chat(_settings, system, prompt, temperature=0.2):
+        assert system == corrector.CORRECTION_SYSTEM_PROMPT
+        start, end = (int(value) for value in re.search(r"ID (\d+)~(\d+)，必须全部处理", prompt).groups())
+        batch_ids.append(end - start + 1)
+        if end - start + 1 > 6:
+            return f"{start}|あ。"  # model stops after the first sentence, twice
+        return "\n".join(f"{index}|あ。" for index in range(start, end + 1))
+
+    pipeline = corrector.SubtitleCorrectionPipeline(
+        TranslateSettings(project_dir=str(tmp_path), batch_size=12),
+        chat_fn=chat,
+        echo=messages.append,
+    )
+    fixed, questions = pipeline.correct_japanese(cues, {"title": "标题", "synopsis": "简介"})
+    assert [source_id for cue in fixed for source_id in cue.source_ids] == list(range(1, 13))
+    assert questions == []
+    assert batch_ids[:3] == [12, 12, 6]
+    assert any("拆分" in message for message in messages)
+
+
+def test_correct_japanese_repairs_homophone_the_model_left_alone(tmp_path):
+    # 941 cue 8 came back untouched; the dry-run guard used to skip the repair.
+    texts = ["だって", "伸びたんだも", "ん"]
+    cues = [
+        corrector.SourceCue(
+            index, f"00:00:0{index},000", f"00:00:0{index + 1},000", index * 1000, (index + 1) * 1000, text
+        )
+        for index, text in enumerate(texts, 1)
+    ]
+
+    def chat(_settings, system, prompt, temperature=0.2):
+        assert system == corrector.CORRECTION_SYSTEM_PROMPT
+        return "1|だって\n2|伸びたんだも\n3|ん"
+
+    messages: list[str] = []
+    pipeline = corrector.SubtitleCorrectionPipeline(
+        TranslateSettings(project_dir=str(tmp_path), batch_size=12),
+        chat_fn=chat,
+        echo=messages.append,
+    )
+    fixed, _questions = pipeline.correct_japanese(cues, {"title": "标题", "synopsis": "简介"})
+    assert fixed[1].text == "のび太だも"
+    assert any("人名读音修正 1 处" in message for message in messages)
+
+
+def test_enforce_names_rewrites_speaker_swap():
+    # The 941 regression: 「頼んだぞ、のび太」 came back as 「拜托了，胖虎」.
+    assert corrector.enforce_names("頼んだぞ、のび太", "拜托了，胖虎") == "拜托了，大雄"
+    assert corrector.enforce_names("のび太", "胖虎") == "大雄"
+
+
+def test_enforce_names_keeps_output_when_giant_is_named():
+    text = "ジャイアン、のび太を待ってる"
+    assert corrector.enforce_names(text, "胖虎在等大雄") == "胖虎在等大雄"
+    assert corrector.enforce_names(text, "胖虎在等某人") == "胖虎在等某人"
+
+
+def test_enforce_names_ignores_unrelated_cues():
+    assert corrector.enforce_names("ありがとう", "谢谢") == "谢谢"
+    assert corrector.enforce_names("ドラえもん", "哆啦A梦") == "哆啦A梦"
+
+
+def test_translate_chinese_applies_name_guard(tmp_path):
+    fixed = [
+        corrector.FixedCue((index,), "00:00:00,000", "00:00:01,000", text)
+        for index, text in enumerate(["のび太", "ジャイアン", "のび太、大丈夫か"], 1)
+    ]
+
+    def chat(_settings, system, prompt, temperature=0.2):
+        return json.dumps(
+            {
+                "translations": [
+                    {"id": 1, "text": "胖虎"},
+                    {"id": 2, "text": "胖虎"},
+                    {"id": 3, "text": "胖虎，你没事吧"},
+                ]
+            }
+        )
+
+    messages: list[str] = []
+    pipeline = corrector.SubtitleCorrectionPipeline(
+        TranslateSettings(project_dir=str(tmp_path), batch_size=12),
+        chat_fn=chat,
+        echo=messages.append,
+    )
+    translations, _questions = pipeline.translate_chinese(fixed, {"title": "标题", "synopsis": "简介"})
+    assert translations == ["大雄", "胖虎", "大雄，你没事吧"]
+    assert any("人名归一 2 处" in message for message in messages)
+
+
+def test_translation_splits_batch_when_reply_incomplete(tmp_path):
+    fixed = [
+        corrector.FixedCue((index,), f"00:00:{index:02d},000", f"00:00:{index + 1:02d},000", f"あ{index}")
+        for index in range(1, 13)
+    ]
+    messages: list[str] = []
+
+    def chat(_settings, system, prompt, temperature=0.2):
+        assert system == corrector.TRANSLATION_SYSTEM_PROMPT
+        section = prompt.split("【待翻译，共 ", 1)[1]
+        count = int(section.split(" 条】", 1)[0])
+        ids = [int(value) for value in re.findall(r"^(\d+)\. ", section, re.M)]
+        assert len(ids) == count
+        if count > 6:
+            ids = ids[:1]
+        return json.dumps({"translations": [{"id": index, "text": "中文译文。"} for index in ids]})
+
+    pipeline = corrector.SubtitleCorrectionPipeline(
+        TranslateSettings(project_dir=str(tmp_path), batch_size=12),
+        chat_fn=chat,
+        echo=messages.append,
+    )
+    translations, questions = pipeline.translate_chinese(fixed, {"title": "标题", "synopsis": "简介"})
+    assert translations == ["中文译文。"] * 12
+    assert questions == []
+    assert any("拆分" in message for message in messages)

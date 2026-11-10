@@ -32,12 +32,17 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      the last black run (>=0.15s) at least 120s before the next title card.
      Black runs in the roughly two minutes nearest the
      card belong to sponsor/eyecatch transitions, not the story end; cutting
-     there keeps that interstitial junk. For the last story use the last black
-     run 2~3 minutes before the video ends; the trailing black is the tail
-     transition, and ED/preview interstitials after the story are excluded.
-     If no black run is found the original boundary is kept (there is no
-     fallback to a nearer run). END rows in the contact sheet show the last
-     visible frame before the aligned black run (end_XX.jpg too).
+     there keeps that interstitial junk. When that window holds no black run
+     (the two stories are packed back to back and the next card follows the
+     story end within seconds), a fallback window runs up to the card and keeps
+     only runs followed by >=1s of content, which rejects the card's own
+     transition-in black. For the last story use the last black run 2~3 minutes
+     before the video ends; the trailing black is the tail transition, and
+     ED/preview interstitials after the story are excluded. "Black" covers both
+     true black and an off-black FLAT solid (sources that render the gap as
+     uniform dark gray). If no black run is found the original boundary is
+     kept. END rows in the contact sheet show the last visible frame before the
+     aligned black run (end_XX.jpg too).
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -100,6 +105,8 @@ TEXT_DENSITY_MIN = 0.055  # mean interior stroke density of a real text line
 TEXT_CY_MAX = 0.45  # title text sits in the upper part of the card
 TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # ~0.17H; corner logos / mini-corner captions are ~0.08H and must not count
+TEXT_X_GAP_RATIO = 2.5  # max x-gap between consecutive glyphs, in median glyph widths
+TEXT_BASELINE_TOL = 0.55  # max |cy - line baseline| in medians glyph heights
 
 # --- episode end snapping (step 9) -------------------------------------------
 # Non-last stories: the end black run must start at least two minutes before
@@ -108,14 +115,24 @@ TEXT_LINE_H_MIN = 0.12  # median char height of the TITLE line: real titles are
 # guards against mid-story black frames. Sponsor cards / bumpers / the next
 # story's transition-in occupy the roughly two minutes before the card, so
 # black runs in that region must NOT be treated as the previous story's end.
-# There is no fallback to a nearer black run.
+# When that window holds no black run the stories are packed back to back: the
+# story-end black sits only a few seconds before the next card, with just the
+# next story's corner caption in between. The fallback then searches the whole
+# span up to the card but keeps only runs FOLLOWED by at least
+# END_BLACK_FALLBACK_GAP seconds of content — the card's own transition-in black
+# runs straight into the card, so that rule rejects it.
 END_BLACK_BEFORE_CARD_MIN = 120.0
+END_BLACK_FALLBACK_GAP = 1.0
 # Last story: same idea against the video tail — the end black run must sit
 # 2~3 minutes before the video ends. The trailing seconds of black are the
 # transition into the tail; ED/preview interstitials after the story are cut.
 END_BLACK_BEFORE_END_MIN = 120.0
 END_BLACK_BEFORE_END_MAX = 180.0
 END_BLACK_MIN_RUN = 0.15  # ignore sub-0.15s black flickers
+# Some sources render the inter-story gap as a flat dark gray (every pixel
+# identical, mean ~40) instead of true black. That frame marks the story end
+# just as well as pure black does, so a dark FLAT frame counts as black.
+BLACK_SOLID_MEAN = 60.0
 # End preview frame (contact sheet END rows / end_XX.jpg): the literal frame
 # before the black run is often a dark fade-out tail (mean barely above the
 # black threshold), which is uninformative to eyeball. Walk back up to 2s to
@@ -372,12 +389,43 @@ def _mser_char_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     return kept
 
 
-def _baseline_lines(boxes: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, int, int]]]:
-    """Cluster char boxes into baseline-aligned lines (union-find).
+def _cluster_lines(boxes: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, int, int]]]:
+    """Greedy 1-D sweep: assign boxes to x-contiguous, baseline-aligned lines.
 
-    Text line = >=TEXT_LINE_MIN components of similar height whose y-ranges
-    overlap, centers fit one baseline, and x-gaps stay small. Background junk
-    (foliage, character art) is random in size/position and fails this.
+    A box joins an open line when it starts within TEXT_X_GAP_RATIO medians
+    glyph widths of that line's right edge AND its vertical center sits within
+    TEXT_BASELINE_TOL median glyph heights of that line's baseline; otherwise
+    it opens a new line. Closest baseline wins.
+    """
+    lines: list[list[tuple[int, int, int, int]]] = []
+    for b in sorted(boxes, key=lambda b: b[0]):
+        x, y, w, h = b
+        cy = y + h / 2
+        best, best_dy = -1, 0.0
+        for i, line in enumerate(lines):
+            mh = float(np.median([q[3] for q in line]))
+            mw = float(np.median([q[2] for q in line]))
+            right = max(q[0] + q[2] for q in line)
+            base = float(np.median([q[1] + q[3] / 2 for q in line]))
+            if x - right > TEXT_X_GAP_RATIO * mw or abs(cy - base) > TEXT_BASELINE_TOL * mh:
+                continue
+            if best < 0 or abs(cy - base) < best_dy:
+                best, best_dy = i, abs(cy - base)
+        if best < 0:
+            lines.append([b])
+        else:
+            lines[best].append(b)
+    return lines
+
+
+def _baseline_lines(boxes: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int, int, int]]]:
+    """Cluster char boxes into baseline-aligned lines (union-find + sweep).
+
+    The union-find pass only pre-buckets boxes by compatible height and
+    vertical overlap; it is transitive, so a title's glyphs can chain into
+    background art of a similar glyph height. Measuring baseline spread on
+    that bucketed group therefore says nothing about the title — each bucket
+    is swept into real lines first, and only those lines are validated.
     """
     n = len(boxes)
     parent = list(range(n))
@@ -406,21 +454,13 @@ def _baseline_lines(boxes: list[tuple[int, int, int, int]]) -> list[list[tuple[i
     for g in groups.values():
         if len(g) < TEXT_LINE_MIN:
             continue
-        g.sort(key=lambda b: b[0])
-        med_h = float(np.median([b[3] for b in g]))
-        med_w = float(np.median([b[2] for b in g]))
-        if np.array([b[1] + b[3] / 2 for b in g]).std() > 0.55 * med_h:
-            continue
-        seg = [g[0]]
-        for prev, b in zip(g, g[1:]):
-            if b[0] - (prev[0] + prev[2]) > 2.5 * med_w:
-                if len(seg) >= TEXT_LINE_MIN:
-                    lines.append(seg)
-                seg = [b]
-            else:
-                seg.append(b)
-        if len(seg) >= TEXT_LINE_MIN:
-            lines.append(seg)
+        for line in _cluster_lines(g):
+            if len(line) < TEXT_LINE_MIN:
+                continue
+            med_h = float(np.median([b[3] for b in line]))
+            if np.array([b[1] + b[3] / 2 for b in line]).std() > 0.55 * med_h:
+                continue
+            lines.append(sorted(line, key=lambda b: b[0]))
     return lines
 
 
@@ -457,17 +497,29 @@ def has_title_text(frame: np.ndarray) -> bool:
     return False
 
 
-def find_black_run_end(cap: cv2.VideoCapture, fps: float, t0: float, t1: float) -> int | None:
+def _is_black_frame(sig: np.ndarray) -> bool:
+    """True for true black AND for an off-black flat solid (see BLACK_SOLID_MEAN)."""
+    return float(sig.mean()) < BLACK_MEAN or (float(sig.std()) < SOLID_STD and float(sig.mean()) < BLACK_SOLID_MEAN)
+
+
+def find_black_run_end(cap: cv2.VideoCapture, fps: float, t0: float, t1: float, gap_after: float = 0.0) -> int | None:
     """Frame index of the LAST black run's first frame (>=END_BLACK_MIN_RUN)
     in the window [t0, t1].
 
     A story's true content ends where the black gap before the interstitial
     (or the video's trailing black) begins; the run start is the cut point,
     so the black itself is excluded.
+
+    ``gap_after`` > 0 additionally requires at least that many seconds between
+    the run's END and the window end, i.e. real content must follow the run.
+    The card's own transition-in black runs right into the window end (the
+    card), so the packed-stories fallback ignores it with this rule.
     """
     f1 = int(t1 * fps)
     f0 = max(0, int(t0 * fps))
     cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
+    min_run_f = max(1, int(END_BLACK_MIN_RUN * fps))
+    gap_f = int(gap_after * fps)
     last_start: int | None = None
     run_start: int | None = None
     f = f0
@@ -476,17 +528,22 @@ def find_black_run_end(cap: cv2.VideoCapture, fps: float, t0: float, t1: float) 
         if not ok:
             break
         sig = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), SIG_SIZE, interpolation=cv2.INTER_AREA)
-        if float(sig.mean()) < BLACK_MEAN:
+        if _is_black_frame(sig):
             if run_start is None:
                 run_start = f
-        else:
-            if run_start is not None and (f - run_start) / fps >= END_BLACK_MIN_RUN:
+        elif run_start is not None:
+            if f - run_start >= min_run_f and _has_content_after(f, f1, gap_f):
                 last_start = run_start
             run_start = None
         f += 1
-    if run_start is not None and (f - run_start) / fps >= END_BLACK_MIN_RUN:
+    if run_start is not None and f - run_start >= min_run_f and _has_content_after(f, f1, gap_f):
         last_start = run_start
     return last_start
+
+
+def _has_content_after(run_end: int, window_end: int, gap_f: int) -> bool:
+    """True when at least ``gap_f`` frames follow ``run_end`` inside the window."""
+    return gap_f == 0 or window_end - run_end >= gap_f
 
 
 def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
@@ -499,9 +556,17 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
             if i < len(episodes) - 1:
                 t0 = ep["start"] + STORY_MIN_MINUTES * 60.0
                 t1 = ep["end"] - END_BLACK_BEFORE_CARD_MIN
+                black_f = find_black_run_end(cap, fps, t0, t1)
+                if black_f is None:
+                    # packed stories: nothing in the guarded window, so the end
+                    # black sits right before the card. Take the last run that
+                    # is followed by real content (skips the card transition-in).
+                    black_f = find_black_run_end(cap, fps, t0, ep["end"], gap_after=END_BLACK_FALLBACK_GAP)
+                    if black_f is not None:
+                        print(f"  {ep['name']} 结尾黑帧位于下一张标题卡的紧前方，已改用后备窗口对齐")
             else:
                 t0, t1 = ep["end"] - END_BLACK_BEFORE_END_MAX, ep["end"] - END_BLACK_BEFORE_END_MIN
-            black_f = find_black_run_end(cap, fps, t0, t1)
+                black_f = find_black_run_end(cap, fps, t0, t1)
             if black_f is None:
                 print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
                 continue

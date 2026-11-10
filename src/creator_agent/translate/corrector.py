@@ -23,21 +23,57 @@ _SRT_TIME = re.compile(
 )
 _KANA = re.compile(r"[ぁ-ゖァ-ヺー]")
 
+# The correction stage asks the local 9B model for one plain line per subtitle
+# instead of a nested JSON object: with the JSON schema it kept closing the
+# object after the first sentence (or folding the whole batch into one group),
+# while the line protocol covers a full 30-cue batch reliably.
+#
+# It is strictly one line per source cue: the human re-splits the episode by
+# hand in JianYing, so any merge the model makes costs them manual work and
+# changes the timeline they rely on.
+_ID_RANGE = r"(\d+)(?:\s*[~〜\-–—,]\s*(\d+))?"
+_CORRECTION_LINE = re.compile(rf"^{_ID_RANGE}\s*[|｜]\s*(.+)$")
+_CORRECTION_QUESTION = re.compile(rf"^[?？]\s*{_ID_RANGE}\s*[|｜]\s*(.+)$")
+
+# A batch the model failed twice is split in half and retried instead of
+# failing the whole episode; below this size (or this recursion depth) a
+# failure is real and the file stops.
+_MIN_SPLIT_CUES = 6
+_MAX_SPLIT_DEPTH = 3
+
+# The model routinely stops one or two cues short of a batch end, and splitting
+# cannot fix that (a 4-cue batch failed the same way). The missing cues are
+# simply kept as raw ASR, which is the honest result of "no confident fix".
+_MAX_TAIL_FILL = 2
+
+# The local model sometimes reads a name in the Japanese line as the *speaker*
+# and renders it with that speaker's Chinese name (941: 「頼んだぞ、のび太」 came
+# back as 「拜托了，胖虎」). See enforce_names below.
+_NOBITA = "のび太"
+_NOBITA_ZH = "大雄"
+_OTHER_SPEAKERS = ("ジャイアン", "ギュミ")
+
 CORRECTION_SYSTEM_PROMPT = """你是《哆啦A梦》日语字幕审校员。输入来自剪映日语 ASR，没有音频可听。
 
-任务：纠正高置信度 ASR 误识，并按完整日语句子重新组合字幕。
+任务：逐条纠正高置信度 ASR 误识，并修正日语的断句和标点。条数和时间轴由程序决定，不得更改。
 规则：
 1. 忠实保留原始措辞、语序和口语；不得根据剧情简介脑补原字幕没有的台词。
 2. 简介只用于确认人物、地点、道具、剧情背景；与 ASR 冲突时以 ASR 为准。
 3. 只修正上下文能唯一确定的音近误识、人物名和专名；有多个合理候选时保留原文并记录疑问。
-4. 可合并相邻原始条目；不要跨说话人、场景或独立句。语气词按语义决定是否合并。
-5. source_ids 必须连续，且每个输入 ID 恰好使用一次；不得创造或丢失 ID。
-6. 不输出时间轴。只输出 JSON，不要 Markdown 代码块或解释。
+   人名按读音判断：ASR 会把「のび太」写成读音相同的汉字词，例如「伸びたんだも」其实是
+   「のび太だも」、「チェイア」其实是「ジャイアン」。上下文明确是人名时按人名改正。
+4. 禁止合并、禁止拆分：一条原始条目只对应一条修正结果，不许并到相邻条目，也不许拆成两条。
+   一个句子被剪映切在相邻两条时，各自只修好自己那半句（前半句用「、」或「…」收尾，
+   不硬加句末标点），两条连起来读通顺即可。本条是残句就保持残句，不得把下一条的
+   词句补进本条，也不得凭剧情把本条补成完整句。
+5. 必须覆盖给定的每一个 ID，每个 ID 恰好出现一次；不得创造、丢失或重复 ID；
+   不得只输出开头的几句就结束。
+6. 标点用日文全角：句末「。」「！」「？」，句内停顿「、」。
+7. 不输出时间轴，不输出解释，不要 Markdown 代码块。
 
-输出格式：
-{"groups":[{"source_ids":[1,2],"text":"修正后的完整日语"}],
- "questions":[{"source_ids":[3],"reason":"确实无法唯一判断的原因"}]}
-没有真正疑问时 questions 必须是空数组。"""
+输出格式：一条原始条目一行，`ID|修正后的日语`，不接受区间写法（不得写 `12-14|…`）。
+真正的疑问单独一行，`?ID|无法唯一判断的原因`。
+除这些行以外不要输出任何内容。"""
 
 TRANSLATION_SYSTEM_PROMPT = """你是《哆啦A梦》专业日中字幕翻译。
 
@@ -47,7 +83,9 @@ TRANSLATION_SYSTEM_PROMPT = """你是《哆啦A梦》专业日中字幕翻译。
 2. 人名统一：ドラえもん→哆啦A梦、のび太→大雄、しずか→静香、ジャイアン→胖虎、スネ夫→小夫。
 3. 人物、地点、道具和固定梗在整集中保持一致；简介只作为背景，不得覆盖字幕。
 4. 每个输入 ID 恰好输出一次，不能合并或拆分；译文不得残留日文假名。
-5. 只输出 JSON，不要 Markdown 代码块或解释。
+5. 原文被剪映切得很碎，一条常常只是半句：每条只译自己这一条，不补上一句的内容，
+   但用词要让相邻两条连读成一句通顺的口语（不要把整句意思重复写进每条）。
+6. 只输出 JSON，不要 Markdown 代码块或解释。
 
 输出格式：
 {"translations":[{"id":1,"text":"中文译文"}],
@@ -177,6 +215,105 @@ def _cue_lines(cues: list[SourceCue], start: int, end: int) -> str:
     return "\n".join(f"{cue.source_id}. {' '.join(cue.text.split())}" for cue in cues[start:end])
 
 
+def _plain_lines(cues: list[SourceCue], start: int, end: int) -> str:
+    """Context text without IDs, so the model cannot mirror them into its output."""
+    return "\n".join(" ".join(cue.text.split()) for cue in cues[start:end])
+
+
+def enforce_names(jp_text: str, zh_text: str) -> str:
+    """Rewrite a name the model swapped for the speaker's Chinese name.
+
+    In 941 the local model rendered 「頼んだぞ、のび太」 as 「拜托了，胖虎」 (five
+    cues) because it attributed the line to Giant. Once the Japanese cue names
+    のび太 and no other character, no other rendering is possible, so the wrong
+    name is replaced instead of trusting the prompt again.
+    """
+    if _NOBITA in jp_text and _NOBITA_ZH not in zh_text and "胖虎" in zh_text:
+        if not any(name in jp_text for name in _OTHER_SPEAKERS):
+            return zh_text.replace("胖虎", _NOBITA_ZH)
+    return zh_text
+
+
+_GUARD_STRIP = re.compile(r"[\s、。！？…「」『』【】・,.\-—～~!?\"'()（）:;]")
+
+# 941 cue 8: ASR heard 「のび太」 as the homophone 「伸びた」. Only the sentence
+# pattern 「伸びた(ん)だも(ん)」 is rewritten, so the real verb 「背が伸びた」
+# stays untouched.
+_NOMINAL_MISREAD = re.compile(r"^(伸びた|延びた|のびた|ノビタ)(ん)?(だもん?|だろ|だね|だよ|だ|じゃ)")
+_NOMINAL_CONTEXT = ("背", "身長", "髪", "丈", "成績")
+
+# A cue may gain a little (a dropped kana, a kana written as kanji) but never
+# a whole clause: that is the model importing the neighbouring line's words.
+_MAX_CUE_GROWTH = 3
+
+# Below this, the "fix" shares too few characters with the raw cue to be the
+# same sentence at all (941: 「よーし新しい」 came back as 「僕を見つけるぞ」).
+_MIN_CUE_OVERLAP = 0.4
+
+
+def _visible_len(text: str) -> int:
+    return len(_GUARD_STRIP.sub("", text))
+
+
+def _bare(text: str) -> str:
+    return _GUARD_STRIP.sub("", text)
+
+
+def guard_correction(raw: str, fixed: str, neighbours: tuple[str, ...] = ()) -> str:
+    """Keep the raw cue when the "correction" is damage or padding.
+
+    Three shapes showed up in the 941 runs and none is an ASR correction:
+    dropping characters (「のびのび太だろ」→「びのび太だろ」), swapping one
+    kana for another (「勝させてあげよう」→「勝らせてあげよう」, less correct
+    than the raw) and pasting the next cue's words in (「よし留」→
+    「よし、留学先が登録された」, a merge in disguise). Punctuation, kana→kanji
+    and a couple of added characters still pass, so real fixes survive.
+    """
+    if fixed == raw:
+        return fixed
+    if _visible_len(fixed) < _visible_len(raw):
+        return raw
+    if _visible_len(fixed) > _visible_len(raw) + _MAX_CUE_GROWTH:
+        return raw
+    # 「相変わらず単」→「相変わらず単純だね」: the two added characters are the
+    # next cue's opening 「純だねギュミは」, i.e. a merge the growth cap let
+    # through. Only a tail of 2+ characters is checked, so a 1-character fix
+    # like 「のび」→「のび太」 still passes.
+    if fixed.startswith(raw):
+        tail = _bare(fixed[len(raw) :])
+        if len(tail) >= 2 and any(_bare(other).startswith(tail) for other in neighbours):
+            return raw
+    if fixed.endswith(raw):
+        head = _bare(fixed[: len(fixed) - len(raw)])
+        if len(head) >= 2 and any(_bare(other).endswith(head) for other in neighbours):
+            return raw
+    raw_chars = set(_bare(raw))
+    if raw_chars and len(raw_chars & set(_bare(fixed))) / len(raw_chars) < _MIN_CUE_OVERLAP:
+        return raw
+    a = [char for char in raw if not char.isspace()]
+    b = [char for char in fixed if not char.isspace()]
+    if len(a) == len(b):
+        diffs = [index for index, (left, right) in enumerate(zip(a, b)) if left != right]
+        if len(diffs) == 1 and _KANA.match(a[diffs[0]]) and _KANA.match(b[diffs[0]]):
+            return raw
+    return fixed
+
+
+def repair_known_misreads(text: str) -> str:
+    """Fix homophone names the model leaves alone.
+
+    In 941 the model kept 「伸びたんだも」 because it reads as a plausible verb
+    phrase; only a deterministic rewrite gets it back to 「のび太だも」.
+    """
+    if any(word in text for word in _NOMINAL_CONTEXT):
+        return text
+    match = _NOMINAL_MISREAD.match(text)
+    if not match:
+        return text
+    tail = match.group(3)
+    return _NOBITA + tail + text[match.end() :]
+
+
 def _context_section(context: dict[str, str]) -> str:
     sections = [
         f"【剧情背景，仅供理解专名和上下文，严禁从中补写台词】\n日文标题：{context['title']}\n日文简介：{context['synopsis']}"
@@ -193,22 +330,24 @@ def build_correction_prompt(
     cues: list[SourceCue],
     cursor: int,
     target_end: int,
-    window_end: int,
     context_cues: int,
     episode_context: dict[str, str],
 ) -> str:
     sections = [_context_section(episode_context)]
     context_start = max(0, cursor - context_cues)
     if context_start < cursor:
-        sections.append("【只读上文，严禁再次输出】\n" + _cue_lines(cues, context_start, cursor))
+        # No IDs here: when the read-only cues were numbered, the model started
+        # its answer from the context's first ID instead of the batch start.
+        sections.append("【前文，仅供理解，没有 ID，禁止输出】\n" + _plain_lines(cues, context_start, cursor))
     sections.append(
-        "【本批必须处理】\n"
+        f"【待处理】共 {target_end - cursor} 条，ID {cursor + 1}~{target_end}，必须全部处理，不得提前结束\n"
         + _cue_lines(cues, cursor, target_end)
-        + "\n\n必须完整覆盖以上 ID；若最后一句延续到下方，可继续合并必要的后续 ID。"
+        + "\n\n每条只修自己这一句，不合并、不拆分，行数必须等于条目数。"
     )
-    if target_end < window_end:
-        sections.append("【可选后续，仅在完成上一句确有必要时使用】\n" + _cue_lines(cues, target_end, window_end))
-    sections.append("现在只输出规定的 JSON 对象：")
+    sections.append(
+        f"现在逐行输出，第一行必须是最小 ID {cursor + 1}，最后一行必须是 ID {target_end}，"
+        "一条原始条目一行，写作 `ID|修正后的日语`："
+    )
     return "\n\n".join(sections)
 
 
@@ -221,49 +360,83 @@ def _parse_ids(value: Any, label: str) -> tuple[int, ...]:
     return ids
 
 
-def parse_correction_reply(
+def _reply_lines(reply: str) -> list[str]:
+    text = reply.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[^\n]*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return [line.strip() for line in text.splitlines()]
+
+
+def _line_range(match: re.Match[str]) -> tuple[int, int]:
+    first = int(match.group(1))
+    last = int(match.group(2)) if match.group(2) else first
+    if last < first:
+        raise SubtitleCorrectionError(f"ID 区间反向：{first}-{last}")
+    return first, last
+
+
+def parse_correction_lines(
     reply: str,
     cues: list[SourceCue],
     cursor: int,
     target_end: int,
-    window_end: int,
 ) -> tuple[list[FixedCue], list[ReviewQuestion], int]:
-    data = _json_object(reply)
-    groups = data.get("groups")
-    if not isinstance(groups, list) or not groups:
-        raise SubtitleCorrectionError("模型 groups 必须是非空数组")
-    expected = cursor + 1
+    """Parse `ID|text` lines and verify one line per source cue, in order.
+
+    Ranges are rejected: merging cues would silently change the JianYing
+    timeline the human re-splits by hand.
+    """
     fixed: list[FixedCue] = []
-    for group in groups:
-        if not isinstance(group, dict):
-            raise SubtitleCorrectionError("groups 中存在非对象条目")
-        ids = _parse_ids(group.get("source_ids"), "source_ids")
-        text = group.get("text")
-        if ids[0] != expected:
-            raise SubtitleCorrectionError(f"source_ids 未连续覆盖，期待 {expected}，得到 {ids[0]}")
-        if ids[-1] > window_end:
-            raise SubtitleCorrectionError(f"模型使用了窗口外 ID：{ids[-1]}")
-        if not isinstance(text, str) or not text.strip():
-            raise SubtitleCorrectionError(f"ID {list(ids)} 的修正文为空")
-        first, last = cues[ids[0] - 1], cues[ids[-1] - 1]
-        fixed.append(FixedCue(ids, first.start, last.end, " ".join(text.split())))
-        expected = ids[-1] + 1
+    pending_questions: list[tuple[tuple[int, ...], str]] = []
+    expected = cursor + 1
+    for line in _reply_lines(reply):
+        if not line:
+            continue
+        question = _CORRECTION_QUESTION.match(line)
+        if question:
+            first, last = _line_range(question)
+            if first <= cursor:
+                continue  # doubt about read-only context: advisory only
+            pending_questions.append((tuple(range(first, last + 1)), question.group(3).strip()))
+            continue
+        match = _CORRECTION_LINE.match(line)
+        if not match:
+            raise SubtitleCorrectionError(f"模型输出了无法解析的行：{line[:60]}")
+        first, last = _line_range(match)
+        if first != expected:
+            raise SubtitleCorrectionError(f"ID 未连续覆盖，期待 {expected}，得到 {first}")
+        if last != first:
+            raise SubtitleCorrectionError(f"模型合并了 {first}-{last}，本流程禁止合并，一条只能对一条")
+        if last > target_end:
+            raise SubtitleCorrectionError(f"模型使用了本批之外的 ID：{last}")
+        text = match.group(3)
+        if not text.strip():
+            raise SubtitleCorrectionError(f"ID {first} 的修正文为空")
+        fixed.append(FixedCue((first,), cues[first - 1].start, cues[first - 1].end, " ".join(text.split())))
+        expected = last + 1
+
     consumed = expected - 1
+    if not fixed:
+        raise SubtitleCorrectionError("模型没有输出任何修正行")
     if consumed < target_end:
-        raise SubtitleCorrectionError(f"模型只处理到 {consumed}，本批至少应处理到 {target_end}")
+        if target_end - consumed > _MAX_TAIL_FILL:
+            raise SubtitleCorrectionError(f"模型只处理到 {consumed}，本批至少应处理到 {target_end}")
+        # Keep the tail as raw ASR instead of failing the batch: the human
+        # re-splits by the original timeline anyway, and an unedited cue is
+        # still a correct cue.
+        for cue_id in range(consumed + 1, target_end + 1):
+            source = cues[cue_id - 1]
+            fixed.append(FixedCue((cue_id,), source.start, source.end, source.text))
+        consumed = target_end
 
     questions: list[ReviewQuestion] = []
-    raw_questions = data.get("questions", [])
-    if not isinstance(raw_questions, list):
-        raise SubtitleCorrectionError("questions 必须是数组")
-    for item in raw_questions:
-        if not isinstance(item, dict):
-            raise SubtitleCorrectionError("questions 中存在非对象条目")
-        ids = _parse_ids(item.get("source_ids"), "question.source_ids")
-        reason = item.get("reason")
-        if ids[0] <= cursor or ids[-1] > consumed or not isinstance(reason, str) or not reason.strip():
-            raise SubtitleCorrectionError("疑问条目的 ID 或原因无效")
-        questions.append(ReviewQuestion("日文矫正", ids, reason.strip()))
+    for ids, reason in pending_questions:
+        # Advisory only: a doubt line that reaches past this batch (or has no
+        # reason) is dropped rather than failing subtitle content that is fine.
+        if not reason or ids[-1] > consumed:
+            continue
+        questions.append(ReviewQuestion("日文矫正", ids, reason))
     return fixed, questions, consumed
 
 
@@ -280,8 +453,8 @@ def build_translation_prompt(
     context_start = max(0, start - context_cues)
     if context_start < start:
         sections.append(
-            "【只读上文，严禁翻译或输出】\n"
-            + "\n".join(f"{i + 1}. {cues[i].text}" for i in range(context_start, start))
+            "【前文，仅供理解，没有 ID，禁止输出】\n"
+            + "\n".join(" ".join(cues[i].text.split()) for i in range(context_start, start))
         )
     sections.append(
         f"【待翻译，共 {end - start} 条】\n" + "\n".join(f"{i + 1}. {cues[i].text}" for i in range(start, end))
@@ -296,10 +469,15 @@ def parse_translation_reply(reply: str, start: int, end: int) -> tuple[list[str]
     if not isinstance(rows, list):
         raise SubtitleCorrectionError("模型 translations 必须是数组")
     found: dict[int, str] = {}
+    expected = set(range(start + 1, end + 1))
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("id"), int):
             raise SubtitleCorrectionError("translation 条目格式无效")
         cue_id, text = row["id"], row.get("text")
+        if cue_id not in expected:
+            # The model sometimes runs past the batch and translates the next
+            # batch's opening cues; those lines are simply not ours to keep.
+            continue
         if cue_id in found:
             raise SubtitleCorrectionError(f"翻译 ID {cue_id} 重复")
         if not isinstance(text, str) or not text.strip():
@@ -308,11 +486,8 @@ def parse_translation_reply(reply: str, start: int, end: int) -> tuple[list[str]
         if _KANA.search(clean):
             raise SubtitleCorrectionError(f"翻译 ID {cue_id} 仍含日文假名")
         found[cue_id] = clean
-    expected = set(range(start + 1, end + 1))
     if set(found) != expected:
-        raise SubtitleCorrectionError(
-            f"翻译 ID 不完整，缺少 {sorted(expected - set(found))}，多出 {sorted(set(found) - expected)}"
-        )
+        raise SubtitleCorrectionError(f"翻译 ID 不完整，缺少 {sorted(expected - set(found))}")
 
     questions: list[ReviewQuestion] = []
     raw_questions = data.get("questions", [])
@@ -323,8 +498,10 @@ def parse_translation_reply(reply: str, start: int, end: int) -> tuple[list[str]
             raise SubtitleCorrectionError("questions 中存在非对象条目")
         ids = _parse_ids(item.get("ids"), "question.ids")
         reason = item.get("reason")
-        if ids[0] <= start or ids[-1] > end or not isinstance(reason, str) or not reason.strip():
-            raise SubtitleCorrectionError("翻译疑问条目的 ID 或原因无效")
+        if ids[0] <= start or ids[-1] > end:
+            continue  # doubt about a neighbouring batch: advisory only
+        if not isinstance(reason, str) or not reason.strip():
+            continue
         questions.append(ReviewQuestion("中文翻译", ids, reason.strip()))
     return [found[i] for i in range(start + 1, end + 1)], questions
 
@@ -341,7 +518,7 @@ class SubtitleCorrectionPipeline:
         self._echo = echo
         self._memory = MemoryStore.load(settings.project_dir)
 
-    def _request_json(self, system: str, prompt: str, parser: Callable[[str], Any]) -> Any:
+    def _request_checked(self, system: str, prompt: str, parser: Callable[[str], Any]) -> Any:
         last_error: Exception | None = None
         retry_prompt = prompt
         for temperature in (0.1, 0.0):
@@ -351,9 +528,46 @@ class SubtitleCorrectionPipeline:
             except (SubtitleCorrectionError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 last_error = exc
                 retry_prompt = (
-                    prompt + "\n\n上次输出未通过程序校验：" + str(exc) + "。请重新输出完整且严格合法的 JSON。"
+                    prompt
+                    + "\n\n上次输出未通过程序校验："
+                    + str(exc)
+                    + "。请严格按要求重新输出完整结果，覆盖全部给定 ID。"
                 )
         raise SubtitleCorrectionError(f"本地模型连续两次输出无效：{last_error}")
+
+    def _correct_block(
+        self,
+        cues: list[SourceCue],
+        cursor: int,
+        target_end: int,
+        episode_context: dict[str, str],
+        depth: int,
+    ) -> tuple[list[FixedCue], list[ReviewQuestion], int]:
+        self._echo(f"[矫正] 原始字幕 {cursor + 1}~{target_end}/{len(cues)}")
+        prompt = build_correction_prompt(
+            cues,
+            cursor,
+            target_end,
+            self.settings.context_cues,
+            episode_context,
+        )
+        try:
+            return self._request_checked(
+                CORRECTION_SYSTEM_PROMPT,
+                prompt,
+                lambda reply: parse_correction_lines(reply, cues, cursor, target_end),
+            )
+        except SubtitleCorrectionError as exc:
+            span = target_end - cursor
+            if span <= _MIN_SPLIT_CUES or depth >= _MAX_SPLIT_DEPTH:
+                raise
+            middle = cursor + span // 2
+            self._echo(f"[拆分] {cursor + 1}~{target_end} 两次无效（{exc}），改为 {cursor + 1}~{middle} 与后续分段")
+            left_fixed, left_questions, left_end = self._correct_block(cues, cursor, middle, episode_context, depth + 1)
+            right_fixed, right_questions, right_end = self._correct_block(
+                cues, left_end, target_end, episode_context, depth + 1
+            )
+            return left_fixed + right_fixed, left_questions + right_questions, right_end
 
     def correct_japanese(
         self, cues: list[SourceCue], episode_context: dict[str, str]
@@ -362,32 +576,68 @@ class SubtitleCorrectionPipeline:
         questions: list[ReviewQuestion] = []
         cursor = 0
         batch_size = max(5, min(self.settings.batch_size, 30))
-        lookahead = max(3, min(self.settings.context_cues, 8))
         while cursor < len(cues):
             target_end = min(cursor + batch_size, len(cues))
-            window_end = min(target_end + lookahead, len(cues))
-            self._echo(f"[矫正] 原始字幕 {cursor + 1}~{target_end}/{len(cues)}")
-            prompt = build_correction_prompt(
-                cues,
-                cursor,
-                target_end,
-                window_end,
-                self.settings.context_cues,
-                episode_context,
-            )
-            parsed = self._request_json(
-                CORRECTION_SYSTEM_PROMPT,
-                prompt,
-                lambda reply: parse_correction_reply(reply, cues, cursor, target_end, window_end),
-            )
-            batch_fixed, batch_questions, consumed = parsed
+            batch_fixed, batch_questions, consumed = self._correct_block(cues, cursor, target_end, episode_context, 0)
             fixed.extend(batch_fixed)
             questions.extend(batch_questions)
             cursor = consumed
         covered = [source_id for cue in fixed for source_id in cue.source_ids]
         if covered != list(range(1, len(cues) + 1)):
             raise SubtitleCorrectionError("日文修正结果没有逐条覆盖完整原始轨道")
+        if len(fixed) != len(cues):
+            raise SubtitleCorrectionError(f"日文修正结果条数 {len(fixed)} 不等于原始条数 {len(cues)}（不允许合并）")
+        guarded = 0
+        repaired = 0
+        for index, (cue, target) in enumerate(zip(cues, fixed, strict=True)):
+            neighbours = tuple(cues[other].text for other in (index - 1, index + 1) if 0 <= other < len(cues))
+            kept = guard_correction(cue.text, target.text, neighbours)
+            # Runs on the guarded text, so a cue the model left untouched but
+            # ASR wrote as a homophone is still repaired (941 cue 8).
+            named = repair_known_misreads(kept)
+            if kept != target.text:
+                guarded += 1
+            if named != kept:
+                repaired += 1
+            if named != target.text:
+                fixed[index] = FixedCue(target.source_ids, target.start, target.end, named)
+        if guarded:
+            self._echo(f"[校验] 回退误改 {guarded} 处（模型减字、补写邻句或单假名替换，不属于 ASR 修正）")
+        if repaired:
+            self._echo(f"[校验] 人名读音修正 {repaired} 处（如同音汉字被写成「伸びた」）")
         return fixed, questions
+
+    def _translate_block(
+        self,
+        cues: list[FixedCue],
+        start: int,
+        end: int,
+        episode_context: dict[str, str],
+        depth: int,
+    ) -> tuple[list[str], list[ReviewQuestion]]:
+        self._echo(f"[翻译] 修正字幕 {start + 1}~{end}/{len(cues)}")
+        batch_text = " ".join(cue.text for cue in cues[start:end])
+        memory_note = (
+            self._memory.prompt_section(batch_text, max_cases=self.settings.memory_cases)
+            if self._memory is not None
+            else ""
+        )
+        prompt = build_translation_prompt(cues, start, end, self.settings.context_cues, episode_context, memory_note)
+        try:
+            return self._request_checked(
+                TRANSLATION_SYSTEM_PROMPT,
+                prompt,
+                lambda reply: parse_translation_reply(reply, start, end),
+            )
+        except SubtitleCorrectionError as exc:
+            span = end - start
+            if span <= _MIN_SPLIT_CUES or depth >= _MAX_SPLIT_DEPTH:
+                raise
+            middle = start + span // 2
+            self._echo(f"[拆分] 翻译 {start + 1}~{end} 两次无效（{exc}），改为 {start + 1}~{middle} 与后续分段")
+            left_texts, left_questions = self._translate_block(cues, start, middle, episode_context, depth + 1)
+            right_texts, right_questions = self._translate_block(cues, middle, end, episode_context, depth + 1)
+            return left_texts + right_texts, left_questions + right_questions
 
     def translate_chinese(
         self, cues: list[FixedCue], episode_context: dict[str, str]
@@ -397,23 +647,17 @@ class SubtitleCorrectionPipeline:
         batch_size = max(5, min(self.settings.batch_size, 30))
         for start in range(0, len(cues), batch_size):
             end = min(start + batch_size, len(cues))
-            self._echo(f"[翻译] 修正字幕 {start + 1}~{end}/{len(cues)}")
-            batch_text = " ".join(cue.text for cue in cues[start:end])
-            memory_note = (
-                self._memory.prompt_section(batch_text, max_cases=self.settings.memory_cases)
-                if self._memory is not None
-                else ""
-            )
-            prompt = build_translation_prompt(
-                cues, start, end, self.settings.context_cues, episode_context, memory_note
-            )
-            batch_zh, batch_questions = self._request_json(
-                TRANSLATION_SYSTEM_PROMPT,
-                prompt,
-                lambda reply: parse_translation_reply(reply, start, end),
-            )
+            batch_zh, batch_questions = self._translate_block(cues, start, end, episode_context, 0)
             translations.extend(batch_zh)
             questions.extend(batch_questions)
+        guard_hits = 0
+        for index, cue in enumerate(cues):
+            cleaned = enforce_names(cue.text, translations[index])
+            if cleaned != translations[index]:
+                translations[index] = cleaned
+                guard_hits += 1
+        if guard_hits:
+            self._echo(f"[校验] 人名归一 {guard_hits} 处（原文のび太，模型误用说话人的名字）")
         if len(translations) != len(cues):
             raise SubtitleCorrectionError("中文字幕数量与修正日文字幕不一致")
         return translations, questions
