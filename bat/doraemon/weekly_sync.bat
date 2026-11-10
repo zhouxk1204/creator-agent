@@ -10,7 +10,7 @@ REM    1. download_tver.py           latest episode from TVer
 REM    2. fetch_doraemon.py --auto   episode info for every newly
 REM                                  aired episode (catches up
 REM                                  missed weeks), numbers land in
-REM                                  storage\doraemon\.last_auto_fetched
+REM                                  logs\.last_auto_fetched
 REM    3. translate_doraemon.py      per fetched episode (starts
 REM                                  the llama.cpp server if down,
 REM                                  stops it again if WE started it)
@@ -25,7 +25,7 @@ if errorlevel 1 exit /b 1
 
 if not exist "%REPO_ROOT%\logs" mkdir "%REPO_ROOT%\logs"
 set "LOG=%REPO_ROOT%\logs\weekly_doraemon.log"
-set "STATE=%REPO_ROOT%\storage\doraemon\.last_auto_fetched"
+set "STATE=%REPO_ROOT%\logs\.last_auto_fetched"
 set "RC=0"
 set "STARTED_SERVER=0"
 

@@ -22,7 +22,7 @@ if not "%RC%"=="0" goto :done
 
 rem When --latest resolved the number for us, read it back from the state
 rem file so the translation step runs on the fetched episode.
-if "%ep%"=="--latest" set /p ep=<"%REPO_ROOT%\storage\doraemon\.last_fetched"
+if "%ep%"=="--latest" set /p ep=<"%REPO_ROOT%\logs\.last_fetched"
 
 rem ---------------------------------------------------------------------------
 rem Step 2: translate the per-story notes ({ep}_{i}.md -> {ep}_{i}_zh.md).

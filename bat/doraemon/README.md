@@ -41,7 +41,7 @@ schtasks /Query /TN DoraemonWeeklySync /V /FO LIST
 ## 它每周做了什么（weekly_sync.bat）
 
 1. `scripts\download_tver.py` — 从 TVer 下载最新一集到桌面生肉目录（已下载的文件 yt-dlp 自动跳过，重复跑无害）
-2. `scripts\fetch_doraemon.py --auto` — 从本地最大集数 +1 开始，抓取**已播出**新集的简介/封面（tv-asahi 会提前放出未播出集的页面，所以按页面上的放送日门控；漏跑的周会自动补抓，上限 8 集），抓到的集数写入 `storage\doraemon\.last_auto_fetched`
+2. `scripts\fetch_doraemon.py --auto` — 从桌面已抓取的最大集数 +1 开始，抓取**已播出**新集的简介/封面（tv-asahi 会提前放出未播出集的页面，所以按页面上的放送日门控；漏跑的周会自动补抓，上限 8 集），抓到的集数写入 `logs\.last_auto_fetched`
 3. 有新集时：自动起 llama.cpp 翻译服务器（没起的话），逐集跑 `scripts\translate_doraemon.py`，自己起的服务器跑完自动关
 
 任何一步失败都会停在失败处并写日志，不影响下周再跑（下载和 --auto 都是幂等的）。

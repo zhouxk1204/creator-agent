@@ -40,8 +40,8 @@ fi
 # Full pipeline: latest story -> translate -> TVer download -> split
 # ---------------------------------------------------------------------------
 uv run python scripts/fetch_doraemon.py --latest
-EP="$(tr -d '[:space:]' < storage/doraemon/.last_fetched)"
-AIRDATE="$(tr -d '[:space:]' < storage/doraemon/.last_fetched_date 2>/dev/null || true)"
+EP="$(tr -d '[:space:]' < logs/.last_fetched)"
+AIRDATE="$(tr -d '[:space:]' < logs/.last_fetched_date 2>/dev/null || true)"
 
 echo
 echo "========================================"

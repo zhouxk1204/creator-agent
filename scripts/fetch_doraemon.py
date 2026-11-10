@@ -3,7 +3,8 @@
 Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
 ``https://www.tv-asahi.co.jp/doraemon/story/{episode:04d}/``, and saves:
 
-    storage/doraemon/{episode:04d}/
+    ~/Desktop/doraemon_{ep}/        # ONE per-episode materials folder — the only
+                                    # output (storage/doraemon is not written)
     ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image, copyright}]
     └── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
 
@@ -13,7 +14,7 @@ Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
     <vault>/封面/{ep}/{ep}_{i}_4k.jpg  # cover mirrored into the vault so the
                                       # 简介 note can embed it (Obsidian wikilink)
     ~/Desktop/doraemon_{ep}/       # ONE materials folder per episode: the
-                                   # human-facing mirror (metadata.json, story
+                                   # single output folder (metadata.json, story
                                    # images) + covers ({ep}_{i}_4k.jpg,
                                    # upscaled by executing the user's ComfyUI
                                    # workflow doraemonn_cover.json — a headless
@@ -36,16 +37,16 @@ JSON at doraemon/json/story.json — each entry is the ``story-item`` the page
 shows, with ``id`` (the ``../0938/`` href) and ``date`` (the story-item__date
 text). The newest entry whose broadcast date is not in the future wins, so the
 announced-but-unaired episode at the top of the list is skipped. The fetched
-episode number is written to storage/doraemon/.last_fetched so callers
+episode number is written to logs/.last_fetched so callers
 (02_fetch_doraemon.bat/.sh) can chain the translation step.
 
 --auto is for the weekly scheduled task (bat/doraemon/weekly_sync.bat): it
-finds the highest episode already in storage/doraemon, then fetches n+1, n+2,
-... while the story page exists AND its broadcast date (JST) is not in the
-future — tv-asahi publishes the *upcoming* episode's page days early, so the
-air-date gate is what stops it from running ahead of the broadcast. Numbers of
-the episodes it fetched are written one per line to
-storage/doraemon/.last_auto_fetched for the caller (empty file = nothing new).
+finds the highest episode already fetched on the Desktop (doraemon_* folders),
+then fetches n+1, n+2, ... while the story page exists AND its broadcast date
+(JST) is not in the future — tv-asahi publishes the *upcoming* episode's page
+days early, so the air-date gate is what stops it from running ahead of the
+broadcast. Numbers of the episodes it fetched are written one per line to
+logs/.last_auto_fetched for the caller (empty file = nothing new).
 """
 
 from __future__ import annotations
@@ -70,7 +71,9 @@ STORY_JSON_URL = "https://www.tv-asahi.co.jp/doraemon/json/story.json"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
-OUT_ROOT = Path(__file__).resolve().parent.parent / "storage" / "doraemon"
+# Runtime state (last-fetched markers + comfyui log) lives in logs/, which is
+# gitignored; per-episode materials go straight to the Desktop materials folder.
+STATE_DIR = Path(__file__).resolve().parent.parent / "logs"
 # Per-story outputs: synopsis notes and covers go to the Obsidian vault
 # (notes are consumed by `creator-agent learn`, see translate/learn.py);
 # covers are ALSO copied to the Desktop for the user's publishing flow.
@@ -82,12 +85,11 @@ DESKTOP_DIR = Path.home() / "Desktop"
 def desktop_episode_dir(episode: str) -> Path:
     """The ONE per-episode materials folder on the Desktop (unpadded number).
 
-    Everything human-facing lands here — the metadata.json/images mirror,
+    Everything human-facing lands here — metadata.json, the story images,
     the covers, and (via translate_doraemon.py) the translated _zh notes — so
     launchers never have to gather materials from several places. Uses the
     unpadded episode number (doraemon_938) so launchers can locate it without
-    zero-padding arithmetic. storage/doraemon stays the canonical store that
-    --auto counts from.
+    zero-padding arithmetic; --auto counts from these folders.
     """
     return DESKTOP_DIR / f"doraemon_{int(episode)}"
 
@@ -219,8 +221,8 @@ def ensure_comfyui(client: httpx.Client, boot_timeout: int = 240) -> tuple[str |
         print("  comfyui   : no server running and cloned core/venv not found")
         return None, None
     print("  comfyui   : no server running - starting headless ComfyUI (may take ~30-60s)...")
-    OUT_ROOT.mkdir(parents=True, exist_ok=True)
-    log_path = OUT_ROOT / "comfyui_server.log"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = STATE_DIR / "comfyui_server.log"
     cmd = [
         str(COMFYUI_VENV_PY),
         str(COMFYUI_CORE / "main.py"),
@@ -321,11 +323,13 @@ def fetch_one(episode: str) -> int:
             print(f"No stories parsed from {url} — page layout may have changed.")
             return 1
 
-        out_dir = OUT_ROOT / ep
-        out_dir.mkdir(parents=True, exist_ok=True)
-
         data["episode"] = ep
         data["url"] = url
+
+        # Output lands ONLY in the per-episode Desktop materials folder
+        # (storage/doraemon is no longer written).
+        desk_dir = desktop_episode_dir(episode)
+        desk_dir.mkdir(parents=True, exist_ok=True)
 
         for i, story in enumerate(data["stories"], 1):
             src = story["image"]
@@ -333,20 +337,12 @@ def fetch_one(episode: str) -> int:
                 continue
             img_url = src if src.startswith("http") else f"https://www.tv-asahi.co.jp{src}"
             ext = Path(img_url.split("?")[0]).suffix or ".jpg"
-            img_path = out_dir / f"{int(episode)}_{i}{ext}"
+            img_path = desk_dir / f"{int(episode)}_{i}{ext}"
             img_path.write_bytes(client.get(img_url).content)
             story["image_file"] = img_path.name
             print(f"  image     : {img_path}")
 
-        (out_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        # Mirror the human-facing outputs into the ONE per-episode Desktop
-        # folder (metadata.json, story images + covers below);
-        # storage/doraemon stays the canonical store.
-        desk_dir = desktop_episode_dir(episode)
-        desk_dir.mkdir(parents=True, exist_ok=True)
-        for name in ["metadata.json"] + [s["image_file"] for s in data["stories"] if s.get("image_file")]:
-            shutil.copy2(out_dir / name, desk_dir / name)
+        (desk_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  desktop   : {desk_dir}")
 
         # Split per-story: <ep>_<i>.md synopsis notes under 简介/<ep>/ (named
@@ -370,7 +366,7 @@ def fetch_one(episode: str) -> int:
             for i, story in enumerate(data["stories"], 1):
                 cover_name: str | None = None
                 if story.get("image_file"):
-                    src_img = out_dir / story["image_file"]
+                    src_img = desk_dir / story["image_file"]
                     dst_4k = desk_dir / f"{ep_short}_{i}_4k{src_img.suffix}"
                     if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
                         print(f"  cover(4k) : {dst_4k}")
@@ -379,7 +375,8 @@ def fetch_one(episode: str) -> int:
                         if not comfy_url:
                             print("  cover(4k) : ComfyUI unavailable - copying original instead")
                         dst_img = desk_dir / f"{ep_short}_{i}{src_img.suffix}"
-                        shutil.copy2(src_img, dst_img)
+                        if dst_img != src_img:  # raw image already lives in desk_dir
+                            shutil.copy2(src_img, dst_img)
                         print(f"  cover     : {dst_img}")
                         cover_name = dst_img.name
                     if vault_ok:
@@ -413,15 +410,16 @@ def fetch_one(episode: str) -> int:
     print(f"  broadcast : {data['broadcast_date']}")
     for story in data["stories"]:
         print(f"  story     : {story['title']}  ({len(story['synopsis'])} chars)")
-    print(f"\nSaved to: {out_dir.resolve()}")
+    print(f"\nSaved to: {desk_dir.resolve()}")
     # Remember what we fetched so callers that passed --latest can chain the
     # translation step on the resolved number, and the download step on the
     # broadcast date.
-    (OUT_ROOT / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
     date_m = BROADCAST_DATE_RE.search(data["broadcast_date"])
     if date_m:
         iso = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
-        (OUT_ROOT / FETCHED_DATE_STATE_NAME).write_text(iso + "\n", encoding="utf-8")
+        (STATE_DIR / FETCHED_DATE_STATE_NAME).write_text(iso + "\n", encoding="utf-8")
     return 0
 
 
@@ -481,11 +479,13 @@ AUTO_STATE_NAME = ".last_auto_fetched"
 
 
 def _local_episodes() -> list[int]:
-    if not OUT_ROOT.is_dir():
-        return []
-    return sorted(
-        int(p.name) for p in OUT_ROOT.iterdir() if p.is_dir() and p.name.isdigit() and (p / "metadata.json").exists()
-    )
+    """Fetched episode numbers, from the Desktop doraemon_* materials folders."""
+    episodes = []
+    for p in DESKTOP_DIR.glob("doraemon_*"):
+        tail = p.name[len("doraemon_"):]
+        if p.is_dir() and tail.isdigit() and (p / "metadata.json").exists():
+            episodes.append(int(tail))
+    return sorted(episodes)
 
 
 def _peek_broadcast_date(client: httpx.Client, ep: str) -> date | None:
@@ -503,7 +503,7 @@ def _peek_broadcast_date(client: httpx.Client, ep: str) -> date | None:
 def auto_fetch() -> int:
     done = _local_episodes()
     if not done:
-        print("--auto needs one already-fetched episode in storage/doraemon/ to count from.")
+        print("--auto needs one already-fetched episode on the Desktop (doraemon_* folder) to count from.")
         return 2
 
     today_jst = datetime.now(JST).date()
@@ -526,7 +526,8 @@ def auto_fetch() -> int:
             fetched.append(n)
             n += 1
 
-    state = OUT_ROOT / AUTO_STATE_NAME
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state = STATE_DIR / AUTO_STATE_NAME
     state.write_text("".join(f"{n}\n" for n in fetched), encoding="utf-8")
     if fetched:
         print(f"Auto-fetched episode(s): {', '.join(str(n) for n in fetched)}")

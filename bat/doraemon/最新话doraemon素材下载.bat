@@ -53,14 +53,14 @@ rem ===========================================================================
 "%PY%" scripts\fetch_doraemon.py --latest
 if errorlevel 1 ( set "RC=1" & goto :done )
 
-if not exist "%REPO_ROOT%\storage\doraemon\.last_fetched" (
+if not exist "%REPO_ROOT%\logs\.last_fetched" (
     echo State file .last_fetched missing - cannot continue.
     set "RC=1"
     goto :done
 )
-set /p ep=<"%REPO_ROOT%\storage\doraemon\.last_fetched"
+set /p ep=<"%REPO_ROOT%\logs\.last_fetched"
 set "airdate="
-if exist "%REPO_ROOT%\storage\doraemon\.last_fetched_date" set /p airdate=<"%REPO_ROOT%\storage\doraemon\.last_fetched_date"
+if exist "%REPO_ROOT%\logs\.last_fetched_date" set /p airdate=<"%REPO_ROOT%\logs\.last_fetched_date"
 
 echo.
 echo ========================================
