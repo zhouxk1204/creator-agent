@@ -51,7 +51,7 @@ echo "========================================"
 translate_ep "$EP" || echo "[translate] failed - continuing pipeline."
 
 MAT="$HOME/Desktop/doraemon_$EP"
-# Already populated by fetch_doraemon.py (story.md, metadata.json, images,
+# Already populated by fetch_doraemon.py (metadata.json, images,
 # covers, Japanese {ep}_{i}_jp.md notes) and translate_doraemon.py
 # (translated {ep}_{i}_zh.md notes with tags); the download + split steps
 # below add the video to the SAME folder.

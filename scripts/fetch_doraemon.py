@@ -5,8 +5,7 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
 
     storage/doraemon/{episode:04d}/
     ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image, copyright}]
-    ├── story.md        # human-readable titles + synopses (Markdown)
-    └── story_1.jpg, story_2.jpg, ...
+    └── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
 
 Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
     <vault>/简介/{ep}/{ep}_{i}.md    # '# <title>' + '![[封面/{ep}/...]]' +
@@ -14,8 +13,8 @@ Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
     <vault>/封面/{ep}/{ep}_{i}_4k.jpg  # cover mirrored into the vault so the
                                       # 简介 note can embed it (Obsidian wikilink)
     ~/Desktop/doraemon_{ep}/       # ONE materials folder per episode: the
-                                   # human-facing mirror (story.md, metadata.json,
-                                   # story images) + covers ({ep}_{i}_4k.jpg,
+                                   # human-facing mirror (metadata.json, story
+                                   # images) + covers ({ep}_{i}_4k.jpg,
                                    # upscaled by executing the user's ComfyUI
                                    # workflow doraemonn_cover.json — a headless
                                    # server is auto-started when none is running;
@@ -83,7 +82,7 @@ DESKTOP_DIR = Path.home() / "Desktop"
 def desktop_episode_dir(episode: str) -> Path:
     """The ONE per-episode materials folder on the Desktop (unpadded number).
 
-    Everything human-facing lands here — the story.md/metadata/images mirror,
+    Everything human-facing lands here — the metadata.json/images mirror,
     the covers, and (via translate_doraemon.py) the translated _zh notes — so
     launchers never have to gather materials from several places. Uses the
     unpadded episode number (doraemon_938) so launchers can locate it without
@@ -334,37 +333,19 @@ def fetch_one(episode: str) -> int:
                 continue
             img_url = src if src.startswith("http") else f"https://www.tv-asahi.co.jp{src}"
             ext = Path(img_url.split("?")[0]).suffix or ".jpg"
-            img_path = out_dir / f"story_{i}{ext}"
+            img_path = out_dir / f"{int(episode)}_{i}{ext}"
             img_path.write_bytes(client.get(img_url).content)
             story["image_file"] = img_path.name
             print(f"  image     : {img_path}")
 
         (out_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        lines = [
-            f"# 第{ep}话 {data['episode_title']}",
-            "",
-            f"- 放送日：{data['broadcast_date']}",
-            f"- 来源：{url}",
-            "",
-        ]
-        for i, story in enumerate(data["stories"], 1):
-            lines += [f"## {i}. {story['title']}", ""]
-            if story.get("image_file"):
-                lines += [f"![{story['title']}]({story['image_file']})", ""]
-            # Blank line between paragraphs so Markdown renders them separately.
-            for para in story["synopsis"].splitlines():
-                lines += [para, ""]
-            if story["copyright"]:
-                lines += [f"> {story['copyright']}", ""]
-        (out_dir / "story.md").write_text("\n".join(lines), encoding="utf-8")
-
         # Mirror the human-facing outputs into the ONE per-episode Desktop
-        # folder (story.md, metadata.json, story images + covers below);
+        # folder (metadata.json, story images + covers below);
         # storage/doraemon stays the canonical store.
         desk_dir = desktop_episode_dir(episode)
         desk_dir.mkdir(parents=True, exist_ok=True)
-        for name in ["metadata.json", "story.md"] + [s["image_file"] for s in data["stories"] if s.get("image_file")]:
+        for name in ["metadata.json"] + [s["image_file"] for s in data["stories"] if s.get("image_file")]:
             shutil.copy2(out_dir / name, desk_dir / name)
         print(f"  desktop   : {desk_dir}")
 

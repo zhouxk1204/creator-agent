@@ -21,7 +21,7 @@ rem   with a number (e.g. 934): story info + translation only - no download,
 rem       no split
 rem
 rem All materials for the episode land in one folder:
-rem   Desktop\doraemon_<ep>\   story.md, metadata.json, story images, covers,
+rem   Desktop\doraemon_<ep>\   metadata.json, <ep>_<i>.jpg story images, covers,
 rem                            <ep>_1_jp.md / <ep>_1_zh.md per-story notes,
 rem                            <ep>.mp4 (+ thumbnail/info-json), split clips
 rem                            (<ep>_1.mp4 ...), <ep>_split.json, preview\
@@ -77,7 +77,7 @@ if errorlevel 1 (
 )
 
 rem --- materials folder: Desktop\doraemon_<ep> ---
-rem Already populated by fetch_doraemon.py (story.md, metadata.json, images,
+rem Already populated by fetch_doraemon.py (metadata.json, images,
 rem covers, Japanese {ep}_{i}_jp.md notes) and translate_doraemon.py
 rem (translated {ep}_{i}_zh.md notes with tags); the download + split steps
 rem below add the video to the SAME folder.
