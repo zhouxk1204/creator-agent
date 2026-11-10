@@ -6,23 +6,9 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
     ~/Desktop/doraemon_{ep}/        # ONE per-episode materials folder — the only
                                     # output (storage/doraemon is not written)
     ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image, copyright}]
-    └── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
-
-Plus, split per story (e.g. episode 935 → stories 935_1, 935_2):
-    <vault>/简介/{ep}/{ep}_{i}.md    # '# <title>' + '![[封面/{ep}/...]]' +
-                                    # synopsis body, for `creator-agent learn`
-    <vault>/封面/{ep}/{ep}_{i}_4k.jpg  # cover mirrored into the vault so the
-                                      # 简介 note can embed it (Obsidian wikilink)
-    ~/Desktop/doraemon_{ep}/       # ONE materials folder per episode: the
-                                   # single output folder (metadata.json, story
-                                   # images) + covers ({ep}_{i}_4k.jpg,
-                                   # upscaled by executing the user's ComfyUI
-                                   # workflow doraemonn_cover.json — a headless
-                                   # server is auto-started when none is running;
-                                   # plain {ep}_{i}.jpg copy as fallback) + the
-                                   # per-story Japanese notes ({ep}_{i}_jp.md)
-                                   # + the translated notes mirrored by
-                                   # translate_doraemon.py ({ep}_{i}_zh.md).
+    ├── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
+    ├── {ep}_{i}_4k.jpg              # optional ComfyUI-upscaled covers
+    └── {ep}_{i}_jp.md               # Japanese title, local cover link and synopsis
 
 Usage:
     uv run python scripts/fetch_doraemon.py 934
@@ -55,7 +41,6 @@ import html as html_mod
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -74,11 +59,6 @@ USER_AGENT = (
 # Runtime state (last-fetched markers + comfyui log) lives in logs/, which is
 # gitignored; per-episode materials go straight to the Desktop materials folder.
 STATE_DIR = Path(__file__).resolve().parent.parent / "logs"
-# Per-story outputs: synopsis notes and covers go to the Obsidian vault
-# (notes are consumed by `creator-agent learn`, see translate/learn.py);
-# covers are ALSO copied to the Desktop for the user's publishing flow.
-VAULT_SYNOPSIS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\简介")
-VAULT_COVERS_DIR = Path(r"C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\封面")
 DESKTOP_DIR = Path.home() / "Desktop"
 
 
@@ -345,22 +325,7 @@ def fetch_one(episode: str) -> int:
         (desk_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  desktop   : {desk_dir}")
 
-        # Split per-story: <ep>_<i>.md synopsis notes under 简介/<ep>/ (named
-        # to match episodes/<ep>_<i>/ dirs, e.g. 935_1.md), covers to the
-        # Desktop episode folder + 封面/<ep>/ so the note can embed them via
-        # an Obsidian wikilink.
-        # Skipped when the vault isn't there (e.g. running off the Windows box).
-        # NOTE: must check os.name — on POSIX the Windows path is a single
-        # relative component, so .parent is "." and is_dir() always passes.
         ep_short = str(int(episode))
-        vault_ok = os.name == "nt" and VAULT_SYNOPSIS_DIR.parent.is_dir()
-        if vault_ok:
-            note_dir = VAULT_SYNOPSIS_DIR / ep_short
-            cover_dir = VAULT_COVERS_DIR / ep_short
-            note_dir.mkdir(parents=True, exist_ok=True)
-            cover_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            print("  vault     : Obsidian vault not available on this host - skipping synopsis notes")
         comfy_url, comfy_proc = ensure_comfyui(client)
         try:
             for i, story in enumerate(data["stories"], 1):
@@ -373,32 +338,14 @@ def fetch_one(episode: str) -> int:
                         cover_name = dst_4k.name
                     else:
                         if not comfy_url:
-                            print("  cover(4k) : ComfyUI unavailable - copying original instead")
-                        dst_img = desk_dir / f"{ep_short}_{i}{src_img.suffix}"
-                        if dst_img != src_img:  # raw image already lives in desk_dir
-                            shutil.copy2(src_img, dst_img)
-                        print(f"  cover     : {dst_img}")
-                        cover_name = dst_img.name
-                    if vault_ok:
-                        # Mirror into the vault so 简介 notes can embed the cover.
-                        shutil.copy2(desk_dir / cover_name, cover_dir / cover_name)
-                        print(f"  vault     : {cover_dir / cover_name}")
+                            print("  cover(4k) : ComfyUI unavailable - using original instead")
+                        print(f"  cover     : {src_img}")
+                        cover_name = src_img.name
 
-                # '# <title>' heading + cover embed + synopsis body (see
-                # learn.parse_synopsis_md); strip the site's 「」 brackets so
-                # the heading is the bare title.
                 note_lines = [f"# {story['title'].strip('「」')}", ""]
                 if cover_name:
-                    note_lines += [f"![[封面/{ep_short}/{cover_name}]]", ""]
+                    note_lines += [f"![封面]({cover_name})", ""]
                 note_lines += story["synopsis"].splitlines()
-                if vault_ok:
-                    note_path = note_dir / f"{ep_short}_{i}.md"
-                    note_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
-                    print(f"  synopsis  : {note_path}")
-                # Mirror the Japanese note into the Desktop materials folder as
-                # {ep}_{i}_jp.md — the JA counterpart of the {ep}_{i}_zh.md that
-                # translate_doraemon.py mirrors, so the publishing flow has both
-                # languages side by side.
                 jp_path = desk_dir / f"{ep_short}_{i}_jp.md"
                 jp_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
                 print(f"  synopsis  : {jp_path}")
@@ -482,7 +429,7 @@ def _local_episodes() -> list[int]:
     """Fetched episode numbers, from the Desktop doraemon_* materials folders."""
     episodes = []
     for p in DESKTOP_DIR.glob("doraemon_*"):
-        tail = p.name[len("doraemon_"):]
+        tail = p.name[len("doraemon_") :]
         if p.is_dir() and tail.isdigit() and (p / "metadata.json").exists():
             episodes.append(int(tail))
     return sorted(episodes)

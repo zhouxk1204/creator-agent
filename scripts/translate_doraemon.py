@@ -1,15 +1,8 @@
 """Translate Doraemon episode notes (title + synopsis) JA -> ZH, plus tags.
 
-Reads the per-story notes written by ``fetch_doraemon.py``
-(``<vault>/简介/{ep}/{ep}_{i}.md``, '# <title>' + cover embed + synopsis body)
-and writes a Chinese sibling next to each one::
-
-    <vault>/简介/{ep}/{ep}_{i}_zh.md   # '# <中文标题>' + cover embed + 中文简介
-                                      # + 最后一行 '标签：#xx #yy ...'（发布话题标签）
-
-Each translated note is also mirrored into the per-episode Desktop materials
-folder (``~/Desktop/doraemon_{ep}/``, when it exists) so the launcher never
-has to gather the 简介/标签 files from the vault by hand.
+Reads ``~/Desktop/doraemon_{ep}/{ep}_{i}_jp.md`` written by ``fetch_doraemon.py``
+and writes ``{ep}_{i}_zh.md`` alongside it, with the translated title, local
+cover link, synopsis and publishing tags.
 
 Tags are generated from the *translated* title+synopsis (Douyin/Bilibili style
 hashtags): a couple of base hot tags plus story-specific ones (characters,
@@ -27,15 +20,11 @@ Usage:
 from __future__ import annotations
 
 import re
-import shutil
 import sys
 from pathlib import Path
 
 import httpx
-
-# scripts/ is on sys.path when run as `python scripts/translate_doraemon.py`,
-# so the vault dir stays single-sourced in fetch_doraemon.py.
-from fetch_doraemon import VAULT_SYNOPSIS_DIR, desktop_episode_dir
+from fetch_doraemon import desktop_episode_dir
 
 from creator_agent.config import load_settings
 from creator_agent.translate.llm import chat
@@ -57,7 +46,7 @@ SYSTEM_PROMPT = """你是一名专业日中翻译，负责翻译动漫《哆啦A
 6. 只输出翻译结果，不添加任何解释"""
 
 _KANA = re.compile(r"[぀-ヿ]")
-_COVER_EMBED = re.compile(r"^\s*!\[\[.+\]\]\s*$")
+_COVER_EMBED = re.compile(r"^\s*!(?:\[\[.+\]\]|\[[^\]]*\]\(.+\))\s*$")
 
 TAG_SYSTEM_PROMPT = """你是一名短视频运营专家，深谙抖音/B站上《哆啦A梦》粉丝圈的流量密码，为剧集视频生成话题标签。
 
@@ -150,11 +139,7 @@ _SYNOPSIS_LINE = re.compile(r"^\s*简介\s*[:：]\s*(.*)$")
 
 
 def parse_note(path: Path) -> tuple[str, str, str | None]:
-    """'# <title>' + optional '![[封面/...]]' + body -> (title, synopsis, cover).
-
-    The cover embed is pulled out of the body so it is never sent to the
-    model; the caller re-inserts it into the translated sibling.
-    """
+    """Read a title and synopsis, keeping image embeds out of the model input."""
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or not lines[0].startswith("# "):
         raise ValueError(f"{path.name}: expected '# <title>' on the first line")
@@ -231,17 +216,17 @@ def main(episode: str) -> None:
         sys.exit(2)
     ep_short = str(int(episode))
 
-    note_dir = VAULT_SYNOPSIS_DIR / ep_short
-    notes = sorted(p for p in note_dir.glob(f"{ep_short}_*.md") if not p.stem.endswith("_zh"))
+    note_dir = desktop_episode_dir(ep_short)
+    notes = sorted(note_dir.glob(f"{ep_short}_*_jp.md"))
     if not notes:
-        print(f"No notes matching {ep_short}_*.md in {note_dir}")
+        print(f"No notes matching {ep_short}_*_jp.md in {note_dir}")
         print("Run scripts/fetch_doraemon.py first.")
         sys.exit(1)
 
     settings = load_settings().translate
     failed = 0
     for note in notes:
-        zh_path = note.with_name(f"{note.stem}_zh.md")
+        zh_path = note.with_name(f"{note.stem.removesuffix('_jp')}_zh.md")
         try:
             title, synopsis, cover = parse_note(note)
             zh_title, zh_synopsis = translate_story(settings, title, synopsis)
@@ -267,11 +252,6 @@ def main(episode: str) -> None:
         if tags:
             out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
         zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
-        # Mirror into the per-episode Desktop materials folder (when fetch has
-        # created it) so 简介/标签 land next to the covers and video.
-        mat_dir = desktop_episode_dir(ep_short)
-        if mat_dir.is_dir():
-            shutil.copy2(zh_path, mat_dir / zh_path.name)
         if tag_err is None:
             print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
         else:

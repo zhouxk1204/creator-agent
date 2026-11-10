@@ -56,14 +56,14 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 ### 哆啦A梦流水线（`bat/doraemon/`，按执行顺序编号）
 
 - **`01_download_tver.bat`** —— 下载 TVer 视频（默认最新一集哆啦A梦）：
-  - 双击运行 → 下载最新一集到 `storage/tver/srtsxzl3si/`（含封面和 info-json）
+  - 双击运行 → 下载最新一集到 `C:\Users\34696\Desktop\哆啦a梦生肉\`，仅保存 MP4（不生成缩略图和 info-json）；`--out-dir` 可指定目录
   - `--list` 只列出在播剧集；`--all` 下载全部在播；`--episode epenb4xglc` 指定一集；`--series <id或URL>` 换其他节目
   - 原理：`service-api.tver.jp` 内部 API 列剧集 + yt-dlp 下载（无加密 HLS，最高 1080p）
   - **需要 ffmpeg**（音视频分流合并）：Windows 自动复用 `settings.yaml` 的 `asr.ffmpeg_path`；macOS 用 `brew install ffmpeg`
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
 - **`02_fetch_doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）+ 翻译标题简介为中文：
   - 双击运行 → 输入集数（如 `934`）；或命令行：`bat\doraemon\02_fetch_doraemon.bat 934`
-  - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，结果存到 `storage/doraemon/0934/`（`metadata.json` + `story.md` + 图片）
+  - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，资料直接存到 `~/Desktop/doraemon_934/`（`metadata.json`、故事图片、`934_*_jp.md`）；翻译在同目录生成 `934_*_zh.md`，不依赖 Obsidian Vault
   - 翻译需要本地 LLM 服务，bat 会自动检测并启动（见 `bat/start_translate_server.bat`）
   - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
 - **`03_split_episode.bat`** —— 把一集视频里的多个小故事切成独立单集（纯视觉检测标题封面，不用 OCR/AI）：

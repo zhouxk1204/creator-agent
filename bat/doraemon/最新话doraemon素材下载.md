@@ -102,7 +102,7 @@ bat\doraemon\最新话doraemon素材下载.bat 941
 | TV Asahi 故事页 | 标题、放送日、各故事标题、简介、版权、图片 URL | 生成 metadata、简介和封面 |
 | TV Asahi 图片 URL | 每个故事的原始图片 | 下载 `{集号}_{故事序号}.jpg` |
 | TVer API | 当前可播放的哆啦A梦剧集及播出日期 | 按 TV Asahi 放送日选择正确视频 |
-| TVer HLS | 整集视频、缩略图、节目元数据 | 由 yt-dlp 下载 |
+| TVer HLS | 整集视频流 | 由 yt-dlp 下载，仅保存 MP4 |
 
 默认 TVer 系列 ID：
 
@@ -119,7 +119,6 @@ srtsxzl3si
 | 翻译模型服务 | `http://127.0.0.1:8080` | 日文简介翻译和标签生成 |
 | llama.cpp | `C:\tools\llama.cpp\llama-server.exe` | 未启动服务时自动启动 |
 | 翻译模型 | `C:\models\Qwen3.5-9B-Q6_K.gguf` | 默认本地翻译模型 |
-| Obsidian Vault | `C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle` | 翻译脚本的日文简介输入和中文输出 |
 | ComfyUI workflow | `C:\Users\34696\Documents\ComfyUI\user\default\workflows\doraemonn_cover.json` | 故事封面 2× 放大 |
 | ComfyUI Core | `C:\agents\ComfyUI` | 无现有 ComfyUI 服务时尝试自动启动 |
 | Real-ESRGAN | `C:\to4k\Real-ESRGAN` | 故事视频 2× 超分 |
@@ -231,23 +230,7 @@ ComfyUI 不可用或单图放大失败时：
 - 使用原始 `941_1.jpg` / `941_2.jpg` 作为封面
 - 不生成对应 `_4k` 文件
 
-### 5.5 Obsidian Vault 输出
-
-仅 Windows 且 Vault 父目录存在时，另外写入：
-
-```text
-C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\
-├── 简介\941\
-│   ├── 941_1.md
-│   └── 941_2.md
-└── 封面\941\
-    ├── 941_1.jpg 或 941_1_4k.jpg
-    └── 941_2.jpg 或 941_2_4k.jpg
-```
-
-Vault 中的日文笔记是下一步 `translate_doraemon.py` 的**实际输入**。桌面的 `941_1_jp.md` 当前不是该翻译脚本的输入，只是供发布和后续字幕流程使用的镜像资料。
-
-### 5.6 状态输出
+### 5.5 状态输出
 
 成功抓取后写入：
 
@@ -271,7 +254,7 @@ Vault 中的日文笔记是下一步 `translate_doraemon.py` 的**实际输入**
 仓库\logs\comfyui_server.log
 ```
 
-### 5.7 失败行为
+### 5.6 失败行为
 
 以下情况为致命失败：
 
@@ -320,28 +303,23 @@ GPU layers：99
 
 ### 6.2 输入
 
-翻译脚本当前只扫描：
+翻译脚本直接扫描桌面素材目录：
 
 ```text
-C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\简介\941\941_*.md
+%USERPROFILE%\Desktop\doraemon_941\941_*_jp.md
 ```
+
+只读取日文 `_jp.md`，不会把已有 `_zh.md` 再次作为输入。
 
 每个输入包含：
 
 - 日文标题
-- 可选封面 Obsidian 嵌入
+- 可选封面相对链接，例如 `![封面](941_1.jpg)`
 - 日文剧情简介
 
 ### 6.3 输出
 
-Vault 输出：
-
-```text
-简介\941\941_1_zh.md
-简介\941\941_2_zh.md
-```
-
-同时复制到桌面素材目录：
+直接写入同一个桌面素材目录：
 
 ```text
 Desktop\doraemon_941\941_1_zh.md
@@ -351,7 +329,7 @@ Desktop\doraemon_941\941_2_zh.md
 每个中文文件通常包括：
 
 1. 中文标题
-2. 封面 Obsidian 嵌入
+2. 封面相对链接
 3. 中文简介
 4. 一行 `标签：`，包含 8–12 个发布话题标签
 
@@ -402,21 +380,15 @@ Desktop\doraemon_941\941_2_zh.md
 
 ### 7.3 输出
 
-写入桌面素材目录：
+仅写入桌面素材目录中的整集视频：
 
 ```text
 941.mp4
-941.jpg
-941.info.json
 ```
 
-| 文件 | 内容 |
-| --- | --- |
-| `941.mp4` | TVer 整集视频，HLS 下载后 remux 为 MP4，不主动重编码 |
-| `941.jpg` | yt-dlp 下载并转换的 TVer 缩略图 |
-| `941.info.json` | yt-dlp 节目元数据 |
+HLS 下载后 remux 为 MP4，不主动重编码；不保存 TVer 缩略图或 info-json。TV Asahi 的 `metadata.json` 和各故事图片仍由抓取步骤生成。
 
-下载过程中可能暂时出现 `.part` 等 yt-dlp 临时文件，成功完成后通常会清理。
+下载过程中可能暂时出现 `.part` 等 yt-dlp 临时文件，成功完成后通常会清理。以前生成的 `941.jpg`、`941.info.json` 不会自动删除。
 
 ### 7.4 下载参数
 
@@ -424,7 +396,7 @@ Desktop\doraemon_941\941_2_zh.md
 - 元数据重试 10 次
 - fragment 重试 10 次
 - MP4 remux
-- 缩略图转 JPG
+- 禁止保存缩略图和 info-json
 
 ### 7.5 失败行为
 
@@ -654,8 +626,6 @@ C:\test\run_log.txt
 ├── 941_1_zh.md               # 翻译成功时存在
 ├── 941_2_zh.md               # 翻译成功时存在
 ├── 941.mp4
-├── 941.jpg
-├── 941.info.json
 ├── 941_split.json
 ├── 941_1.mp4
 ├── 941_2.mp4
@@ -665,21 +635,7 @@ C:\test\run_log.txt
     └── end_*.jpg
 ```
 
-### 11.2 Obsidian Vault
-
-```text
-C:\Users\34696\Documents\Obsidian Vault\doraemon_subtitle\
-├── 简介\941\
-│   ├── 941_1.md
-│   ├── 941_2.md
-│   ├── 941_1_zh.md
-│   └── 941_2_zh.md
-└── 封面\941\
-    ├── 941_1.jpg 或 941_1_4k.jpg
-    └── 941_2.jpg 或 941_2_4k.jpg
-```
-
-### 11.3 超分暂存与最终输出
+### 11.2 超分暂存与最终输出
 
 ```text
 C:\test\
@@ -693,7 +649,7 @@ C:\test\
 └── out_frames\               # 处理结束后为空
 ```
 
-### 11.4 仓库运行状态
+### 11.3 仓库运行状态
 
 ```text
 仓库\logs\
@@ -706,9 +662,9 @@ C:\test\
 
 | 步骤 | 主要输入 | 主要输出 | 输出位置 |
 | --- | --- | --- | --- |
-| 抓取资料 | 集号、TV Asahi 页面和图片 | metadata、故事图、日文简介、可选放大封面 | 桌面 + Vault |
-| 简介翻译 | Vault 日文简介、本地 LLM | 中文简介和发布标签 | Vault + 桌面 |
-| TVer 下载 | 放送日、TVer API/HLS | 整集 MP4、缩略图、info-json | 桌面 |
+| 抓取资料 | 集号、TV Asahi 页面和图片 | metadata、故事图、日文简介、可选放大封面 | 桌面 |
+| 简介翻译 | 桌面 `_jp.md`、本地 LLM | `_zh.md` 中文简介和发布标签 | 桌面 |
+| TVer 下载 | 放送日、TVer API/HLS | 仅整集 MP4 | 桌面 |
 | 故事分割 | 整集 MP4 | split JSON、故事 MP4、可选预览图 | 桌面 |
 | 超分暂存 | 前两个故事 MP4 | 覆盖复制的故事 MP4 | `C:\test\temps` |
 | Real-ESRGAN | `temps` 中所有视频 | 2× 超分 MP4、日志 | `C:\test` |
@@ -742,8 +698,8 @@ C:\test\
 | 交互输入集号 | 有 | 无，只读命令行参数 |
 | 自动启动/关闭翻译服务 | 有 | 无；服务健康才翻译，否则跳过 |
 | TV Asahi 抓取 | 有 | 有 |
-| Vault 日文简介输出 | Windows Vault 存在时有 | 明确跳过 Windows Vault |
-| 简介翻译 | 有 | 通常因 Vault 无输入而失败；当前没有桌面回退 |
+| 日文简介输出 | 桌面 `_jp.md` | 桌面 `_jp.md` |
+| 简介翻译 | 读取桌面 `_jp.md` | 同样读取桌面 `_jp.md`；需要翻译服务已启动 |
 | TVer 下载 | 有 | 有 |
 | 视频分割 | 有 | 有 |
 | 复制到 `C:\test\temps` | 有 | 无 |
@@ -756,15 +712,12 @@ C:\test\
 
 以下是根据现有实现整理的观察项，是否调整由实际使用需求决定。
 
-### 15.1 翻译输入依赖 Windows Vault
+### 15.1 简介素材已统一到桌面
 
-现状：
-
-- `fetch_doraemon.py` 已经在桌面生成 `941_1_jp.md`
-- `translate_doraemon.py` 却只读取 Vault 的 `简介\941\941_1.md`
-- macOS 不生成 Windows Vault 笔记，因此 `.sh` 即使模型服务可用也通常无法翻译
-
-可评估：让翻译脚本优先或回退读取桌面的 `_jp.md`，减少重复副本和平台耦合。
+- `fetch_doraemon.py` 在桌面生成 `941_1_jp.md` 等日文简介
+- `translate_doraemon.py` 直接读取这些文件，并在同目录写入 `941_1_zh.md`
+- 封面使用同目录图片的 Markdown 相对链接，不再依赖或写入 Obsidian Vault
+- Windows 和 macOS/Linux 使用相同的简介输入输出规则；已有 Vault 文件不会自动删除
 
 ### 15.2 `C:\test\temps` 不清理
 
@@ -784,21 +737,19 @@ C:\test\
 
 可评估：从 `*_split.json` 动态读取片段列表，或显式限定“必须正好两个故事”。
 
-### 15.4 输出分散在三个位置
+### 15.4 视频超分输出仍与桌面素材分离
 
-当前输出分布：
+当前素材输出分布：
 
-1. 桌面 `doraemon_<集号>`
-2. Obsidian Vault
-3. `C:\test`
+1. 桌面 `doraemon_<集号>`：抓取资料、简介翻译、整集及分割视频
+2. `C:\test`：超分暂存与最终视频
 
-可评估：桌面目录是否应成为唯一素材根目录；Vault 和超分目录只做可选同步或缓存。
+可评估：超分视频是否也应写回桌面集目录，使 `C:\test` 只作为临时缓存。
 
 ### 15.5 硬编码路径较多
 
 包括：
 
-- Vault
 - ComfyUI workflow/Core/venv
 - llama.cpp 和模型
 - Real-ESRGAN、模型、ffmpeg
