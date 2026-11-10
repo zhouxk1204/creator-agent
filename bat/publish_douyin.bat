@@ -36,7 +36,7 @@ if not defined PUBLISH_DIR (
     echo [X] No publish folder was entered.
     goto :fail
 )
-if not exist "%PUBLISH_DIR%\NUL" (
+if not exist "%PUBLISH_DIR%\." (
     echo.
     echo [X] Folder does not exist: %PUBLISH_DIR%
     goto :fail
