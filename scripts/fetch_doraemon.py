@@ -5,7 +5,7 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
 
     ~/Desktop/doraemon_{ep}/        # ONE per-episode materials folder — the only
                                     # output (storage/doraemon is not written)
-    ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image, copyright}]
+    ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image_file, copyright}]
     ├── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
     ├── {ep}_{i}_4k.jpg              # optional ComfyUI-upscaled covers
     └── {ep}_{i}_jp.md               # Japanese title, local cover link and synopsis
@@ -312,7 +312,7 @@ def fetch_one(episode: str) -> int:
         desk_dir.mkdir(parents=True, exist_ok=True)
 
         for i, story in enumerate(data["stories"], 1):
-            src = story["image"]
+            src = story.pop("image")
             if not src:
                 continue
             img_url = src if src.startswith("http") else f"https://www.tv-asahi.co.jp{src}"

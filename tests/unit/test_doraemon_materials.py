@@ -113,6 +113,8 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     metadata = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
     assert [story["title"] for story in metadata["stories"]] == ["ひみつ道具", "冒険"]
     assert metadata["stories"][0]["image_file"] == "941_1.jpg"
+    assert all("image" not in story for story in metadata["stories"])
+    assert (materials / "941_1.jpg").read_bytes() == b"original image"
     assert (tmp_path / "logs" / ".last_fetched").read_text().strip() == "941"
     assert (tmp_path / "logs" / ".last_fetched_date").read_text().strip() == "2026-11-07"
 
