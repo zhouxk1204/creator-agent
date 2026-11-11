@@ -122,7 +122,7 @@ def parse_page(page: str) -> dict:
         cpr_m = re.search(r'<p class="copyright">(.*?)</p>', body, re.S)
         stories.append(
             {
-                "title": _clean_text(title_html),
+                "title": _clean_text(title_html).replace("「", "").replace("」", ""),
                 "synopsis": _clean_text(txt_m.group(1)) if txt_m else "",
                 "image": img_m.group(1) if img_m else "",
                 "copyright": _clean_text(cpr_m.group(1)) if cpr_m else "",
@@ -131,7 +131,7 @@ def parse_page(page: str) -> dict:
 
     return {
         "broadcast_date": _clean_text(date_m.group(1)) if date_m else "",
-        "episode_title": _clean_text(h1_m.group(1)) if h1_m else "",
+        "episode_title": _clean_text(h1_m.group(1)).replace("「", "").replace("」", "") if h1_m else "",
         "stories": stories,
     }
 
@@ -342,7 +342,7 @@ def fetch_one(episode: str) -> int:
                         print(f"  cover     : {src_img}")
                         cover_name = src_img.name
 
-                note_lines = [f"# {story['title'].strip('「」')}", ""]
+                note_lines = [f"# {story['title']}", ""]
                 if cover_name:
                     note_lines += [f"![封面]({cover_name})", ""]
                 note_lines += story["synopsis"].splitlines()

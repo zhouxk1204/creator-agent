@@ -34,6 +34,31 @@ def test_tver_download_disables_sidecars(tmp_path, monkeypatch, name):
     assert cmd[cmd.index("--paths") + 1] == str(tmp_path / "materials")
 
 
+@pytest.mark.parametrize(
+    ("title_html", "expected"),
+    [
+        ("「ひみつ道具」", "ひみつ道具"),
+        ("ひみつ「道具」の冒険", "ひみつ道具の冒険"),
+        ("&#12300;冒険&#12301;", "冒険"),
+        ("冒険", "冒険"),
+    ],
+)
+def test_parse_page_removes_corner_brackets_only_from_titles(title_html, expected):
+    page = f"""
+    <section>
+    <p class="date">2026年11月7日放送</p><h1>「ドラえもん」</h1>
+    <h2 class="story-title">{title_html}</h2><div class="read-box">
+    <p class="txt_idt">「のび太」のお話。</p></div>
+    </section>
+    """
+
+    data = fetch_doraemon.parse_page(page)
+
+    assert data["episode_title"] == "ドラえもん"
+    assert data["stories"][0]["title"] == expected
+    assert data["stories"][0]["synopsis"] == "「のび太」のお話。"
+
+
 @pytest.mark.parametrize("cover_mode", ["unavailable", "failed", "upscaled"])
 def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, cover_mode):
     monkeypatch.chdir(tmp_path)
@@ -86,6 +111,7 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     )
     assert translate_doraemon.parse_note(materials / "941_2_jp.md") == ("冒険", "みんなで冒険。", None)
     metadata = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+    assert [story["title"] for story in metadata["stories"]] == ["ひみつ道具", "冒険"]
     assert metadata["stories"][0]["image_file"] == "941_1.jpg"
     assert (tmp_path / "logs" / ".last_fetched").read_text().strip() == "941"
     assert (tmp_path / "logs" / ".last_fetched_date").read_text().strip() == "2026-11-07"
