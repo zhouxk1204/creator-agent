@@ -4,6 +4,17 @@
 
 > 本文描述的是 **Windows `.bat` 主流程**。macOS/Linux 的 `.sh` 不是完全等价实现，差异见文末。
 
+## 当前测试设置：视频阶段已关闭
+
+目前 `.bat` 和 `.sh` 顶部的 `DOWNLOAD_VIDEO=0`，用于只测试资料抓取。双击 `.bat` 后直接回车，或运行同名 `.sh`，会：
+
+- 抓取最新已播出话的日文资料、`metadata.json` 和封面（封面的 ComfyUI 放大仍按原逻辑执行）。
+- 创建/使用桌面素材目录，并记录到 `logs/.last_doraemon_materials`。
+- **跳过 TVer 视频下载、视频切分、复制到 `C:\test\temps` 和 Real-ESRGAN 视频放大**。
+- 保留目录内已有的视频，不删除、不重新处理。
+
+测试完成后，将实际使用的启动器顶部 `DOWNLOAD_VIDEO=0` 改为 `DOWNLOAD_VIDEO=1`，即可恢复下文所述完整流程。`.md` 是说明文件，实际运行入口为同名 `.bat` / `.sh`。
+
 ## 1. 这个启动器负责什么
 
 完整模式的执行顺序：

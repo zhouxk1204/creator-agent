@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Temporary materials-only test mode: set to 1 to restore video stages.
+DOWNLOAD_VIDEO=0
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -17,7 +20,7 @@ AIRDATE="$(tr -d '[:space:]' < logs/.last_fetched_date 2>/dev/null || true)"
 
 echo
 echo "========================================"
-echo "  Episode $EP (aired $AIRDATE) - full pipeline"
+echo "  Episode $EP (aired $AIRDATE) - DOWNLOAD_VIDEO=$DOWNLOAD_VIDEO"
 echo "========================================"
 echo "Synopsis translation runs later in 06_correct_subtitles.sh."
 
@@ -30,6 +33,13 @@ trap 'rm -f "$MATERIALS_TMP"' EXIT
 printf '%s\n' "$MAT" > "$MATERIALS_TMP"
 mv -f "$MATERIALS_TMP" "$MATERIALS_STATE"
 trap - EXIT
+
+if [ "$DOWNLOAD_VIDEO" = "0" ]; then
+    echo "[test] Video download, split and video upscale skipped."
+    echo "Done! Materials: $MAT"
+    open "$MAT" 2>/dev/null || true
+    exit 0
+fi
 
 DATEARG=()
 if [ -n "$AIRDATE" ]; then

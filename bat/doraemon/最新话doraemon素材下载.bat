@@ -1,6 +1,8 @@
 @echo off
 setlocal DisableDelayedExpansion
 chcp 65001 >nul
+REM Temporary materials-only test mode: set to 1 to restore video stages.
+set "DOWNLOAD_VIDEO=0"
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
     echo.
@@ -12,10 +14,12 @@ call .venv\Scripts\activate.bat >nul 2>&1
 
 echo ========================================
 echo   Doraemon latest-episode materials
-echo   fetch -^> TVer -^> split -^> upscale
+if "%DOWNLOAD_VIDEO%"=="0" echo   fetch -^> materials only ^(video disabled^)
+if not "%DOWNLOAD_VIDEO%"=="0" echo   fetch -^> TVer -^> split -^> upscale
 echo ========================================
 echo.
-echo  Enter = latest aired episode, full pipeline.
+echo  Enter = latest aired episode.
+echo  DOWNLOAD_VIDEO=%DOWNLOAD_VIDEO% ^(0 = materials only, 1 = full pipeline^)
 echo  Or type an episode number for story info only.
 echo  Synopsis translation runs later in 06_correct_subtitles.bat.
 echo.
@@ -40,7 +44,7 @@ if exist "%REPO_ROOT%\logs\.last_fetched_date" set /p airdate=<"%REPO_ROOT%\logs
 
 echo.
 echo ========================================
-echo   Episode %ep% (aired %airdate%) - full pipeline
+echo   Episode %ep% (aired %airdate%) - DOWNLOAD_VIDEO=%DOWNLOAD_VIDEO%
 echo ========================================
 
 set "MAT=%USERPROFILE%\Desktop\doraemon_%ep%"
@@ -53,6 +57,11 @@ if not exist "%MAT%\" (
 echo [materials] "%MAT%"
 "%PY%" -c "import os, sys; from pathlib import Path; target = Path(sys.argv[1]); temp = target.with_name(target.name + '.tmp'); temp.write_text(sys.argv[2] + '\n', encoding='utf-8'); os.replace(temp, target)" "%REPO_ROOT%\logs\.last_doraemon_materials" "%MAT%"
 if errorlevel 1 ( set "RC=1" & goto :done )
+
+if "%DOWNLOAD_VIDEO%"=="0" (
+    echo [test] Video download, split and video upscale skipped.
+    goto :done
+)
 
 set "DATEARG="
 if not "%airdate%"=="" set "DATEARG=--broadcast-date %airdate%"
