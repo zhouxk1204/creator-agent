@@ -19,6 +19,44 @@ import translate_doraemon as synopsis  # noqa: E402
 
 
 @pytest.fixture
+def materials_logs(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    return logs
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_default_target_prefers_saved_materials(materials_logs, tmp_path, encoding):
+    materials = tmp_path / "自定义 materials !" / "doraemon_941"
+    (materials_logs / ".last_doraemon_materials").write_text(f"{materials}\r\n", encoding=encoding)
+    (materials_logs / ".last_fetched").write_text("999", encoding="utf-8")
+
+    assert cli.default_target() == materials
+
+
+@pytest.mark.parametrize("content", [b"", b" \r\n", b"\xff"])
+def test_invalid_materials_record_is_not_silently_replaced(materials_logs, content):
+    (materials_logs / ".last_doraemon_materials").write_bytes(content)
+    (materials_logs / ".last_fetched").write_text("941", encoding="utf-8")
+
+    with pytest.raises(corrector.SubtitleCorrectionError, match=r"logs/\.last_doraemon_materials"):
+        cli.default_target()
+
+
+def test_default_target_falls_back_to_legacy_episode(materials_logs, tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (materials_logs / ".last_fetched").write_text("941\n", encoding="utf-8")
+
+    assert cli.default_target() == tmp_path / "Desktop" / "doraemon_941"
+
+
+def test_default_target_requires_saved_path_or_episode(materials_logs):
+    with pytest.raises(corrector.SubtitleCorrectionError, match="均不存在"):
+        cli.default_target()
+
+
+@pytest.fixture
 def correction_run(tmp_path, monkeypatch):
     materials = tmp_path / "custom materials"
     materials.mkdir()
@@ -154,6 +192,60 @@ def test_subtitle_failure_keeps_generated_synopsis_and_stops_server(correction_r
     assert not (materials / "941_1_jp_fixed.srt").exists()
     assert not (materials / "941_1_zh_fixed.srt").exists()
     assert events == ["start", "synopsis", "tags", "stop"]
+
+
+def test_no_target_processes_saved_materials(correction_run, materials_logs):
+    materials, args, events, _ = correction_run
+    args.target = None
+    (materials_logs / ".last_doraemon_materials").write_text(f"{materials}\n", encoding="utf-8")
+    (materials_logs / ".last_fetched").write_text("999", encoding="utf-8")
+
+    assert cli.main() == 0
+    assert (materials / "941_1_zh_fixed.srt").is_file()
+    assert (materials / "941_2_zh_fixed.srt").is_file()
+    assert events[0] == "start" and events[-1] == "stop"
+
+
+def test_explicit_target_overrides_saved_materials(correction_run, materials_logs, monkeypatch):
+    materials, _, _, _ = correction_run
+    state = materials_logs / ".last_doraemon_materials"
+    state.write_text("nonexistent saved folder\n", encoding="utf-8")
+    default_target = Mock(side_effect=AssertionError("explicit target must not consult saved state"))
+    monkeypatch.setattr(cli, "default_target", default_target)
+
+    assert cli.main() == 0
+    default_target.assert_not_called()
+    assert (materials / "941_1_zh_fixed.srt").is_file()
+    assert state.read_text(encoding="utf-8") == "nonexistent saved folder\n"
+
+
+def test_materials_launchers_record_folder_before_download():
+    root = Path(__file__).resolve().parents[2]
+    for suffix, separator in (("bat", "\\"), ("sh", "/")):
+        launcher = root / "bat" / "doraemon" / f"最新话doraemon素材下载.{suffix}"
+        data = launcher.read_bytes()
+        if suffix == "bat":
+            assert b"\n" not in data.replace(b"\r\n", b"")
+        script = data.decode("utf-8").replace("\r\n", "\n")
+        marker = script.index(".last_doraemon_materials")
+        assert script.index("mkdir") < marker < script.index(f"scripts{separator}download_tver.py")
+        if suffix == "bat":
+            assert marker < script.index("\n:story_only\n")
+        else:
+            assert script.index("exit 0") < marker
+
+
+def test_correction_launcher_displays_default_and_accepts_quoted_override():
+    root = Path(__file__).resolve().parents[2]
+    launcher = root / "bat" / "doraemon" / "06_correct_subtitles.bat"
+    data = launcher.read_bytes()
+    assert b"\n" not in data.replace(b"\r\n", b"")
+    script = data.decode("utf-8").replace("\r\n", "\n")
+    assert ".last_doraemon_materials" in script
+    assert 'Saved materials folder: "%DEFAULT_TARGET%"' in script
+    assert 'set "TARGET=%TARGET:"=%"' in script
+    assert 'scripts\\correct_doraemon_subtitles.py "%TARGET%"' in script
+    assert "scripts\\correct_doraemon_subtitles.py %*" in script
 
 
 def test_materials_launchers_do_not_invoke_translation():

@@ -16,9 +16,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def default_target() -> Path:
+    materials_state = REPO_ROOT / "logs" / ".last_doraemon_materials"
+    if materials_state.is_file():
+        try:
+            folder = materials_state.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeError) as exc:
+            raise SubtitleCorrectionError(f"无法读取 logs/.last_doraemon_materials：{exc}") from exc
+        if not folder:
+            raise SubtitleCorrectionError("logs/.last_doraemon_materials 内容为空，请手动指定素材目录")
+        return Path(folder)
+
     state = REPO_ROOT / "logs" / ".last_fetched"
     if not state.is_file():
-        raise SubtitleCorrectionError("未指定目录，且 logs/.last_fetched 不存在")
+        raise SubtitleCorrectionError("未指定目录，且 logs/.last_doraemon_materials / logs/.last_fetched 均不存在")
     episode = state.read_text(encoding="utf-8").strip()
     if not episode.isdigit():
         raise SubtitleCorrectionError("logs/.last_fetched 内容无效")
@@ -45,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "target",
         nargs="?",
         type=Path,
-        help="包含 *_origin.srt 和同名 *_jp.md 的目录，或单个 *_origin.srt；默认使用最新话桌面目录",
+        help="包含 *_origin.srt 和同名 *_jp.md 的目录，或单个 *_origin.srt；默认使用上次素材下载记录的目录",
     )
     parser.add_argument("--force", action="store_true", help="明确覆盖已有 *_jp_fixed.srt / *_zh_fixed.srt")
     return parser.parse_args()

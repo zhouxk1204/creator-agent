@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal
 chcp 65001 >nul
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
@@ -45,7 +45,14 @@ echo ========================================
 
 set "MAT=%USERPROFILE%\Desktop\doraemon_%ep%"
 if not exist "%MAT%" mkdir "%MAT%"
-echo [materials] %MAT%
+if not exist "%MAT%\" (
+    echo [materials] Failed to create folder: "%MAT%"
+    set "RC=1"
+    goto :done
+)
+echo [materials] "%MAT%"
+"%PY%" -c "import sys; from pathlib import Path; Path(sys.argv[1]).write_text(sys.argv[2] + '\n', encoding='utf-8')" "%REPO_ROOT%\logs\.last_doraemon_materials" "%MAT%"
+if errorlevel 1 ( set "RC=1" & goto :done )
 
 set "DATEARG="
 if not "%airdate%"=="" set "DATEARG=--broadcast-date %airdate%"

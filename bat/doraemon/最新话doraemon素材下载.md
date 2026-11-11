@@ -243,6 +243,14 @@ ComfyUI 不可用或单图放大失败时：
 
 完整模式依赖这两个文件继续执行。
 
+完整模式创建素材目录后，还会记录本次实际使用的绝对路径：
+
+```text
+仓库\logs\.last_doraemon_materials → C:\Users\你的用户名\Desktop\doraemon_941
+```
+
+该路径在下载、切分前保存，后续步骤中断也保留；只查询指定集号简介的模式不会覆盖它。运行 `06_correct_subtitles.bat` 时会显示该目录，直接回车使用，也可以粘贴其他路径覆盖本次输入。macOS / Linux 入口写入同一状态文件，`06_correct_subtitles.sh` 不传路径时同样使用它。`logs/` 为本机运行状态，不随 Git 同步。
+
 如果抓取脚本自己启动 ComfyUI，还可能写：
 
 ```text
