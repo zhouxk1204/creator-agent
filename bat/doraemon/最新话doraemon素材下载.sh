@@ -24,7 +24,12 @@ echo "Synopsis translation runs later in 06_correct_subtitles.sh."
 MAT="$HOME/Desktop/doraemon_$EP"
 mkdir -p "$MAT"
 echo "[materials] $MAT"
-printf '%s\n' "$MAT" > logs/.last_doraemon_materials
+MATERIALS_STATE="logs/.last_doraemon_materials"
+MATERIALS_TMP="${MATERIALS_STATE}.$$"
+trap 'rm -f "$MATERIALS_TMP"' EXIT
+printf '%s\n' "$MAT" > "$MATERIALS_TMP"
+mv -f "$MATERIALS_TMP" "$MATERIALS_STATE"
+trap - EXIT
 
 DATEARG=()
 if [ -n "$AIRDATE" ]; then

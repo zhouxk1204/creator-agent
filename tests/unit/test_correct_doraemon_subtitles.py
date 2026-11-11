@@ -56,6 +56,36 @@ def test_default_target_requires_saved_path_or_episode(materials_logs):
         cli.default_target()
 
 
+def test_prompt_target_uses_displayed_snapshot(materials_logs, tmp_path, monkeypatch, capsys):
+    state = materials_logs / ".last_doraemon_materials"
+    displayed = tmp_path / "first materials"
+    replacement = tmp_path / "replacement materials"
+    state.write_text(f"{displayed}\n", encoding="utf-8-sig")
+
+    def mutate_state(_prompt):
+        state.write_text(f"{replacement}\n", encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr("builtins.input", mutate_state)
+
+    assert cli.prompt_target() == displayed
+    assert str(displayed) in capsys.readouterr().out
+
+
+def test_prompt_target_accepts_copy_as_path_override(materials_logs, tmp_path, monkeypatch):
+    override = tmp_path / "pasted materials"
+    monkeypatch.setattr("builtins.input", lambda _prompt: f'  "{override}"  ')
+
+    assert cli.prompt_target() == override
+
+
+def test_prompt_target_requires_path_when_no_default(materials_logs, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    with pytest.raises(corrector.SubtitleCorrectionError, match="均不存在"):
+        cli.prompt_target()
+
+
 @pytest.fixture
 def correction_run(tmp_path, monkeypatch):
     materials = tmp_path / "custom materials"
@@ -68,7 +98,7 @@ def correction_run(tmp_path, monkeypatch):
             f"# 日文标题{story}\n\n![封面](941_{story}.jpg)\n\nどこでもドアのお話。\n", encoding="utf-8"
         )
     settings = TranslateSettings(project_dir=str(tmp_path / "knowledge"))
-    args = SimpleNamespace(target=materials, force=False)
+    args = SimpleNamespace(target=materials, force=False, prompt_target=False)
     events = []
     prompts = []
     proc = Mock()
@@ -230,21 +260,24 @@ def test_materials_launchers_record_folder_before_download():
         marker = script.index(".last_doraemon_materials")
         assert script.index("mkdir") < marker < script.index(f"scripts{separator}download_tver.py")
         if suffix == "bat":
+            assert script.startswith("@echo off\nsetlocal DisableDelayedExpansion\n")
+            assert "os.replace(temp, target)" in script
             assert marker < script.index("\n:story_only\n")
         else:
+            assert 'mv -f "$MATERIALS_TMP" "$MATERIALS_STATE"' in script
             assert script.index("exit 0") < marker
 
 
-def test_correction_launcher_displays_default_and_accepts_quoted_override():
+def test_correction_launcher_delegates_interactive_target_to_python():
     root = Path(__file__).resolve().parents[2]
     launcher = root / "bat" / "doraemon" / "06_correct_subtitles.bat"
     data = launcher.read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
-    assert ".last_doraemon_materials" in script
-    assert 'Saved materials folder: "%DEFAULT_TARGET%"' in script
-    assert 'set "TARGET=%TARGET:"=%"' in script
-    assert 'scripts\\correct_doraemon_subtitles.py "%TARGET%"' in script
+    assert script.startswith("@echo off\nsetlocal DisableDelayedExpansion\n")
+    assert "scripts\\correct_doraemon_subtitles.py --prompt-target" in script
+    assert "set /p TARGET=" not in script
+    assert "%TARGET%" not in script
     assert "scripts\\correct_doraemon_subtitles.py %*" in script
 
 

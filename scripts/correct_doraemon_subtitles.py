@@ -35,6 +35,33 @@ def default_target() -> Path:
     return Path.home() / "Desktop" / f"doraemon_{int(episode)}"
 
 
+def prompt_target() -> Path:
+    default = None
+    default_error = None
+    try:
+        default = default_target()
+    except SubtitleCorrectionError as exc:
+        default_error = exc
+
+    if default is not None:
+        print(f'  Saved materials folder: "{default}"')
+        prompt = "Materials folder (Enter = saved default; paste another path to override): "
+    else:
+        print(f"  No usable saved folder: {default_error}")
+        prompt = "Materials folder (paste a path; Enter = fail): "
+
+    entered = input(prompt).strip()
+    if len(entered) >= 2 and entered.startswith('"') and entered.endswith('"'):
+        entered = entered[1:-1].strip()
+    if entered:
+        return Path(entered)
+    if default is not None:
+        return default
+    if default_error is not None:
+        raise default_error
+    raise SubtitleCorrectionError("未指定素材目录")
+
+
 def discover_inputs(target: Path) -> list[Path]:
     target = target.expanduser().resolve()
     if target.is_file():
@@ -58,13 +85,16 @@ def parse_args() -> argparse.Namespace:
         help="包含 *_origin.srt 和同名 *_jp.md 的目录，或单个 *_origin.srt；默认使用上次素材下载记录的目录",
     )
     parser.add_argument("--force", action="store_true", help="明确覆盖已有 *_jp_fixed.srt / *_zh_fixed.srt")
+    parser.add_argument("--prompt-target", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        target = args.target or default_target()
+        target = args.target
+        if target is None:
+            target = prompt_target() if args.prompt_target else default_target()
         inputs = discover_inputs(target)
     except SubtitleCorrectionError as exc:
         print(f"错误：{exc}", file=sys.stderr)

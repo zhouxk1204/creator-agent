@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal DisableDelayedExpansion
 chcp 65001 >nul
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
@@ -51,7 +51,7 @@ if not exist "%MAT%\" (
     goto :done
 )
 echo [materials] "%MAT%"
-"%PY%" -c "import sys; from pathlib import Path; Path(sys.argv[1]).write_text(sys.argv[2] + '\n', encoding='utf-8')" "%REPO_ROOT%\logs\.last_doraemon_materials" "%MAT%"
+"%PY%" -c "import os, sys; from pathlib import Path; target = Path(sys.argv[1]); temp = target.with_name(target.name + '.tmp'); temp.write_text(sys.argv[2] + '\n', encoding='utf-8'); os.replace(temp, target)" "%REPO_ROOT%\logs\.last_doraemon_materials" "%MAT%"
 if errorlevel 1 ( set "RC=1" & goto :done )
 
 set "DATEARG="
