@@ -94,11 +94,21 @@ def correction_run(tmp_path, monkeypatch):
         texts = ["どこでもドアだよ。", "のび太くん。", "いこうよ。", "这是任意门。", "大雄。", "走吧。"]
         blocks = [f"{i + 1}\n00:00:0{i % 3},000 --> 00:00:0{i % 3 + 1},000\n{text}" for i, text in enumerate(texts)]
         (materials / f"941_{story}_origin.srt").write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
-        (materials / f"941_{story}_jp.md").write_text(
-            f"# 日文标题{story}\n\n![封面](941_{story}.jpg)\n\nどこでもドアのお話。\n", encoding="utf-8"
-        )
+    (materials / "metadata.json").write_text(
+        json.dumps(
+            {
+                "episode": "0941",
+                "stories": [
+                    {"title": f"日文标题{story}", "synopsis": "どこでもドアのお話。", "image_file": f"941_{story}.jpg"}
+                    for story in (1, 2)
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     settings = TranslateSettings(project_dir=str(tmp_path / "knowledge"))
-    args = SimpleNamespace(target=materials, force=False, prompt_target=False)
+    args = SimpleNamespace(target=materials, force=False, prompt_target=False, refresh_translation=False)
     events = []
     prompts = []
     proc = Mock()
@@ -158,26 +168,29 @@ def test_one_server_for_synopsis_and_subtitles(correction_run, monkeypatch, sing
         assert "严禁从中补写台词" in prompt
         assert "标签：" not in prompt and "#童年回忆" not in prompt and "![封面]" not in prompt
     for story in stories:
-        assert (materials / f"941_{story}_zh.md").is_file()
+        data = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+        assert data["stories"][story - 1]["zh"]["title"] == "任意门"
         jp = (materials / f"941_{story}_jp_fixed.srt").read_text(encoding="utf-8")
         zh = (materials / f"941_{story}_zh_fixed.srt").read_text(encoding="utf-8")
         corrector.validate_parallel_srt(jp, zh)
     for path, content in originals.items():
-        assert path.read_bytes() == content
+        if path.name != "metadata.json":
+            assert path.read_bytes() == content
+    assert not list(materials.glob("*.md"))
     if single_file:
-        assert not (materials / "941_2_zh.md").exists()
+        assert data["stories"][1]["zh"] is None
 
 
 def test_synopsis_failure_stops_only_matching_story(correction_run, monkeypatch):
     materials, _, events, _ = correction_run
-    translate_note = cli.translate_note
+    translate_metadata = cli.translate_metadata
 
-    def fail_first(note, settings):
-        if note.name == "941_1_jp.md":
+    def fail_first(path, story_id, settings, refresh=False):
+        if story_id == "941_1":
             raise ValueError("synopsis failed")
-        return translate_note(note, settings)
+        return translate_metadata(path, story_id, settings, refresh=refresh)
 
-    monkeypatch.setattr(cli, "translate_note", fail_first)
+    monkeypatch.setattr(cli, "translate_metadata", fail_first)
     assert cli.main() == 1
     assert not (materials / "941_1_jp_fixed.srt").exists()
     assert (materials / "941_2_zh_fixed.srt").is_file()
@@ -190,27 +203,31 @@ def test_tag_failure_still_corrects_subtitles(correction_run, monkeypatch):
     assert cli.main() == 1
     assert (materials / "941_1_zh_fixed.srt").is_file()
     assert (materials / "941_2_zh_fixed.srt").is_file()
-    assert "标签：" not in (materials / "941_1_zh.md").read_text(encoding="utf-8")
+    data = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+    assert data["stories"][0]["publish"]["douyin"]["tags"] == []
     assert events[-1] == "stop"
 
 
 def test_existing_subtitles_protect_synopsis_until_force(correction_run):
     materials, args, events, _ = correction_run
     args.target = materials / "941_1_origin.srt"
-    zh_note = materials / "941_1_zh.md"
+    metadata = materials / "metadata.json"
+    original_metadata = metadata.read_bytes()
     jp_fixed = materials / "941_1_jp_fixed.srt"
-    zh_note.write_text("已有中文简介", encoding="utf-8")
     jp_fixed.write_text("已有字幕", encoding="utf-8")
     assert cli.main() == 1
     assert events == ["start", "stop"]
-    assert zh_note.read_text(encoding="utf-8") == "已有中文简介"
+    assert metadata.read_bytes() == original_metadata
     assert jp_fixed.read_text(encoding="utf-8") == "已有字幕"
 
     args.force = True
     events.clear()
     assert cli.main() == 0
     assert events == ["start", "synopsis", "tags", "correct", "translate", "stop"]
-    assert "任意门" in zh_note.read_text(encoding="utf-8")
+    assert json.loads(metadata.read_text(encoding="utf-8"))["stories"][0]["zh"]["title"] == "任意门"
+    events.clear()
+    assert cli.main() == 0
+    assert events == ["start", "correct", "translate", "stop"]
 
 
 def test_subtitle_failure_keeps_generated_synopsis_and_stops_server(correction_run, monkeypatch):
@@ -218,7 +235,8 @@ def test_subtitle_failure_keeps_generated_synopsis_and_stops_server(correction_r
     args.target = materials / "941_1_origin.srt"
     monkeypatch.setattr(corrector, "chat", Mock(side_effect=RuntimeError("model failed")))
     assert cli.main() == 1
-    assert (materials / "941_1_zh.md").is_file()
+    data = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+    assert data["stories"][0]["zh"]["title"] == "任意门"
     assert not (materials / "941_1_jp_fixed.srt").exists()
     assert not (materials / "941_1_zh_fixed.srt").exists()
     assert events == ["start", "synopsis", "tags", "stop"]

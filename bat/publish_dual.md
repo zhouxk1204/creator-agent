@@ -1,4 +1,4 @@
-# publish_dual.bat — 一键发布到 抖音 + B站
+# publish_dual.bat — 从 metadata.json 发布到抖音 + B站
 
 基于 [social-auto-upload](https://github.com/dreammis/social-auto-upload)（sau CLI，
 vendored 在 `tools/social-auto-upload/`，独立 Python 3.12 venv，与主项目 .venv 互不影响）。
@@ -7,7 +7,7 @@ vendored 在 `tools/social-auto-upload/`，独立 Python 3.12 venv，与主项�
 
 双击运行：
 
-```
+```bat
 bat\setup_publish.bat
 ```
 
@@ -20,80 +20,74 @@ bat\setup_publish.bat
 在终端里交互执行（二维码登录，不能用脚本代替）：
 
 ```bat
-tools\social-auto-upload\.venv\Scripts\sau.exe douyin   login --account default --headed
+tools\social-auto-upload\.venv\Scripts\sau.exe douyin login --account default --headed
 tools\social-auto-upload\.venv\Scripts\sau.exe bilibili login --account default
 ```
 
-- 抖音：弹出浏览器，扫码登录创作者中心；cookie 存在
-  `tools\social-auto-upload\cookies\douyin_default.json`。
+- 抖音：弹出浏览器，扫码登录创作者中心；cookie 存在 `tools\social-auto-upload\cookies\douyin_default.json`。
 - B站：终端里显示二维码（不完整的话打开生成的 `qrcode.png` 扫）；用哔哩哔哩 App 扫码。
-- 想换账号名就把 `default` 改成别的名字（如 `main`），发布时在 meta.txt 里对应改
-  `douyin_account=` / `bilibili_account=`。
-
-## 抖音单平台快捷入口
-
-只想发抖音时，双击 `bat\publish_douyin.bat`，粘贴发布文件夹路径并回车即可。
-它会固定使用有头浏览器，仍会在发布前显示摘要并要求输入 `Y` 确认。详见
-`bat/publish_douyin.md`。
+- 想换账号名就把 `default` 改成别的名字（如 `main`），发布时传入 `--douyin-account main` / `--bilibili-account main`。
 
 ## 每次发布
 
-1. 建好发布目录，把素材放进去。**格式标准见 `docs/publish-package.md`**（唯一权威定义，
-   含给 AI 的生成提示词）；模板可直接复制：`docs/publish-template/`。
-
-```
-publish\2026-10-13-doraemon-935\
-    video.mp4           必须，且目录里只能有一个视频文件
-    title.txt           必须，第一行 = 标题（≤55字）
-    desc.txt            建议，整个文件 = 简介（多行可以）
-    tags.txt            建议，标签，逗号/空格/换行分隔都行（≤12个）
-    cover-douyin-portrait.jpg  建议，抖音竖封面 3:4
-    cover-douyin-landscape.jpg 建议，抖音横封面 4:3
-    cover-douyin.jpg           兼容旧格式，抖音竖封面 3:4
-    cover-bilibili.jpg         建议，B站封面 16:10 横版
-    cover.jpg                  可选，通用封面回退
-    meta.txt            可选，key=value 发布参数（tid/schedule/账号/跳过）
-```
-
-抖音支持两张可复用公共封面，放到：
+1. 直接使用剧集素材目录的 `metadata.json`，不另做文本发布包。**唯一格式标准见 [`docs/publish-package.md`](../docs/publish-package.md)**。
+2. 先完成 `06` 的中文简介翻译；在所选故事的 `publish` 中明确填写最终视频路径、抖音两张封面路径，检查标题与平台标签。
 
 ```text
-C:\Users\34696\Desktop\publish-template\
-    cover-douyin-portrait.jpg     竖封面，建议 1080×1440（3:4）
-    cover-douyin-landscape.jpg    横封面，建议 1440×1080（4:3）
+Desktop\doraemon_941\
+    metadata.json                 唯一资料与发布配置
+    941_1.jpg                     B站直接使用 image_file
+    941_1_final.mp4                publish.video_path 明确指定
+    941_1_douyin_portrait.jpg      抖音竖封面，3:4
+    941_1_douyin_landscape.jpg     抖音横封面，4:3
 ```
 
-每次上传会自动使用这两张图；发布目录中的同名文件优先。也支持 `.jpeg` / `.png`。
-不需要每次复制公共封面，旧的 `cover-douyin.jpg` 仍可作为竖封面使用。
+- 标题共用 `publish.title`，默认 `哆啦a梦941 XXXXX`。
+- 抖音：`publish.douyin.tags` 最多 5 个，描述由这些 `#标签` 组成；两个封面路径必须指向不同文件。
+- B站：`publish.bilibili.tags` 最多 11 个；描述直接读取 `zh.synopsis`，**保留换行**；封面直接读取 `image_file`，不重复配置。
+- 所有相对素材路径以 metadata.json 所在目录为基准，允许绝对路径。目录可有多个视频，但不会自动猜选。
+- 不再读取旧文本发布包或旧公共/通用封面目录，也不会自动删除原有文件。
 
-1. 双击 `bat\publish_dual.bat`（publish\ 下只有一个候选目录时自动选中），
-   或显式指定：
+3. 先校验：
 
 ```bat
-bat\publish_dual.bat publish\2026-10-13-doraemon-935
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
 ```
 
-1. 屏幕上会列出 目录/视频/标题/抖音声明/抖音合集/封面/平台 摘要，输入 `Y` 确认后开始发。
+4. 双击 `bat\publish_dual.bat`：显示 `logs/.last_doraemon_materials` 保存的上次素材目录，回车使用默认，或粘贴其他目录/metadata.json（可带引号）。多个故事时输入 `941_1` 等故事标识。也可显式指定：
+
+```bat
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941\metadata.json" --story 941_1
+```
+
+5. 屏幕上列出 metadata/故事/视频/标题/标签/简介/封面摘要，输入 `Y` 后才开始上传。
    抖音自主声明固定选择 **「虚构演绎，仅供娱乐」**，设置失败会停止发布；合集固定选择
    **「哆啦A梦2026合集」**（需已存在于创作者账号，找不到时会警告并保持未归集）。
-   先发抖音，再发B站；一个失败不影响另一个，失败的可以单独重跑：
+   先发抖音再发B站；一个失败不影响另一个。仅重试失败平台，避免重复发布已成功的平台：
 
 ```bat
-bat\publish_dual.bat publish\xxx --only bilibili
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only bilibili
 ```
 
-## meta.txt 支持的键
+## 抖音单平台快捷入口
 
-见 `docs/publish-package.md` 第 2 节（含 B站分区 tid 速查）。
+只想发抖音时，双击 `bat\publish_douyin.bat`，选择素材目录和故事即可。
+它固定使用有头浏览器，仍在发布前显示摘要并要求输入 `Y` 确认。详见 [`publish_douyin.md`](./publish_douyin.md)。
 
 ## 其他参数
 
 ```bat
-bat\publish_dual.bat publish\xxx --dry-run      只打印将要执行的 sau 命令，不发布
-bat\publish_dual.bat publish\xxx --yes          跳过 Y 确认（配合计划任务用）
-bat\publish_dual.bat publish\xxx --headed       抖音上传时显示浏览器窗口（排错用）
-bat\publish_dual.bat publish\xxx --schedule "2026-10-14 12:00"
+:: 只校验和打印 sau 命令，不发布
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
+:: 明确跳过 Y 确认（自动化任务应同时指定路径和故事）
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --yes
+:: 抖音上传时显示浏览器
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --headed
+:: 覆盖定时发布配置和B站分区
+bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --schedule "2026-11-14 12:00" --tid 24
 ```
+
+账号参数是 `--douyin-account` / `--bilibili-account`，默认均为 `default`。只发一个平台时仅校验该平台所需的标签和封面。
 
 ## 常见问题
 
@@ -101,9 +95,9 @@ bat\publish_dual.bat publish\xxx --schedule "2026-10-14 12:00"
   改写页面 CSP、阻止抖音上传组件启动 `blob:` Worker 导致的，并不是视频真的已经上传但网速慢。
   运行一次 `bat\setup_publish.bat`，它会安装上游验证过的 Patchright **1.64.4** 和匹配浏览器。
   上传没有越过这一步时，视频预览和封面设置也不会生成；先修复上传，再检查封面。
-- **看不到抖音上传进度条**：默认使用无头浏览器，不会显示窗口。重跑时加 `--headed`：
+- **看不到抖音上传进度条**：双平台入口默认无头，不显示窗口。加 `--headed`，或使用 `publish_douyin.bat`：
   ```bat
-  bat\publish_dual.bat publish\xxx --only douyin --headed
+  bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only douyin --headed
   ```
   终端也会每 10 秒打印页面实际上传状态（包含页面提供的百分比）。
 - **抖音反复显示“上传失败”**：当前版本最多尝试 3 次、总等待上限 30 分钟，不会无限重传。

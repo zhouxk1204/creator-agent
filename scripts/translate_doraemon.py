@@ -1,24 +1,12 @@
-"""Translate Doraemon episode notes (title + synopsis) JA -> ZH, plus tags.
+"""Translate Doraemon Japanese metadata and save Chinese context and platform tags.
 
-Reads ``~/Desktop/doraemon_{ep}/{ep}_{i}_jp.md`` written by ``fetch_doraemon.py``
-and writes ``{ep}_{i}_zh.md`` alongside it, with the translated title, local
-cover link, synopsis and publishing tags.
-
-Tags are generated from the *translated* title+synopsis (Douyin/Bilibili style
-hashtags): a couple of base hot tags plus story-specific ones (characters,
-props, plot hooks) — never just generic "#动漫 #动画" filler.
-
-Uses the same local OpenAI-compatible LLM server as the subtitle translator
-(``translate`` section of config/settings.yaml — llama.cpp Qwen3.5-9B by
-default). The server must already be running; bat/doraemon/02_fetch_doraemon.bat starts it via
-:ensure_server before invoking this script.
-
-Usage:
-    uv run python scripts/translate_doraemon.py 934
+Reads ~/Desktop/doraemon_{ep}/metadata.json. No Markdown sidecars are produced.
+Uses the configured local OpenAI-compatible server, shared with subtitle processing.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -27,6 +15,16 @@ import httpx
 from fetch_doraemon import desktop_episode_dir
 
 from creator_agent.config import load_settings
+from creator_agent.doraemon.metadata import (
+    MetadataError,
+    get_story,
+    load_metadata,
+    save_tags,
+    save_translation,
+    source_hash,
+    translation_is_current,
+    validate_tags,
+)
 from creator_agent.translate.llm import chat
 
 # Make non-ASCII print correctly on the Windows console.
@@ -43,10 +41,10 @@ SYSTEM_PROMPT = """你是一名专业日中翻译，负责翻译动漫《哆啦A
 3. 人名统一：ドラえもん→哆啦A梦、のび太→大雄、しずか→静香、ジャイアン→胖虎、スネ夫→小夫
 4. 秘密道具名翻译简洁统一
 5. 拟声词、效果音也要翻译成中文拟声词（如 ハクション→阿嚏），译文中不要保留日文假名
-6. 只输出翻译结果，不添加任何解释"""
+6. 只输出翻译结果，不添加任何解释
+7. 保留简介的段落和换行，不合并成单段"""
 
 _KANA = re.compile(r"[぀-ヿ]")
-_COVER_EMBED = re.compile(r"^\s*!(?:\[\[.+\]\]|\[[^\]]*\]\(.+\))\s*$")
 
 TAG_SYSTEM_PROMPT = """你是一名短视频运营专家，深谙抖音/B站上《哆啦A梦》粉丝圈的流量密码，为剧集视频生成话题标签。
 
@@ -54,7 +52,7 @@ TAG_SYSTEM_PROMPT = """你是一名短视频运营专家，深谙抖音/B站上�
 不要书面化的剧情概括。
 
 要求：
-1. 总共 8~12 个标签
+1. 总共 8~11 个标签，最精准、最适合抖音的标签放在前 5 个
 2. 固定流量标签 2~4 个，按契合度从粉丝圈高热词中挑：
    #哆啦A梦 #哆啦A梦新番 #蓝胖子 #童年回忆 #童年回忆杀 #治愈系 #搞笑日常 #藤子F不二雄
 3. 本集内容标签 5~8 个，必须用粉丝圈"行话"，让人一眼认出是哪一集、并且想点进去：
@@ -108,7 +106,7 @@ def parse_tags(reply: str) -> list[str]:
             tags.append(token)
     if len(tags) < 5:
         raise ValueError(f"too few usable tags ({len(tags)}): {tags}")
-    return tags[:12]
+    return tags[:11]
 
 
 def generate_tags(settings, zh_title: str, zh_synopsis: str) -> list[str]:
@@ -136,21 +134,6 @@ def _too_much_kana(text: str) -> bool:
 
 _TITLE_LINE = re.compile(r"^\s*标题\s*[:：]\s*(.+?)\s*$")
 _SYNOPSIS_LINE = re.compile(r"^\s*简介\s*[:：]\s*(.*)$")
-
-
-def parse_note(path: Path) -> tuple[str, str, str | None]:
-    """Read a title and synopsis, keeping image embeds out of the model input."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines or not lines[0].startswith("# "):
-        raise ValueError(f"{path.name}: expected '# <title>' on the first line")
-    cover: str | None = None
-    body_lines: list[str] = []
-    for line in lines[1:]:
-        if _COVER_EMBED.match(line):
-            cover = cover or line.strip()
-            continue
-        body_lines.append(line)
-    return lines[0][2:].strip(), "\n".join(body_lines).strip(), cover
 
 
 def build_user_prompt(title: str, synopsis: str) -> str:
@@ -210,66 +193,73 @@ def translate_story(settings, title: str, synopsis: str) -> tuple[str, str]:
     raise ValueError(f"translation failed after retry: {last_err}")
 
 
-def translate_note(note: Path, settings) -> tuple[str, str, bool]:
-    title, synopsis, cover = parse_note(note)
-    zh_title, zh_synopsis = translate_story(settings, title, synopsis)
-    zh_path = note.with_name(f"{note.stem.removesuffix('_jp')}_zh.md")
+def translate_metadata(path: Path, story_id: str, settings, refresh: bool = False) -> tuple[str, str, bool]:
+    story = get_story(load_metadata(path), story_id)
+    if not story["title"].strip() or not story["synopsis"].strip():
+        raise MetadataError(f"{story_id} 日文标题或简介为空")
+    expected_hash = source_hash(story)
+    current = translation_is_current(story)
+    if current and not refresh:
+        zh_title, zh_synopsis = story["zh"]["title"], story["zh"]["synopsis"]
+    else:
+        zh_title, zh_synopsis = translate_story(settings, story["title"], story["synopsis"])
+        save_translation(path, story_id, expected_hash, zh_title, zh_synopsis)
+        print(f"  translate : {story_id} -> metadata.json  {zh_title}")
 
-    tags: list[str] = []
-    tag_err: Exception | None = None
+    if current and not refresh:
+        try:
+            for platform, maximum in (("douyin", 5), ("bilibili", 11)):
+                validate_tags(story["publish"][platform]["tags"], maximum)
+            print(f"  reuse     : {story_id} 中文简介和标签")
+            return zh_title, zh_synopsis, True
+        except MetadataError:
+            pass
+
     try:
         tags = generate_tags(settings, zh_title, zh_synopsis)
-    except (ValueError, httpx.HTTPError) as exc:
-        tag_err = exc
-
-    out_lines = [f"# {zh_title}", ""]
-    if cover:
-        out_lines += [cover, ""]
-    out_lines += zh_synopsis.splitlines()
-    if tags:
-        out_lines += ["", "标签：" + " ".join(f"#{t}" for t in tags)]
-    zh_path.write_text("\n".join(out_lines).strip() + "\n", encoding="utf-8")
-    if tag_err is None:
-        print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}  [{len(tags)} tags]")
-    else:
-        print(f"  translate : {note.name} -> {zh_path.name}  {zh_title}")
-        print(f"  TAG FAILED: {note.name} ({tag_err})")
-    return zh_title, zh_synopsis, tag_err is None
+        validate_tags(tags, 11)
+    except Exception as exc:
+        # A tag-service failure must not discard a saved synopsis or stop subtitles.
+        print(f"  TAG FAILED: {story_id} ({exc})")
+        return zh_title, zh_synopsis, False
+    save_tags(path, story_id, expected_hash, zh_title, zh_synopsis, tags)
+    print(f"  tags      : {story_id} -> metadata.json")
+    return zh_title, zh_synopsis, True
 
 
-def main(episode: str) -> None:
+def main(episode: str, refresh: bool = False) -> None:
     if not episode.strip().isdigit():
         print(f"Invalid episode number: {episode!r} (expected e.g. 934)")
         sys.exit(2)
-    ep_short = str(int(episode))
-
-    note_dir = desktop_episode_dir(ep_short)
-    notes = sorted(note_dir.glob(f"{ep_short}_*_jp.md"))
-    if not notes:
-        print(f"No notes matching {ep_short}_*_jp.md in {note_dir}")
-        print("Run scripts/fetch_doraemon.py first.")
+    path = desktop_episode_dir(str(int(episode))) / "metadata.json"
+    try:
+        data = load_metadata(path)
+        if int(data["episode"]) != int(episode):
+            raise MetadataError("目录 metadata 的集号与请求不匹配")
+    except MetadataError as exc:
+        print(f"Run scripts/fetch_doraemon.py first: {exc}")
         sys.exit(1)
 
     settings = load_settings().translate
     failed = 0
-    for note in notes:
+    for story in data["stories"]:
         try:
-            _, _, tags_ok = translate_note(note, settings)
+            _, _, tags_ok = translate_metadata(path, story["story_id"], settings, refresh=refresh)
         except (ValueError, httpx.HTTPError, OSError) as exc:
             failed += 1
-            print(f"  FAILED    : {note.name} ({exc})")
+            print(f"  FAILED    : {story['story_id']} ({exc})")
             continue
         if not tags_ok:
             failed += 1
-
     if failed:
-        print(f"\n{failed}/{len(notes)} stories failed to translate.")
+        print(f"\n{failed}/{len(data['stories'])} stories failed to translate.")
         sys.exit(1)
-    print(f"\nTranslated {len(notes)} stories into {note_dir}")
+    print(f"\nTranslated {len(data['stories'])} stories into {path}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: translate_doraemon.py <episode_number>  (e.g. 934)")
-        sys.exit(2)
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description="翻译 metadata 中的日文简介并保存平台标签")
+    parser.add_argument("episode")
+    parser.add_argument("--refresh-translation", action="store_true", help="重新翻译中文简介并重建两平台标签")
+    args = parser.parse_args()
+    main(args.episode, refresh=args.refresh_translation)

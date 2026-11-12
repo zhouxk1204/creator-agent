@@ -63,7 +63,7 @@ def test_parse_tags_rejects_too_few_tags():
         parse_tags("标签：#哆啦A梦 #大雄 #新番")
 
 
-def test_parse_tags_caps_at_twelve():
+def test_parse_tags_caps_at_eleven():
     reply = "标签：" + " ".join(f"#标签{i}" for i in range(20))
     tags = parse_tags(reply)
-    assert len(tags) == 12
+    assert len(tags) == 11

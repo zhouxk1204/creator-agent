@@ -204,11 +204,11 @@ Bootstrap 失败时流程立即退出。
 
 | 文件 | 内容 |
 | --- | --- |
-| `metadata.json` | 补零集号、故事页 URL、放送日、总标题、每个故事标题/简介/版权/本地图片名（`image_file`）；远程 `image` 地址仅用于下载，不写入 JSON |
+| `metadata.json` | schema v2：补零集号、故事页 URL、ISO 放送日、总标题，以及各故事 ID/序号、日文标题/简介、版权、本地图片名 `image_file`；预留 `zh` 和 `publish` |
 | `941_1.jpg` | 第一个故事的 TV Asahi 原始图片 |
 | `941_2.jpg` | 第二个故事的 TV Asahi 原始图片 |
-| `941_1_jp.md` | 第一个故事的日文标题、封面嵌入和日文简介 |
-| `941_2_jp.md` | 第二个故事的日文标题、封面嵌入和日文简介 |
+
+日中简介不再生成 Markdown 文件；远程 `image` 地址仅用于下载，不写入 JSON。标题去掉 `「」`，简介中的引号和换行保留。初次抓取时 `zh`、发布标题/视频/抖音封面路径为 null，标签为空数组；重新抓取保留既有中文、人工发布配置和未知字段。日文内容变化后旧译文会被判过期，须重新翻译。完整字段见 [metadata 标准](../../docs/publish-package.md)。
 
 如果 TV Asahi 页面包含不同扩展名，故事图片会保留该扩展名，不保证一定是 `.jpg`。
 
@@ -292,8 +292,9 @@ bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
 `06` 为每个待处理故事执行：
 
 ```text
-读取同名 *_jp.md
-→ 翻译标题/简介并生成发布标签，写入 *_zh.md
+按 941_1_origin.srt 匹配 metadata 中 story_id = 941_1
+→ 读取同故事日文 title/synopsis，翻译并保存 zh 和 publish 平台标签
+→ 重新从 metadata 读取该故事日中背景
 → 日文字幕矫正
 → 中文字幕重翻
 ```
@@ -577,8 +578,6 @@ C:\test\run_log.txt
 ├── 941_2.jpg
 ├── 941_1_4k.jpg              # ComfyUI 成功时存在
 ├── 941_2_4k.jpg              # ComfyUI 成功时存在
-├── 941_1_jp.md
-├── 941_2_jp.md
 ├── 941.mp4
 ├── 941_split.json
 ├── 941_1.mp4
@@ -609,6 +608,7 @@ C:\test\
 仓库\logs\
 ├── .last_fetched
 ├── .last_fetched_date
+├── .last_doraemon_materials
 └── comfyui_server.log        # 仅脚本自动启动 ComfyUI 时可能存在
 ```
 
@@ -617,7 +617,7 @@ C:\test\
 | 步骤 | 主要输入 | 主要输出 | 输出位置 |
 | --- | --- | --- | --- |
 | 抓取资料 | 集号、TV Asahi 页面和图片 | metadata、故事图、日文简介、可选放大封面 | 桌面 |
-| 后续 `06` 简介前置 | 同故事 `_jp.md`、本地 LLM | `_zh.md` 中文简介和发布标签 | 同一素材目录，不属于下载流程 |
+| 后续 `06` 简介前置 | 同故事 metadata 日文 title/synopsis、本地 LLM | 更新 metadata 的 zh、发布标题和平台标签 | 同一素材目录，不属于下载流程 |
 | TVer 下载 | 放送日、TVer API/HLS | 仅整集 MP4 | 桌面 |
 | 故事分割 | 整集 MP4 | split JSON、故事 MP4、可选预览图 | 桌面 |
 | 超分暂存 | 前两个故事 MP4 | 覆盖复制的故事 MP4 | `C:\test\temps` |
@@ -649,7 +649,7 @@ C:\test\
 | 交互输入集号 | 有 | 无，只读命令行参数 |
 | 自动启动/关闭翻译服务 | 不执行，移至 `06` | 不执行，移至 `06` |
 | TV Asahi 抓取 | 有 | 有 |
-| 日文简介输出 | 桌面 `_jp.md` | 桌面 `_jp.md` |
+| 日文简介输出 | metadata.json 中的故事字段 | metadata.json 中的故事字段 |
 | 简介翻译 | 移至 `06` 前置 | 移至 `06` 前置 |
 | TVer 下载 | 有 | 有 |
 | 视频分割 | 有 | 有 |
@@ -663,12 +663,14 @@ C:\test\
 
 以下是根据现有实现整理的观察项，是否调整由实际使用需求决定。
 
-### 15.1 简介素材已统一到桌面
+### 15.1 简介和发布信息已统一到 metadata
 
-- `fetch_doraemon.py` 在桌面生成 `941_1_jp.md` 等日文简介
-- 后续 `06` 调用 `translate_doraemon.py` 的单故事翻译函数，在同目录写入 `941_1_zh.md`，再衔接字幕处理
-- 封面使用同目录图片的 Markdown 相对链接，不再依赖或写入 Obsidian Vault
-- Windows 和 macOS/Linux 使用相同的简介输入输出规则；已有 Vault 文件不会自动删除
+- `fetch_doraemon.py` 在桌面 metadata v2 保存每个故事的日文标题/简介和 ID
+- 后续 `06` 调用 `translate_doraemon.py` 的单故事翻译函数，更新同一份 JSON 的 `zh`、发布标题和平台标签，再从 JSON 读取匹配背景进行字幕处理
+- 有效中文默认复用；`--refresh-translation` 刷新译文，`--force` 仅允许覆盖字幕
+- B站发布直接使用 `zh.synopsis`（保留换行）和 `image_file`；抖音使用最多 5 个标签作为描述及两个独立封面路径
+- 所有平台素材路径相对 metadata 目录解析，也可写绝对路径；不依赖或写入 Obsidian Vault
+- Windows 和 macOS/Linux 使用相同资料格式；旧简介 Markdown 和旧文本发布包不再生成/读取，但不会自动删除
 
 ### 15.2 `C:\test\temps` 不清理
 
@@ -692,7 +694,7 @@ C:\test\
 
 当前素材输出分布：
 
-1. 桌面 `doraemon_<集号>`：抓取资料、整集及分割视频；后续 `06` 另写中文简介和字幕
+1. 桌面 `doraemon_<集号>`：抓取资料、整集及分割视频；后续 `06` 更新 metadata 中文字段并另写字幕
 2. `C:\test`：超分暂存与最终视频
 
 可评估：超分视频是否也应写回桌面集目录，使 `C:\test` 只作为临时缓存。

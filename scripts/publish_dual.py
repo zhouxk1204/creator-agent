@@ -1,35 +1,10 @@
-"""Dual-platform video publisher: Douyin + Bilibili via social-auto-upload (sau).
+"""Publish one Doraemon metadata story to Douyin/Bilibili via social-auto-upload.
 
-Reads a publish directory prepared by the user:
-
-    publish/<name>/
-        video.mp4          # required: exactly one video file
-        title.txt          # required: first non-empty line = title
-        desc.txt           # optional: whole file = description (multi-line OK)
-        tags.txt           # optional: tags, comma / space / newline separated
-        cover-douyin-portrait.jpg  # optional: 3:4 portrait cover for Douyin
-        cover-douyin-landscape.jpg # optional: 4:3 landscape cover for Douyin
-        cover-douyin.jpg           # optional legacy portrait cover
-        cover-bilibili.jpg         # optional: 16:10 landscape cover for Bilibili
-        cover.jpg                  # optional: fallback cover
-        meta.txt                   # optional: key=value lines, see META KEYS below
-
-Reusable Douyin covers can live in ~/Desktop/publish-template with the same
-portrait/landscape filenames. Per-video covers take precedence.
-
-The canonical format spec (with AI-generation prompt) is docs/publish-package.md.
-
-META KEYS (meta.txt):
-    tid              Bilibili category id (required for bilibili unless --tid)
-    schedule         "YYYY-MM-DD HH:MM" scheduled publish time (both platforms)
-    douyin_account   sau douyin account name   (default: --douyin-account / "default")
-    bilibili_account sau bilibili account name (default: --bilibili-account / "default")
-    douyin           "0"/"no" -> skip douyin
-    bilibili         "0"/"no" -> skip bilibili
-
-Stdlib-only so any project Python can run it. The actual upload is done by the
-`sau` CLI installed under tools/social-auto-upload/.venv (bat/setup_publish.bat).
+This entry point and its metadata dependency use only the standard library,
+so they also run inside social-auto-upload's separate virtual environment.
 """
+
+from __future__ import annotations
 
 import argparse
 import subprocess
@@ -37,291 +12,222 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SAU_ROOT = REPO_ROOT / "tools" / "social-auto-upload"
-PUBLISH_ROOT = REPO_ROOT / "publish"
-SHARED_COVER_ROOT = Path.home() / "Desktop" / "publish-template"
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from creator_agent.doraemon.metadata import (  # noqa: E402
+    MetadataError,
+    get_story,
+    load_metadata,
+    metadata_path,
+    resolve_asset,
+    translation_is_current,
+    validate_tags,
+)
+
+SAU_ROOT = REPO_ROOT / "tools" / "social-auto-upload"
 VIDEO_EXTS = {".mp4", ".mov", ".flv", ".mkv", ".avi"}
 COVER_EXTS = {".jpg", ".jpeg", ".png"}
-DOUYIN_PORTRAIT_STEM = "cover-douyin-portrait"
-DOUYIN_LANDSCAPE_STEM = "cover-douyin-landscape"
 DEFAULT_DOUYIN_DECLARATION = "虚构演绎，仅供娱乐"
 DEFAULT_DOUYIN_COLLECTION = "哆啦A梦2026合集"
 
 
 def sau_exe() -> Path:
-    if sys.platform == "win32":
-        return SAU_ROOT / ".venv" / "Scripts" / "sau.exe"
-    return SAU_ROOT / ".venv" / "bin" / "sau"
+    return SAU_ROOT / ".venv" / ("Scripts/sau.exe" if sys.platform == "win32" else "bin/sau")
 
 
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8").strip()
-
-
-def read_meta(path: Path) -> dict[str, str]:
-    meta: dict[str, str] = {}
-    if not path.exists():
-        return meta
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        meta[key.strip().lower()] = value.strip()
-    return meta
-
-
-def truthy_off(value: str | None) -> bool:
-    return value is not None and value.lower() in {"0", "no", "false", "off", "skip"}
-
-
-def find_single(folder: Path, exts: set[str], what: str, required: bool) -> Path | None:
-    found = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in exts)
-    if not found:
-        if required:
-            raise SystemExit(f"[X] {folder} 里没有{what}（支持: {' '.join(sorted(exts))}）")
-        return None
-    if len(found) > 1:
-        names = ", ".join(p.name for p in found)
-        raise SystemExit(f"[X] {folder} 里有多个{what}，只保留一个: {names}")
-    return found[0]
-
-
-def normalize_tags(raw: str) -> str:
-    for ch in ("，", "\n", "\t", " "):
-        raw = raw.replace(ch, ",")
-    return ",".join(t for t in (x.strip() for x in raw.split(",")) if t)
-
-
-def resolve_covers(folder: Path) -> tuple[Path | None, Path | None, Path | None]:
-    """Resolve (Douyin portrait, Douyin landscape, Bilibili) covers.
-
-    Per-video files take precedence over reusable covers in the Desktop template.
-    Legacy cover-douyin/cover files remain portrait/Bilibili fallbacks.
-    """
-
-    def images_in(directory: Path) -> list[Path]:
-        if not directory.is_dir():
-            return []
-        return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in COVER_EXTS)
-
-    def named(images: list[Path], stem: str) -> Path | None:
-        return next((p for p in images if p.stem.lower() == stem), None)
-
-    images = images_in(folder)
-    generic = named(images, "cover")
-    douyin_portrait = named(images, DOUYIN_PORTRAIT_STEM) or named(images, "cover-douyin") or generic
-    douyin_landscape = named(images, DOUYIN_LANDSCAPE_STEM)
-    bilibili = named(images, "cover-bilibili") or generic
-
-    if douyin_portrait is None and bilibili is None:
-        unnamed = [p for p in images if not p.stem.lower().startswith("cover-")]
-        if len(unnamed) == 1:
-            douyin_portrait = bilibili = unnamed[0]
-        elif len(unnamed) > 1:
-            names = ", ".join(p.name for p in images)
-            raise SystemExit(f"[X] 有多张图片，无法判断封面：请按 docs/publish-package.md 命名 （现有: {names}）")
-
-    shared = images_in(SHARED_COVER_ROOT)
-    douyin_portrait = douyin_portrait or named(shared, DOUYIN_PORTRAIT_STEM)
-    douyin_landscape = douyin_landscape or named(shared, DOUYIN_LANDSCAPE_STEM)
-    return douyin_portrait, douyin_landscape, bilibili
-
-
-def cover_label(path: Path | None) -> str:
-    if path is None:
-        return "（无，自动截取）"
-    source = "公共" if path.is_relative_to(SHARED_COVER_ROOT) else "本次"
-    return f"{path.name}（{source}）"
+def required_asset(path: Path, value, extensions: set[str]) -> Path:
+    asset = resolve_asset(path, value)
+    if not asset.is_file() or asset.suffix.lower() not in extensions:
+        raise MetadataError(f"素材不存在或格式不支持：{asset}")
+    return asset
 
 
 class PublishJob:
-    def __init__(self, folder: Path, args: argparse.Namespace):
-        self.folder = folder
-        self.video = find_single(folder, VIDEO_EXTS, "视频文件", required=True)
-        self.cover_douyin_portrait, self.cover_douyin_landscape, self.cover_bilibili = resolve_covers(folder)
-
-        title_file = folder / "title.txt"
-        if not title_file.exists():
-            raise SystemExit(f"[X] 缺少 {title_file}（第一行作为标题）")
-        self.title = next((ln.strip() for ln in title_file.read_text(encoding="utf-8").splitlines() if ln.strip()), "")
-        if not self.title:
-            raise SystemExit(f"[X] {title_file} 是空的")
-
-        desc_file = folder / "desc.txt"
-        self.desc = desc_file.read_text(encoding="utf-8").strip() if desc_file.exists() else ""
-
-        tags_file = folder / "tags.txt"
-        self.tags = normalize_tags(tags_file.read_text(encoding="utf-8")) if tags_file.exists() else ""
-
-        meta = read_meta(folder / "meta.txt")
-        self.schedule = args.schedule or meta.get("schedule") or None
-        self.tid = args.tid or meta.get("tid") or None
-        self.douyin_account = meta.get("douyin_account") or args.douyin_account
-        self.bilibili_account = meta.get("bilibili_account") or args.bilibili_account
-
-        only = args.only
-        self.do_douyin = only in (None, "douyin") and not truthy_off(meta.get("douyin"))
-        self.do_bilibili = only in (None, "bilibili") and not truthy_off(meta.get("bilibili"))
-        if self.do_bilibili and not self.tid:
-            raise SystemExit("[X] B站发布需要分区号 tid：在 meta.txt 里写 tid=xxx，或加命令行参数 --tid xxx")
-        if not self.do_douyin and not self.do_bilibili:
-            raise SystemExit("[X] 两个平台都被跳过了，无事可做")
+    def __init__(self, target: Path, args: argparse.Namespace):
+        self.path = metadata_path(target)
+        data = load_metadata(self.path)
+        story_id = args.story
+        if not story_id:
+            if len(data["stories"]) != 1:
+                raise MetadataError("有多个故事，请用 --story 941_1 明确选择一个")
+            story_id = data["stories"][0]["story_id"]
+        story = get_story(data, story_id)
+        if not translation_is_current(story):
+            raise MetadataError(f"{story_id} 中文翻译缺失或已过期，请先运行 06 或 translate_doraemon.py")
+        self.story_id = story_id
+        publish = story["publish"]
+        self.title = publish["title"]
+        if not isinstance(self.title, str) or not self.title.strip() or "\n" in self.title or "\r" in self.title:
+            raise MetadataError("publish.title 必须是非空单行标题")
+        prefix = f"哆啦a梦{int(data['episode'])} "
+        if not self.title.startswith(prefix) or not self.title[len(prefix) :].strip():
+            raise MetadataError(f"publish.title 格式应为：{prefix}中文标题")
+        self.video = required_asset(self.path, publish["video_path"], VIDEO_EXTS)
+        self.do_douyin = args.only in (None, "douyin")
+        self.do_bilibili = args.only in (None, "bilibili")
+        self.schedule = args.schedule or publish.get("schedule")
+        self.douyin_account = args.douyin_account
+        self.bilibili_account = args.bilibili_account
+        self.cover_douyin_portrait = self.cover_douyin_landscape = self.cover_bilibili = None
+        self.douyin_desc = self.bilibili_desc = ""
+        self.douyin_tags = self.bilibili_tags = ""
+        self.tid = None
+        if self.do_douyin:
+            if len(self.title) > 55:
+                raise MetadataError("抖音标题最多 55 字，请编辑 publish.title")
+            douyin = publish["douyin"]
+            tags = validate_tags(douyin["tags"], 5)
+            self.douyin_tags = ",".join(tags)
+            self.douyin_desc = " ".join(f"#{tag}" for tag in tags)
+            self.cover_douyin_portrait = required_asset(self.path, douyin["cover_portrait_path"], COVER_EXTS)
+            self.cover_douyin_landscape = required_asset(self.path, douyin["cover_landscape_path"], COVER_EXTS)
+            if self.cover_douyin_portrait.samefile(self.cover_douyin_landscape):
+                raise MetadataError("抖音横、竖封面必须是两个独立文件")
+        if self.do_bilibili:
+            if len(self.title) > 80:
+                raise MetadataError("B站标题最多 80 字，请编辑 publish.title")
+            bilibili = publish["bilibili"]
+            self.bilibili_tags = ",".join(validate_tags(bilibili["tags"], 11))
+            self.bilibili_desc = story["zh"]["synopsis"]
+            if len(self.bilibili_desc) > 2000:
+                raise MetadataError("B站简介最多 2000 字，请编辑 zh.synopsis；不会静默截断")
+            self.cover_bilibili = required_asset(self.path, story.get("image_file"), COVER_EXTS)
+            self.tid = args.tid or bilibili["tid"]
+            if not str(self.tid).isdigit() or int(self.tid) <= 0:
+                raise MetadataError("B站分区号 tid 必须是正整数")
 
     def build_commands(self, headed: bool) -> list[tuple[str, list[str]]]:
-        sau = str(sau_exe())
-        cmds: list[tuple[str, list[str]]] = []
-        if self.do_douyin:
+        commands = []
+        for platform, selected, account, desc, tags in (
+            ("douyin", self.do_douyin, self.douyin_account, self.douyin_desc, self.douyin_tags),
+            ("bilibili", self.do_bilibili, self.bilibili_account, self.bilibili_desc, self.bilibili_tags),
+        ):
+            if not selected:
+                continue
             cmd = [
-                sau,
-                "douyin",
+                str(sau_exe()),
+                platform,
                 "upload-video",
                 "--account",
-                self.douyin_account,
-                "--file",
-                str(self.video),
-                "--title",
-                self.title,
-            ]
-            if self.desc:
-                cmd += ["--desc", self.desc]
-            if self.tags:
-                cmd += ["--tags", self.tags]
-            cmd += ["--declaration", DEFAULT_DOUYIN_DECLARATION]
-            cmd += ["--collection", DEFAULT_DOUYIN_COLLECTION]
-            if self.cover_douyin_portrait:
-                cmd += ["--thumbnail-portrait", str(self.cover_douyin_portrait)]
-            if self.cover_douyin_landscape:
-                cmd += ["--thumbnail-landscape", str(self.cover_douyin_landscape)]
-            if self.schedule:
-                cmd += ["--schedule", self.schedule]
-            cmd += ["--headed" if headed else "--headless"]
-            cmds.append(("抖音", cmd))
-        if self.do_bilibili:
-            cmd = [
-                sau,
-                "bilibili",
-                "upload-video",
-                "--account",
-                self.bilibili_account,
+                account,
                 "--file",
                 str(self.video),
                 "--title",
                 self.title,
                 "--desc",
-                self.desc or self.title,
-                "--tid",
-                str(self.tid),
+                desc,
+                "--tags",
+                tags,
             ]
-            if self.tags:
-                cmd += ["--tags", self.tags]
-            if self.cover_bilibili:
-                cmd += ["--thumbnail", str(self.cover_bilibili)]
+            if platform == "douyin":
+                cmd += [
+                    "--declaration",
+                    DEFAULT_DOUYIN_DECLARATION,
+                    "--collection",
+                    DEFAULT_DOUYIN_COLLECTION,
+                    "--thumbnail-portrait",
+                    str(self.cover_douyin_portrait),
+                    "--thumbnail-landscape",
+                    str(self.cover_douyin_landscape),
+                    "--headed" if headed else "--headless",
+                ]
+            else:
+                cmd += ["--tid", str(self.tid), "--thumbnail", str(self.cover_bilibili)]
             if self.schedule:
                 cmd += ["--schedule", self.schedule]
-            cmds.append(("B站", cmd))
-        return cmds
+            commands.append(("抖音" if platform == "douyin" else "B站", cmd))
+        return commands
 
 
-def find_candidates() -> list[Path]:
-    if not PUBLISH_ROOT.exists():
-        return []
-    out = []
-    for sub in sorted(PUBLISH_ROOT.iterdir()):
-        if sub.is_dir() and any(p.suffix.lower() in VIDEO_EXTS for p in sub.iterdir() if p.is_file()):
-            out.append(sub)
-    return out
+def choose_target(value: str | None, prompt: bool) -> Path:
+    if value:
+        return metadata_path(Path(value))
+    state = REPO_ROOT / "logs/.last_doraemon_materials"
+    default = state.read_text(encoding="utf-8-sig").strip() if state.is_file() else ""
+    if prompt:
+        if default:
+            print(f"默认素材目录：{default}")
+        entered = input("素材目录或 metadata.json（回车使用默认）: ").strip().strip('"')
+        value = entered or default
+    else:
+        value = default
+    if not value:
+        raise MetadataError("请指定素材目录或 metadata.json")
+    return metadata_path(Path(value))
 
 
 def main() -> int:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-    parser = argparse.ArgumentParser(description="一键发布视频到 抖音 + B站（经 social-auto-upload）")
-    parser.add_argument(
-        "dir", nargs="?", help="发布目录（如 publish/2026-10-13-xxx）。省略时自动找 publish/ 下唯一候选"
-    )
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser(description="读取 metadata.json，发布一个故事到抖音/B站")
+    parser.add_argument("dir", nargs="?", help="素材目录或 metadata.json；默认使用上次素材目录")
+    parser.add_argument("--story", help="故事标识，如 941_1")
     parser.add_argument("--only", choices=["douyin", "bilibili"], help="只发一个平台")
-    parser.add_argument("--tid", help="B站分区号（覆盖 meta.txt）")
-    parser.add_argument("--schedule", help='定时发布 "YYYY-MM-DD HH:MM"（覆盖 meta.txt）')
-    parser.add_argument("--douyin-account", default="default", help="抖音账号名（默认 default）")
-    parser.add_argument("--bilibili-account", default="default", help="B站账号名（默认 default）")
-    parser.add_argument("--headed", action="store_true", help="抖音上传时显示浏览器窗口（调试用）")
-    parser.add_argument("--yes", action="store_true", help="跳过发布前确认")
-    parser.add_argument("--dry-run", action="store_true", help="只打印将执行的 sau 命令，不真正发布")
+    parser.add_argument("--tid", help="覆盖 metadata 中的 B站分区号")
+    parser.add_argument("--schedule", help='定时发布 "YYYY-MM-DD HH:MM"')
+    parser.add_argument("--douyin-account", default="default")
+    parser.add_argument("--bilibili-account", default="default")
+    parser.add_argument("--headed", action="store_true", help="显示抖音浏览器")
+    parser.add_argument("--yes", action="store_true", help="明确跳过发布确认")
+    parser.add_argument("--dry-run", action="store_true", help="校验并打印命令，不发布")
+    parser.add_argument("--prompt-target", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    try:
+        path = choose_target(args.dir, args.prompt_target)
+        data = load_metadata(path)
+        if not args.story and len(data["stories"]) > 1:
+            if args.yes:
+                raise MetadataError("自动发布必须用 --story 明确选择故事")
+            for story in data["stories"]:
+                print(f"  {story['story_id']}：{story['publish']['title'] or story['title']}")
+            args.story = input("选择故事标识（例如 941_1）: ").strip()
+        job = PublishJob(path, args)
+        commands = job.build_commands(args.headed)
+    except (MetadataError, OSError, UnicodeError, EOFError) as exc:
+        print(f"[X] {exc}", file=sys.stderr)
+        return 2
 
-    if not sau_exe().exists():
-        print(f"[X] 未找到 sau CLI: {sau_exe()}")
-        print("    请先运行一次性安装: bat\\setup_publish.bat")
-        return 1
-
-    folder = Path(args.dir).resolve() if args.dir else None
-    if folder is None:
-        candidates = find_candidates()
-        if len(candidates) == 1:
-            folder = candidates[0]
-        elif not candidates:
-            print(f"[X] {PUBLISH_ROOT} 下没有可发布的目录（需要含视频文件的子目录）")
-            return 1
-        else:
-            print("[X] publish/ 下有多个候选目录，请指定一个：")
-            for c in candidates:
-                print(f"    {c.relative_to(REPO_ROOT)}")
-            return 1
-    if not folder.is_dir():
-        print(f"[X] 目录不存在: {folder}")
-        return 1
-
-    job = PublishJob(folder, args)
-    commands = job.build_commands(headed=args.headed)
-
-    platforms = " + ".join(name for name, _ in commands)
     print("=" * 50)
-    print(f"  发布目录 : {folder.relative_to(REPO_ROOT) if folder.is_relative_to(REPO_ROOT) else folder}")
-    print(f"  视频     : {job.video.name}")
+    print(f"  metadata : {job.path}")
+    print(f"  故事     : {job.story_id}")
+    print(f"  视频     : {job.video}")
     print(f"  标题     : {job.title}")
     if job.do_douyin:
-        print(f"  抖音声明 : {DEFAULT_DOUYIN_DECLARATION}")
-        print(f"  抖音合集 : {DEFAULT_DOUYIN_COLLECTION}")
-    print(f"  抖音竖封面 : {cover_label(job.cover_douyin_portrait)}")
-    print(f"  抖音横封面 : {cover_label(job.cover_douyin_landscape)}")
-    print(f"  B站封面   : {cover_label(job.cover_bilibili)}")
-    print(f"  平台     : {platforms}")
-    if job.schedule:
-        print(f"  定时     : {job.schedule}")
+        print(f"  抖音标签 : {job.douyin_desc}")
+        print(f"  抖音封面 : {job.cover_douyin_portrait} / {job.cover_douyin_landscape}")
+        print(f"  抖音声明 : {DEFAULT_DOUYIN_DECLARATION}；合集：{DEFAULT_DOUYIN_COLLECTION}")
+    if job.do_bilibili:
+        print(f"  B站标签  : {job.bilibili_tags}")
+        print(f"  B站封面  : {job.cover_bilibili}")
+        print(f"  B站简介  :\n{job.bilibili_desc}")
     print("=" * 50)
-
     if args.dry_run:
         for name, cmd in commands:
-            print(f"\n[{name}] 将执行:")
-            print("  " + subprocess.list2cmdline(cmd))
+            print(f"[{name}] {subprocess.list2cmdline(cmd)}")
         return 0
-
+    if not sau_exe().is_file():
+        print("[X] 未安装 sau CLI，请先运行 bat\\setup_publish.bat")
+        return 1
     if not args.yes:
-        answer = input("确认发布？输入 Y 继续，其他键取消: ").strip().lower()
-        if answer != "y":
+        try:
+            confirmed = input("确认发布？输入 Y 继续，其他键取消: ").strip().lower() == "y"
+        except EOFError:
+            confirmed = False
+        if not confirmed:
             print("已取消。")
             return 1
-
-    results: dict[str, bool] = {}
+    failed = 0
     for name, cmd in commands:
-        print(f"\n>>> 开始发布到【{name}】...")
-        # cwd=sau repo root: douyin SMS verification reads verify_code.txt from there.
-        proc = subprocess.run(cmd, cwd=SAU_ROOT)
-        results[name] = proc.returncode == 0
-        print(f"<<< 【{name}】{'成功' if results[name] else f'失败 (exit {proc.returncode})'}")
-
-    print("\n" + "=" * 50)
-    for name, ok in results.items():
-        print(f"  {name}: {'✓ 成功' if ok else '✗ 失败'}")
-    print("=" * 50)
-    if all(results.values()):
-        print("全部发布完成！")
-        return 0
-    print("有平台发布失败——失败的可以稍后单独重跑（--only douyin / --only bilibili），成功的不受影响。")
-    return 1
+        try:
+            proc = subprocess.run(cmd, cwd=SAU_ROOT, check=False)
+            ok = proc.returncode == 0
+        except OSError as exc:
+            print(f"[{name}] 上传失败：{exc}")
+            ok = False
+        print(f"[{name}] {'成功' if ok else '失败'}")
+        failed += not ok
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

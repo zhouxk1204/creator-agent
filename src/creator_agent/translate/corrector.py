@@ -13,9 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from creator_agent.config import TranslateSettings
+from creator_agent.doraemon.metadata import (
+    MetadataError,
+    load_metadata,
+    story_for_subtitle,
+    translation_is_current,
+)
 from creator_agent.translate.llm import chat
 from creator_agent.translate.memory import MemoryStore
-from creator_agent.translate.vault import parse_synopsis_md
 
 _SRT_TIME = re.compile(
     r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*"
@@ -185,13 +190,19 @@ def extract_japanese_track(cues: list[SourceCue]) -> list[SourceCue]:
     return [SourceCue(i, cue.start, cue.end, cue.start_ms, cue.end_ms, cue.text) for i, cue in enumerate(first, 1)]
 
 
-def load_episode_context(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        raise SubtitleCorrectionError(f"缺少同名日文简介：{path}")
-    info = parse_synopsis_md(path.read_text(encoding="utf-8"))
-    if not info.get("title") and not info.get("synopsis"):
-        raise SubtitleCorrectionError(f"日文简介无法解析：{path}")
-    return {"title": info.get("title", ""), "synopsis": info.get("synopsis", "")[:2000]}
+def load_episode_context(origin: Path) -> dict[str, str]:
+    try:
+        story = story_for_subtitle(load_metadata(origin.parent / "metadata.json"), origin)
+        if not translation_is_current(story):
+            raise MetadataError(f"{story['story_id']} 中文简介缺失或已过期，请先翻译 metadata")
+        return {
+            "title": story["title"],
+            "synopsis": story["synopsis"][:2000],
+            "zh_title": story["zh"]["title"],
+            "zh_synopsis": story["zh"]["synopsis"][:2000],
+        }
+    except MetadataError as exc:
+        raise SubtitleCorrectionError(str(exc)) from exc
 
 
 def _json_object(reply: str) -> dict[str, Any]:
@@ -662,17 +673,11 @@ class SubtitleCorrectionPipeline:
             raise SubtitleCorrectionError("中文字幕数量与修正日文字幕不一致")
         return translations, questions
 
-    def process_file(
-        self,
-        origin: Path,
-        force: bool = False,
-        translated_context: dict[str, str] | None = None,
-    ) -> CorrectionResult:
+    def process_file(self, origin: Path, force: bool = False) -> CorrectionResult:
         origin = Path(origin)
         if not origin.name.endswith("_origin.srt"):
             raise SubtitleCorrectionError(f"输入文件名必须以 _origin.srt 结尾：{origin.name}")
         base = origin.name.removesuffix("_origin.srt")
-        synopsis_path = origin.with_name(f"{base}_jp.md")
         jp_path = origin.with_name(f"{base}_jp_fixed.srt")
         zh_path = origin.with_name(f"{base}_zh_fixed.srt")
         question_path = origin.with_name(f"{base}_translation_questions.md")
@@ -680,10 +685,7 @@ class SubtitleCorrectionPipeline:
             raise SubtitleCorrectionError(f"输出已存在：{jp_path.name} 或 {zh_path.name}（使用 --force 明确覆盖）")
 
         source_cues = extract_japanese_track(parse_strict_srt(origin))
-        episode_context = load_episode_context(synopsis_path)
-        if translated_context is not None:
-            episode_context["zh_title"] = translated_context["title"]
-            episode_context["zh_synopsis"] = translated_context["synopsis"][:2000]
+        episode_context = load_episode_context(origin)
         fixed, correction_questions = self.correct_japanese(source_cues, episode_context)
         translations, translation_questions = self.translate_chinese(fixed, episode_context)
         questions = correction_questions + translation_questions

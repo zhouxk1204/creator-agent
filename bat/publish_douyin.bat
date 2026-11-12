@@ -1,16 +1,15 @@
 @echo off
+setlocal DisableDelayedExpansion
 chcp 65001 >nul
-setlocal
 title Douyin Publisher
 call "%~dp0_bootstrap.bat"
 if errorlevel 1 goto :fail
 
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. Chinese usage docs: publish_douyin.md.
-rem
-rem Double-click, paste a publish folder path, and press Enter.
-rem A folder can also be dragged onto this BAT or passed as the first argument.
-rem The normal publish summary and Y confirmation are always shown.
+rem Double-click to choose a materials folder or metadata.json in Python.
+rem Enter accepts the saved materials folder. Multiple stories need a selection.
+rem All arguments are forwarded, including --story and --dry-run.
 rem ---------------------------------------------------------------------------
 
 set "SAU_PY=%REPO_ROOT%\tools\social-auto-upload\.venv\Scripts\python.exe"
@@ -22,34 +21,21 @@ if not exist "%SAU_PY%" (
     goto :fail
 )
 
-set "PUBLISH_DIR=%~1"
-if not defined PUBLISH_DIR (
-    echo.
-    echo Paste the folder containing video.mp4 and title.txt.
-    set /p "PUBLISH_DIR=Publish folder path: "
-)
-
-rem Pasted paths often include surrounding quotes.
-set "PUBLISH_DIR=%PUBLISH_DIR:"=%"
-if not defined PUBLISH_DIR (
-    echo.
-    echo [X] No publish folder was entered.
-    goto :fail
-)
-if not exist "%PUBLISH_DIR%\." (
-    echo.
-    echo [X] Folder does not exist: %PUBLISH_DIR%
-    goto :fail
-)
-
 echo.
-echo Starting Douyin publish in headed mode. Confirm the summary with Y.
+echo Douyin metadata publisher. Headed mode; confirm actual uploads with Y.
 echo.
-"%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" "%PUBLISH_DIR%" --only douyin --headed
+if not "%~1"=="" goto :with_args
+"%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" --prompt-target --only douyin --headed
+goto :done
+
+:with_args
+"%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %* --only douyin --headed
+
+:done
 set "RC=%ERRORLEVEL%"
 echo.
 if not "%RC%"=="0" echo FAILED or cancelled ^(exit code %RC%^) - see above.
-if "%RC%"=="0" echo Douyin publish completed.
+if "%RC%"=="0" echo Done.
 echo.
 pause
 exit /b %RC%

@@ -14,8 +14,8 @@ echo ========================================
 echo   Synopsis + tags -^> subtitle correction + JA-ZH
 echo ========================================
 echo.
-echo  Input : *_origin.srt + matching *_jp.md
-echo  Output: *_zh.md + *_jp_fixed.srt + *_zh_fixed.srt
+echo  Input : *_origin.srt + metadata.json with matching story IDs
+echo  Output: updated metadata.json + *_jp_fixed.srt + *_zh_fixed.srt
 echo  One LLM server is shared by all stages.
 echo.
 

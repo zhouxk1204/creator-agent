@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # macOS/Linux twin of 02_fetch_doraemon.bat: fetch a Doraemon episode's story
-# info from TV Asahi, then translate the per-story notes to Chinese.
+# info from TV Asahi, then save Chinese story fields/tags in metadata.json.
 #
 #   ./02_fetch_doraemon.sh         # latest already-aired episode (default)
 #   ./02_fetch_doraemon.sh 934     # explicit episode number
@@ -8,8 +8,8 @@
 # With no argument the episode is resolved from the backnumber index
 # (doraemon/json/story.json): the newest entry whose broadcast date is not in
 # the future. Fetched content lands in ~/Desktop/doraemon_{ep}/ (metadata.json,
-# {ep}_{i}.jpg images, covers; the translated _zh notes join them there). The
-# translation step runs only when the
+# {ep}_{i}.jpg images and covers; Chinese fields/tags update the same metadata).
+# The translation step runs only when the
 # local LLM server (llama.cpp on 127.0.0.1:8080) is already up — unlike the
 # .bat, this script never starts/stops the server itself.
 set -euo pipefail

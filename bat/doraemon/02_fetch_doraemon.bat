@@ -25,7 +25,7 @@ rem file so the translation step runs on the fetched episode.
 if "%ep%"=="--latest" set /p ep=<"%REPO_ROOT%\logs\.last_fetched"
 
 rem ---------------------------------------------------------------------------
-rem Step 2: translate the per-story notes ({ep}_{i}.md -> {ep}_{i}_zh.md).
+rem Step 2: translate each story and save Chinese fields/tags in metadata.json.
 rem Needs the local LLM server (llama.cpp) - same one 04_ja_asr.bat uses. Start
 rem it if it's down; if WE started it, stop it at the end to free VRAM/RAM.
 rem ---------------------------------------------------------------------------

@@ -7,8 +7,7 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
                                     # output (storage/doraemon is not written)
     ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image_file, copyright}]
     ├── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
-    ├── {ep}_{i}_4k.jpg              # optional ComfyUI-upscaled covers
-    └── {ep}_{i}_jp.md               # Japanese title, local cover link and synopsis
+    └── {ep}_{i}_4k.jpg              # optional ComfyUI-upscaled covers
 
 Usage:
     uv run python scripts/fetch_doraemon.py 934
@@ -49,6 +48,8 @@ from pathlib import Path
 
 import httpx
 
+from creator_agent.doraemon.metadata import save_sources
+
 BASE_URL = "https://www.tv-asahi.co.jp/doraemon/story/{ep}/"
 # Index behind the backnumber page (story/bk/): what its JS renders into the
 # story-item elements. Newest first; may start with an unaired episode.
@@ -66,7 +67,7 @@ def desktop_episode_dir(episode: str) -> Path:
     """The ONE per-episode materials folder on the Desktop (unpadded number).
 
     Everything human-facing lands here — metadata.json, the story images,
-    the covers, and (via translate_doraemon.py) the translated _zh notes — so
+    the covers, and (via translate_doraemon.py) the Chinese metadata — so
     launchers never have to gather materials from several places. Uses the
     unpadded episode number (doraemon_938) so launchers can locate it without
     zero-padding arithmetic; --auto counts from these folders.
@@ -322,33 +323,23 @@ def fetch_one(episode: str) -> int:
             story["image_file"] = img_path.name
             print(f"  image     : {img_path}")
 
-        (desk_dir / "metadata.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        broadcast_date = data["broadcast_date"]
+        data = save_sources(desk_dir / "metadata.json", data)
         print(f"  desktop   : {desk_dir}")
 
         ep_short = str(int(episode))
         comfy_url, comfy_proc = ensure_comfyui(client)
         try:
             for i, story in enumerate(data["stories"], 1):
-                cover_name: str | None = None
                 if story.get("image_file"):
                     src_img = desk_dir / story["image_file"]
                     dst_4k = desk_dir / f"{ep_short}_{i}_4k{src_img.suffix}"
                     if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
                         print(f"  cover(4k) : {dst_4k}")
-                        cover_name = dst_4k.name
                     else:
                         if not comfy_url:
                             print("  cover(4k) : ComfyUI unavailable - using original instead")
                         print(f"  cover     : {src_img}")
-                        cover_name = src_img.name
-
-                note_lines = [f"# {story['title']}", ""]
-                if cover_name:
-                    note_lines += [f"![封面]({cover_name})", ""]
-                note_lines += story["synopsis"].splitlines()
-                jp_path = desk_dir / f"{ep_short}_{i}_jp.md"
-                jp_path.write_text("\n".join(note_lines).strip() + "\n", encoding="utf-8")
-                print(f"  synopsis  : {jp_path}")
         finally:
             if comfy_proc is not None:  # only stop the server WE started
                 comfy_proc.terminate()
@@ -363,7 +354,7 @@ def fetch_one(episode: str) -> int:
     # broadcast date.
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
-    date_m = BROADCAST_DATE_RE.search(data["broadcast_date"])
+    date_m = BROADCAST_DATE_RE.search(broadcast_date)
     if date_m:
         iso = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
         (STATE_DIR / FETCHED_DATE_STATE_NAME).write_text(iso + "\n", encoding="utf-8")

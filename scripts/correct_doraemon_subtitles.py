@@ -6,9 +6,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from translate_doraemon import translate_note
+from translate_doraemon import translate_metadata
 
 from creator_agent.config import load_settings
+from creator_agent.doraemon.metadata import MetadataError, load_metadata, story_for_subtitle
 from creator_agent.translate.corrector import SubtitleCorrectionError, SubtitleCorrectionPipeline
 from creator_agent.translate.server import ensure_server, stop_server
 
@@ -82,9 +83,10 @@ def parse_args() -> argparse.Namespace:
         "target",
         nargs="?",
         type=Path,
-        help="包含 *_origin.srt 和同名 *_jp.md 的目录，或单个 *_origin.srt；默认使用上次素材下载记录的目录",
+        help="包含 *_origin.srt 和 metadata.json 的目录，或单个 *_origin.srt；默认使用上次素材下载记录的目录",
     )
     parser.add_argument("--force", action="store_true", help="明确覆盖已有 *_jp_fixed.srt / *_zh_fixed.srt")
+    parser.add_argument("--refresh-translation", action="store_true", help="重新翻译 metadata 中文简介并重建两平台标签")
     parser.add_argument("--prompt-target", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -96,7 +98,8 @@ def main() -> int:
         if target is None:
             target = prompt_target() if args.prompt_target else default_target()
         inputs = discover_inputs(target)
-    except SubtitleCorrectionError as exc:
+        load_metadata(inputs[0].parent / "metadata.json")
+    except (SubtitleCorrectionError, MetadataError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
 
@@ -114,16 +117,13 @@ def main() -> int:
                     origin.with_name(f"{base}_{suffix}_fixed.srt").exists() for suffix in ("jp", "zh")
                 ):
                     raise SubtitleCorrectionError("字幕输出已存在，请使用 --force 明确覆盖")
-                note = origin.with_name(f"{base}_jp.md")
-                print(f"[简介] 翻译 {note.name} 并生成发布标签...")
-                zh_title, zh_synopsis, tags_ok = translate_note(note, settings)
+                path = origin.parent / "metadata.json"
+                story = story_for_subtitle(load_metadata(path), origin)
+                print(f"[简介] 翻译 {story['story_id']} 并保存 metadata 平台标签...")
+                _, _, tags_ok = translate_metadata(path, story["story_id"], settings, refresh=args.refresh_translation)
                 if not tags_ok:
                     print("[警告] 发布标签生成失败，继续字幕处理；本次运行将返回失败状态", file=sys.stderr)
-                result = pipeline.process_file(
-                    origin,
-                    force=args.force,
-                    translated_context={"title": zh_title, "synopsis": zh_synopsis},
-                )
+                result = pipeline.process_file(origin, force=args.force)
                 if not tags_ok:
                     failed += 1
             except Exception as exc:

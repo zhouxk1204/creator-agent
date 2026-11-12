@@ -63,7 +63,7 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - macOS/Linux 用等价的 `sh/tver.sh`（参数相同）
 - **`02_fetch_doraemon.bat`** —— 抓取哆啦A梦剧集页（标题 / 简介 / 图片）+ 翻译标题简介为中文：
   - 双击运行 → 输入集数（如 `934`）；或命令行：`bat\doraemon\02_fetch_doraemon.bat 934`
-  - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，资料直接存到 `~/Desktop/doraemon_934/`（`metadata.json`、故事图片、`934_*_jp.md`）；翻译在同目录生成 `934_*_zh.md`，不依赖 Obsidian Vault
+  - 集数自动补零拼成 `https://www.tv-asahi.co.jp/doraemon/story/0934/`，资料直接存到 `~/Desktop/doraemon_934/`（`metadata.json`、故事图片）；日中标题/简介与平台标签统一保存到 metadata v2，不再生成简介 Markdown，也不依赖 Obsidian Vault
   - 翻译需要本地 LLM 服务，bat 会自动检测并启动（见 `bat/start_translate_server.bat`）
   - macOS/Linux 用等价的 `sh/doraemon.sh 934`（不带参数则提示输入集数）
 - **`03_split_episode.bat`** —— 把一集视频里的多个小故事切成独立单集（纯视觉检测标题封面，不用 OCR/AI）：
@@ -79,6 +79,8 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 - **`05_learn_corrections.bat`** —— 二次学习：扫描 `subtitle-project/episodes/` 下各剧集的
   `01_original_ja.srt` + `02_ai_zh.srt` + `03_final_zh.srt`，分析 AI 翻译 vs 人工修正的差异，
   沉淀到 `knowledge/` 知识库并生成 `reports/`；之后的翻译自动注入相关知识（需翻译服务在跑）
+- **`06_correct_subtitles.bat`** —— 按 `941_1_origin.srt` 的故事标识读取同目录 `metadata.json`：先写入中文标题/简介与平台标签，再用匹配的日中背景矫正并翻译字幕；双击默认使用上次素材目录，也可粘贴路径覆盖。
+- **`bat/publish_dual.bat` / `bat/publish_douyin.bat`** —— 从同一份 metadata 选择故事发布，不再读取旧文本发布包。先填写最终视频路径及抖音两张独立封面，建议先用 `--story 941_1 --dry-run` 校验。字段标准见 [发布文档](docs/publish-package.md)。
 
 ## 日语 ASR（去背景音 + 说话人分离 + Qwen3-ASR + 词级对齐字幕）
 

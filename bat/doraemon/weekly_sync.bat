@@ -61,7 +61,7 @@ goto :translate
 call :log "[3/3] no newly-aired episode - translation skipped"
 goto :cleanup
 
-REM --- Step 3: translate each fetched episode (needs llama server) ---
+REM --- Step 3: translate each episode's metadata.json (needs llama server) ---
 :translate
 call :ensure_server
 if errorlevel 1 (

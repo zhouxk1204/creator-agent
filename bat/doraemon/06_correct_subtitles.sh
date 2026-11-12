@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Translate synopsis and tags, then correct and retranslate subtitles with one LLM server.
+# Update metadata.json Chinese synopsis/tags, then correct and retranslate subtitles with one LLM server.
 #
 #   ./06_correct_subtitles.sh ~/Desktop/doraemon_941
 #   ./06_correct_subtitles.sh ~/Desktop/doraemon_941/941_1_origin.srt

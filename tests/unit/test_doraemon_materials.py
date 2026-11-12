@@ -99,18 +99,16 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     assert fetch_doraemon.fetch_one("0941") == 0
 
     materials = tmp_path / "Desktop" / "doraemon_941"
-    expected_files = {"metadata.json", "941_1.jpg", "941_1_jp.md", "941_2_jp.md"}
+    expected_files = {"metadata.json", ".metadata.lock", "941_1.jpg"}
     cover = "941_1_4k.jpg" if cover_mode == "upscaled" else "941_1.jpg"
     if cover_mode == "upscaled":
         expected_files.add(cover)
     assert {p.name for p in materials.iterdir()} == expected_files
-    assert translate_doraemon.parse_note(materials / "941_1_jp.md") == (
-        "ひみつ道具",
-        "のび太のお話。",
-        f"![封面]({cover})",
-    )
-    assert translate_doraemon.parse_note(materials / "941_2_jp.md") == ("冒険", "みんなで冒険。", None)
     metadata = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["schema_version"] == 2
+    assert metadata["broadcast_date"] == "2026-11-07"
+    assert [story["story_id"] for story in metadata["stories"]] == ["941_1", "941_2"]
+    assert all(story["zh"] is None for story in metadata["stories"])
     assert [story["title"] for story in metadata["stories"]] == ["ひみつ道具", "冒険"]
     assert metadata["stories"][0]["image_file"] == "941_1.jpg"
     assert all("image" not in story for story in metadata["stories"])
@@ -124,19 +122,20 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     monkeypatch.setattr(translate_doraemon, "generate_tags", lambda *args: ["哆啦A梦", "大雄"])
     for _ in range(2):
         translate_doraemon.main("0941")
-    assert translate.call_count == 4
+    assert translate.call_count == 2
     assert translate.call_args_list[0].args[1:] == ("ひみつ道具", "のび太のお話。")
-    expected_files.update({"941_1_zh.md", "941_2_zh.md"})
     assert {p.name for p in materials.iterdir()} == expected_files
-    zh = (materials / "941_1_zh.md").read_text(encoding="utf-8")
-    assert f"![封面]({cover})" in zh
-    assert "中文简介。" in zh
-    assert "标签：#哆啦A梦 #大雄" in zh
-    assert "![" not in (materials / "941_2_zh.md").read_text(encoding="utf-8")
+    translated = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
+    for story in translated["stories"]:
+        assert story["zh"]["title"] == "中文标题"
+        assert story["zh"]["synopsis"] == "中文简介。"
+        assert story["publish"]["title"] == "哆啦a梦941 中文标题"
+        assert story["publish"]["douyin"]["tags"] == ["哆啦A梦", "大雄"]
+        assert story["publish"]["bilibili"]["tags"] == ["哆啦A梦", "大雄"]
     assert {p.name for p in tmp_path.iterdir()} == {"Desktop", "logs"}
 
 
-def test_translate_requires_japanese_notes(tmp_path, monkeypatch):
+def test_translate_requires_metadata_not_markdown(tmp_path, monkeypatch):
     monkeypatch.setattr(fetch_doraemon, "DESKTOP_DIR", tmp_path)
     materials = tmp_path / "doraemon_941"
     materials.mkdir()
@@ -155,8 +154,11 @@ def test_translate_failure_keeps_processing_other_stories(tmp_path, monkeypatch,
     monkeypatch.setattr(fetch_doraemon, "DESKTOP_DIR", tmp_path)
     materials = tmp_path / "doraemon_941"
     materials.mkdir()
-    for i in (1, 2):
-        (materials / f"941_{i}_jp.md").write_text("# 日文标题\n\n日文简介", encoding="utf-8")
+    path = materials / "metadata.json"
+    path.write_text(
+        json.dumps({"episode": "0941", "stories": [{"title": "日文标题", "synopsis": "日文简介"}] * 2}),
+        encoding="utf-8",
+    )
     translate = Mock(return_value=("中文标题", "中文简介"))
     tags = Mock(return_value=["哆啦A梦"])
     if failure == "translate":
@@ -170,7 +172,31 @@ def test_translate_failure_keeps_processing_other_stories(tmp_path, monkeypatch,
     with pytest.raises(SystemExit) as exc:
         translate_doraemon.main("941")
     assert exc.value.code == 1
-    assert (materials / "941_2_zh.md").is_file()
-    assert (materials / "941_1_zh.md").is_file() == (failure == "tags")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["stories"][1]["zh"]["title"] == "中文标题"
+    assert (data["stories"][0]["zh"] is not None) == (failure == "tags")
     if failure == "tags":
-        assert "标签：" not in (materials / "941_1_zh.md").read_text(encoding="utf-8")
+        assert data["stories"][0]["publish"]["douyin"]["tags"] == []
+    assert not list(materials.glob("*.md"))
+
+
+def test_translation_is_saved_before_tags_and_reused_after_tag_failure(tmp_path, monkeypatch):
+    from creator_agent.doraemon.metadata import load_metadata, save_sources
+
+    path = tmp_path / "metadata.json"
+    save_sources(path, {"episode": "941", "stories": [{"title": "日文标题", "synopsis": "日文简介"}]})
+    translate = Mock(return_value=("中文标题", "第一段。\n\n第二段。"))
+    monkeypatch.setattr(translate_doraemon, "translate_story", translate)
+
+    def fail_tags(*args):
+        assert load_metadata(path)["stories"][0]["zh"]["synopsis"] == "第一段。\n\n第二段。"
+        raise RuntimeError("tag service unavailable")
+
+    monkeypatch.setattr(translate_doraemon, "generate_tags", fail_tags)
+    assert not translate_doraemon.translate_metadata(path, "941_1", object())[2]
+    monkeypatch.setattr(translate_doraemon, "generate_tags", lambda *args: ["哆啦A梦", "大雄"])
+    assert translate_doraemon.translate_metadata(path, "941_1", object())[2]
+    assert translate.call_count == 1
+    assert load_metadata(path)["stories"][0]["publish"]["douyin"]["tags"] == ["哆啦A梦", "大雄"]
+    assert translate_doraemon.translate_metadata(path, "941_1", object(), refresh=True)[2]
+    assert translate.call_count == 2
