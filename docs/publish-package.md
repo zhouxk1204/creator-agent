@@ -19,7 +19,7 @@ Desktop/doraemon_941/
 └── 941_1_douyin_landscape.jpg    # 单独制作，4:3
 ```
 
-一个 metadata 可以有多个故事，也可以在同目录放整集、切分、超分及成片。发布器**不扫描或猜测视频文件**，每个故事必须明确填写 `publish.video_path`。
+一个 metadata 可以有多个故事，也可以在同目录放整集、切分、超分及成片。`publish.video_path` 自动预填为 `<story_id>_final.mp4`，例如 `941_1_final.mp4`、`941_2_final.mp4`；剪映按对应名字导出到素材目录即可。字段缺失或为 null 时也使用这个默认值，已有自定义路径保留。发布器**不扫描或猜测其他视频文件**，指定成片不存在时会报错。
 
 - 根级 `episode` 使用补零字符串，如 `"0941"`。
 - `story_index` 是正整数；`story_id` 使用不补零集号和序号，如 `"941_1"`。
@@ -29,7 +29,7 @@ Desktop/doraemon_941/
 
 ## 2. Schema v2
 
-下面是抓取后、尚未翻译及指定成片的单故事示例。实际文件通常有两个故事：
+下面是抓取后、尚未翻译及导出成片的单故事示例。实际文件通常有两个故事：
 
 ```json
 {
@@ -49,7 +49,7 @@ Desktop/doraemon_941/
       "zh": null,
       "publish": {
         "title": null,
-        "video_path": null,
+        "video_path": "941_1_final.mp4",
         "douyin": {
           "tags": [],
           "cover_portrait_path": null,
@@ -81,7 +81,7 @@ Desktop/doraemon_941/
 | 字段 | 规则 |
 | --- | --- |
 | `publish.title` | 两平台共用，格式 `哆啦a梦941 XXXXX`；单行；抖音 ≤55 字，单独发B站 ≤80 字 |
-| `publish.video_path` | 必填，明确指向该故事最终成片；支持 `.mp4 .mov .flv .mkv .avi`，建议 H.264 + AAC MP4 |
+| `publish.video_path` | 默认 `<story_id>_final.mp4`，剪映按此名称导出到素材目录；可改为自定义路径。支持 `.mp4 .mov .flv .mkv .avi`，建议 H.264 + AAC MP4 |
 | `publish.douyin.tags` | 1–5 个字符串，不带 `#`；抖音描述由它生成，如 `#哆啦A梦 #大雄 #新番` |
 | `publish.douyin.cover_portrait_path` | 必填，独立制作的 **3:4** 竖封面，建议 1080×1440 |
 | `publish.douyin.cover_landscape_path` | 必填，独立制作的 **4:3** 横封面，建议 1440×1080；不可与竖图指向同一文件 |
@@ -105,7 +105,7 @@ Desktop/doraemon_941/
 
 1. 运行 `02_fetch_doraemon`（资料及独立简介翻译），或最新话素材下载入口（仅抓取，中文延后至 `06`）。
 2. 将 `941_1_origin.srt` 等剪映双语字幕放进素材目录，运行 `06_correct_subtitles`。它先写中文 metadata，再从 metadata 读取匹配的日中背景进行字幕处理。
-3. 剪辑并导出最终视频，单独制作抖音两张封面，在该故事的 `publish` 内填写三个文件路径，检查发布标题与两个平台的标签。
+3. 剪映将最终视频导出为素材目录下的 `941_1_final.mp4` 等对应文件。单独制作抖音两张封面，在该故事的 `publish.douyin` 中填写两个封面路径，检查发布标题与平台标签。若成片采用其他名字或目录，手动修改 `publish.video_path`。
 4. 先运行校验，再确认发布：
 
 ```bat

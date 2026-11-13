@@ -2,7 +2,7 @@
 
 ## 使用方法
 
-1. 先完成资料抓取和 `06_correct_subtitles`，在素材目录的 `metadata.json` 中填写所选故事的最终 `publish.video_path`、抖音竖/横封面路径，检查标题与标签。完整格式见 [`docs/publish-package.md`](../docs/publish-package.md)。
+1. 先完成资料抓取和 `06_correct_subtitles`。`publish.video_path` 默认已填好，如 `941_1_final.mp4`，剪映按这个名字导出到素材目录；在 metadata 中填写抖音竖/横封面路径，检查标题与标签。自定义视频路径仍可手动修改。完整格式见 [`docs/publish-package.md`](../docs/publish-package.md)。
 2. 双击 `bat\publish_douyin.bat`。它显示上次素材目录，直接回车使用；也可以粘贴另一个目录或 metadata.json 路径，例如：
 
    ```text

@@ -119,10 +119,20 @@ def test_only_selected_platform_assets_are_required(materials):
         job(folder)
 
 
+def test_default_video_name_is_used_without_scanning_other_videos(materials):
+    folder, data = materials
+    data["stories"][0]["publish"]["video_path"] = None
+    save(folder, data)
+    assert job(folder).video == folder / "941_1_final.mp4"
+    (folder / "941_1_final.mp4").rename(folder / "different-name.mp4")
+    with pytest.raises(MetadataError, match="941_1_final.mp4"):
+        job(folder)
+
+
 def test_no_video_or_cover_fallbacks(materials):
     folder, data = materials
     publish = data["stories"][0]["publish"]
-    publish["video_path"] = None
+    publish["video_path"] = ""
     save(folder, data)
     with pytest.raises(MetadataError, match="路径未填写"):
         job(folder)

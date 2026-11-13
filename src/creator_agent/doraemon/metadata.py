@@ -68,7 +68,8 @@ def normalize_metadata(data: Any) -> dict:
         if not isinstance(publish, dict):
             raise MetadataError(f"{expected_id}.publish 必须是对象")
         publish.setdefault("title", None)
-        publish.setdefault("video_path", None)
+        if publish.get("video_path") is None:
+            publish["video_path"] = f"{expected_id}_final.mp4"
         for platform in ("douyin", "bilibili"):
             if not isinstance(publish.setdefault(platform, {}), dict):
                 raise MetadataError(f"{expected_id}.publish.{platform} 必须是对象")

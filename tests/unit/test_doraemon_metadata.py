@@ -50,10 +50,25 @@ def test_schema_defaults_and_title_normalization(path):
     assert story["zh"] is None
     assert story["publish"] == {
         "title": None,
-        "video_path": None,
+        "video_path": "941_1_final.mp4",
         "douyin": {"tags": [], "cover_portrait_path": None, "cover_landscape_path": None},
         "bilibili": {"tags": [], "tid": 24},
     }
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_unset_video_paths_default_to_story_id_and_are_persisted(path, missing):
+    data = meta.load_metadata(path)
+    data["stories"].reverse()
+    for story in data["stories"]:
+        if missing:
+            story["publish"].pop("video_path")
+        else:
+            story["publish"]["video_path"] = None
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    meta.update_metadata(path, lambda data: None)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [s["publish"]["video_path"] for s in saved["stories"]] == ["941_2_final.mp4", "941_1_final.mp4"]
 
 
 @pytest.mark.parametrize("filename", ["941_1_origin.srt", "0941_1_origin.srt"])

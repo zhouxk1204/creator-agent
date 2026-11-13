@@ -300,7 +300,7 @@ bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --for
 bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --force --refresh-translation
 ```
 
-发布时继续读取同一份 metadata。B站简介直接使用 `zh.synopsis` 并保留换行，封面取 `image_file`；抖音使用独立制作的两张封面及最多 5 个标签。`06` 不猜测最终视频或封面路径，制作完成后再人工填写，详见 [发布标准](../../docs/publish-package.md)。
+发布时继续读取同一份 metadata。B站简介直接使用 `zh.synopsis` 并保留换行，封面取 `image_file`；抖音使用独立制作的两张封面及最多 5 个标签。最终视频路径默认预填为 `<story_id>_final.mp4`（如 `941_1_final.mp4`），剪映按此名称导出到素材目录；抖音封面路径仍在制作完成后填写。已有自定义视频路径保留，详见 [发布标准](../../docs/publish-package.md)。
 
 ## 14. 禁止事项
 

@@ -31,13 +31,13 @@ tools\social-auto-upload\.venv\Scripts\sau.exe bilibili login --account default
 ## 每次发布
 
 1. 直接使用剧集素材目录的 `metadata.json`，不另做文本发布包。**唯一格式标准见 [`docs/publish-package.md`](../docs/publish-package.md)**。
-2. 先完成 `06` 的中文简介翻译；在所选故事的 `publish` 中明确填写最终视频路径、抖音两张封面路径，检查标题与平台标签。
+2. 先完成 `06` 的中文简介翻译。`publish.video_path` 自动预填为 `<story_id>_final.mp4`，例如 `941_1_final.mp4`；剪映按该名字导出到素材目录即可。填写抖音两张封面路径，检查标题与平台标签；已有自定义视频路径保留。
 
 ```text
 Desktop\doraemon_941\
     metadata.json                 唯一资料与发布配置
     941_1.jpg                     B站直接使用 image_file
-    941_1_final.mp4                publish.video_path 明确指定
+    941_1_final.mp4                publish.video_path 默认预填，剪映导出使用此名称
     941_1_douyin_portrait.jpg      抖音竖封面，3:4
     941_1_douyin_landscape.jpg     抖音横封面，4:3
 ```
