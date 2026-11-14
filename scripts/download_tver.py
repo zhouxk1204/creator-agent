@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -60,21 +61,35 @@ def _series_id(arg: str) -> str:
 
 
 def list_episodes(client: httpx.Client, series_id: str) -> list[dict]:
-    resp = client.get(f"{API_BASE}/callSeriesSeasons/{series_id}", headers=API_HEADERS)
-    resp.raise_for_status()
-    seasons = resp.json()["result"]["contents"]
+    """Available episodes of a series.
 
-    episodes = []
-    for season in seasons:
-        if season["type"] != "season":
-            continue
-        season_id = season["content"]["id"]
-        resp = client.get(f"{API_BASE}/callSeasonEpisodes/{season_id}", headers=API_HEADERS)
-        resp.raise_for_status()
-        for item in resp.json()["result"]["contents"]:
-            if item["type"] == "episode":
-                episodes.append(item["content"])
-    return episodes
+    service-api.tver.jp drops TLS connections now and then (SSL EOF) even when
+    the video CDN is fine, so the listing gets the same retry treatment as the
+    download: without it a rerun fails before it can even decide to skip.
+    """
+    for attempt in range(1, 4):
+        try:
+            resp = client.get(f"{API_BASE}/callSeriesSeasons/{series_id}", headers=API_HEADERS)
+            resp.raise_for_status()
+            seasons = resp.json()["result"]["contents"]
+
+            episodes = []
+            for season in seasons:
+                if season["type"] != "season":
+                    continue
+                season_id = season["content"]["id"]
+                resp = client.get(f"{API_BASE}/callSeasonEpisodes/{season_id}", headers=API_HEADERS)
+                resp.raise_for_status()
+                for item in resp.json()["result"]["contents"]:
+                    if item["type"] == "episode":
+                        episodes.append(item["content"])
+            return episodes
+        except httpx.HTTPError as exc:
+            if attempt == 3:
+                raise
+            print(f"  [retry {attempt}/2] listing failed ({exc.__class__.__name__}: {exc}) — retrying")
+            time.sleep(2 * attempt)
+    raise AssertionError("unreachable")
 
 
 def _ffmpeg_location() -> str | None:
@@ -96,8 +111,36 @@ def _open_dir(path: Path) -> None:
         os.startfile(path)  # type: ignore[attr-defined]
 
 
-def download(episode_id: str, out_dir: Path, name: str | None = None) -> None:
+# A finished TVer episode is ~600 MB at 1080p; anything under this is a leftover
+# fragment from an interrupted run and must be downloaded again.
+MIN_FINISHED_BYTES = 50 * 1024 * 1024
+
+
+def _already_downloaded(out_dir: Path, name: str) -> Path | None:
+    """The finished ``<name>.mp4`` when it is complete, else ``None``.
+
+    Reruns must be cheap: pipeline launchers are re-run by hand whenever a later
+    stage fails, and re-downloading 600 MB (or clobbering a good file because the
+    network hiccuped again) is exactly what this avoids. ``--force`` overrides.
+    """
+    target = out_dir / f"{name}.mp4"
+    if target.is_file() and target.stat().st_size >= MIN_FINISHED_BYTES:
+        return target
+    return None
+
+
+def _report_skip(done: Path) -> None:
+    size = done.stat().st_size / 1024 / 1024
+    print(f"  [skip] already downloaded: {done.name} ({size:.1f} MiB) — --force to redo")
+
+
+def download(episode_id: str, out_dir: Path, name: str | None = None, force: bool = False) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    if name and not force:
+        done = _already_downloaded(out_dir, name)
+        if done is not None:
+            _report_skip(done)
+            return
     cmd = [
         sys.executable,
         "-m",
@@ -160,6 +203,11 @@ def main() -> None:
         help="Only download the available episode aired on this date "
         "(matches broadcastDateLabel, e.g. 2026-10-17 -> '10月17日').",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Download even when <out-dir>/<name>.mp4 already exists (default: skip finished files).",
+    )
     args = parser.parse_args()
 
     series_id = _series_id(args.series)
@@ -168,9 +216,18 @@ def main() -> None:
     out_dir = args.out_dir or (OUT_ROOT if series_id == DEFAULT_SERIES else OUT_ROOT / series_id)
 
     if args.episode:
-        download(args.episode, out_dir, name=args.name)
+        download(args.episode, out_dir, name=args.name, force=args.force)
         _open_dir(out_dir)
         return
+
+    # With a known output name the file on disk settles it: no API call, no
+    # retries, no risk of a TLS failure turning a finished episode into an error.
+    if args.name and not args.force and not args.list:
+        done = _already_downloaded(out_dir, args.name)
+        if done is not None:
+            _report_skip(done)
+            print(f"\nSaved to: {out_dir.resolve()}")
+            return
 
     with httpx.Client(timeout=30, follow_redirects=True) as client:
         episodes = list_episodes(client, series_id)
@@ -205,7 +262,7 @@ def main() -> None:
             targets = targets[:1]
     for ep in targets:
         print(f"\nDownloading {ep['id']}: {ep.get('title', '')}")
-        download(ep["id"], out_dir, name=args.name)
+        download(ep["id"], out_dir, name=args.name, force=args.force)
 
     print(f"\nSaved to: {out_dir.resolve()}")
     _open_dir(out_dir)

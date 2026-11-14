@@ -41,8 +41,13 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      ED/preview interstitials after the story are excluded. "Black" covers both
      true black and an off-black FLAT solid (sources that render the gap as
      uniform dark gray). If no black run is found the original boundary is
-     kept. END rows in the contact sheet show the last visible frame before the
-     aligned black run (end_XX.jpg too).
+     kept, and when that unsnapped story is the LAST one the confirm prompt
+     offers a fix: it prints the hardest scene change inside the usual ~2min
+     ED tail window (some episodes hard-cut straight into the ED, so there is
+     no black to snap to) and accepts a manual end time (e.g. 22:49.95, or
+     MM:SS / HH:MM:SS / seconds) instead of just y/N. END rows in the contact
+     sheet show the last visible frame before the aligned black run
+     (end_XX.jpg too).
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -58,11 +63,17 @@ Usage:
         # cut directly when the split looks healthy; only anomalies (title-card
         # count != 2, a story end not snapped to a black run, a story outside
         # 8~13 minutes) pop the contact sheet for a y/n decision
+        # at either prompt you may instead type a new end time for the LAST
+        # story (e.g. 22:49.95) when the story hard-cuts into the ED
     uv run python scripts/split_episode.py input/935.mp4 -o output --episodes 2 --copy
 
 First run on a new source should always be --preview: it writes
 ``<output>/preview/candidate_XX.jpg`` and ``contact_sheet.jpg`` so you can
 eyeball that the candidates really are title cards before cutting anything.
+
+Re-running is cheap: when ``<stem>_split.json`` and every clip it names are
+already on disk the split is skipped (no detection scan), and individual clips
+that exist are not re-encoded. ``--force`` redoes both.
 """
 
 from __future__ import annotations
@@ -139,6 +150,14 @@ BLACK_SOLID_MEAN = 60.0
 # the last clearly visible content frame instead. The CUT point is unaffected.
 END_PREVIEW_MIN_MEAN = 35.0
 END_PREVIEW_MAX_BACKTRACK = 2.0
+# Last story that hard-cuts into the ED (no black run anywhere): the tail
+# (ED + 次回予告 + sponsor bumpers) stays ~2 minutes on this broadcast, so the
+# story/ED boundary sits 120~135s before the video end. Only used to print a
+# hint for the operator — a cut candidate must be at least this much of a
+# scene change (frame-to-frame similarity) to be worth suggesting.
+END_TAIL_HINT_MIN = 120.0
+END_TAIL_HINT_MAX = 135.0
+END_TAIL_CUT_SIM_MAX = 0.80
 
 
 # --- anomaly gate for --confirm-anomaly --------------------------------------
@@ -581,6 +600,64 @@ def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
         cap.release()
 
 
+def suggest_tail_cut(video: Path, fps: float, end: float) -> float | None:
+    """Best guess for the story/ED boundary when no black run marks it.
+
+    Some episodes hard-cut straight from the last story into the ED: no fade,
+    no black frame, so the black-run snap finds nothing and the story keeps the
+    ED + 次回予告 + sponsor bumpers (roughly two minutes). The tail length is
+    fairly constant, so look for the HARDEST scene change inside
+    [end-135s, end-120s] and offer it as a hint; the operator confirms or types
+    another time at the prompt (a cut is not applied automatically — the ED
+    sequence itself has cuts, so this is only a suggestion).
+    """
+    t0 = end - END_TAIL_HINT_MAX
+    t1 = end - END_TAIL_HINT_MIN
+    if t0 <= 0:
+        return None
+    cap = open_capture(video)
+    try:
+        start = int(round(t0 * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+        prev: np.ndarray | None = None
+        best: tuple[float, float] | None = None
+        idx = start
+        while idx / fps <= t1:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            sig = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), SIG_SIZE, interpolation=cv2.INTER_AREA)
+            if prev is not None:
+                sim = similarity(prev, sig)
+                if sim <= END_TAIL_CUT_SIM_MAX and (best is None or sim < best[0]):
+                    best = (sim, idx / fps)
+            prev = sig
+            idx += 1
+        return None if best is None else best[1]
+    finally:
+        cap.release()
+
+
+def parse_time_spec(text: str) -> float | None:
+    """Parse a manual time from the confirm prompt; ``None`` when it isn't one.
+
+    Accepts ``MM:SS[.ms]``, ``HH:MM:SS[.ms]`` and plain ``SS[.ms]``. Anything
+    else (``y``, ``n``, empty) returns ``None`` so the caller keeps its y/N
+    handling.
+    """
+    s = text.strip()
+    if not s or s.count(":") > 2:
+        return None
+    try:
+        parts = [float(part) for part in s.split(":")]
+    except ValueError:
+        return None
+    total = 0.0
+    for part in parts:
+        total = total * 60.0 + part
+    return total if total >= 0 else None
+
+
 def split_anomalies(split_cards: list[Candidate], episodes: list[dict]) -> list[str]:
     """Anomalies worth a human confirmation before cutting (--confirm-anomaly).
 
@@ -845,7 +922,41 @@ def choose_video_args(ffmpeg: str, force_cpu: bool) -> tuple[str, list[str]]:
     return "libx264 (CPU)", [*CPU_VARGS, "-pix_fmt", "yuv420p"]
 
 
-def cut_episodes(video: Path, episodes: list[dict], out_dir: Path, copy: bool, force_cpu: bool = False) -> None:
+MIN_CLIP_BYTES = 10 * 1024 * 1024  # a real 9~13min 1080p clip is ~250~350 MB
+
+
+def existing_split(out_dir: Path, stem: str) -> list[Path] | None:
+    """Clips of an already-finished split, or ``None`` when work remains.
+
+    Launchers get re-run by hand after a later stage fails (download, split,
+    upscale are separate steps), and title-card detection scans the whole video
+    for minutes. When ``<stem>_split.json`` and every clip it names are on disk
+    the split is done, so the caller can skip it; ``--force`` re-cuts.
+    """
+    json_path = out_dir / f"{stem}_split.json"
+    if not json_path.is_file():
+        return None
+    try:
+        episodes = json.loads(json_path.read_text(encoding="utf-8")).get("episodes") or []
+    except (OSError, ValueError):
+        return None
+    if not episodes:
+        return None
+    clips: list[Path] = []
+    for ep in episodes:
+        name = ep.get("name")
+        if not name:
+            return None
+        clip = out_dir / f"{name}.mp4"
+        if not clip.is_file() or clip.stat().st_size < MIN_CLIP_BYTES:
+            return None
+        clips.append(clip)
+    return clips
+
+
+def cut_episodes(
+    video: Path, episodes: list[dict], out_dir: Path, copy: bool, force_cpu: bool = False, force: bool = False
+) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise SystemExit("找不到 ffmpeg：PATH 上没有，settings.yaml 的 asr.ffmpeg_path 也未配置。请先安装 ffmpeg。")
@@ -856,6 +967,9 @@ def cut_episodes(video: Path, episodes: list[dict], out_dir: Path, copy: bool, f
     print(f"切割编码器: {label}")
     for ep in episodes:
         out = out_dir / f"{ep['name']}.mp4"
+        if not force and out.is_file() and out.stat().st_size >= MIN_CLIP_BYTES:
+            print(f"  跳过 {ep['name']}: 已存在 {out.name} (--force 重切)")
+            continue
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ep['start']:.3f}", "-i", str(video)]
         if copy:
             cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", "-c", "copy"]
@@ -897,12 +1011,29 @@ def main() -> int:
         "--confirm-anomaly",
         action="store_true",
         help="无异常时直接切割不询问; 仅当检测到异常 (标题卡数量非 2 / 有集结尾未对齐黑帧 / "
-        "单集时长不在 8~13 分钟) 时弹出联系表等待 y/n (取消时退出码 2 并打开预览目录)",
+        "单集时长不在 8~13 分钟) 时弹出联系表等待 y/n (取消时退出码 2 并打开预览目录); "
+        "y/N 之外也可输入最后一集的新结尾时间 (如 22:49.95) 修正硬切进 ED 的结尾",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="即使 <输出目录>/<文件名>_split.json 与所有片段都已存在也重新检测并重切 (默认跳过已完成的分割)",
     )
     args = p.parse_args()
 
     if not args.video.is_file():
         raise SystemExit(f"文件不存在: {args.video}")
+
+    # Re-running a launcher after a later stage failed must not re-detect (a
+    # full scan costs minutes) nor re-encode existing clips.
+    if not args.force:
+        done = existing_split(args.output_dir, args.video.stem)
+        if done is not None:
+            print(f"已分割完成, 跳过 ({len(done)} 个片段已在 {args.output_dir}):")
+            for clip in done:
+                print(f"  {clip.name}  {clip.stat().st_size / 1024 / 1024:.1f} MiB")
+            print("重新分割请加 --force。")
+            return 0
 
     # Preview keeps NOTEXT candidates (labelled) so nothing is hidden; cut
     # mode drops them unless --no-text-filter.
@@ -1007,20 +1138,48 @@ def main() -> int:
             for issue in issues:
                 print(f"   - {issue}")
 
+    # A last story left un-snapped usually means the story hard-cuts into the
+    # ED with no black frame. Show the operator where that boundary most likely
+    # is so they can type it at the prompt below instead of re-cutting by hand.
+    if episodes and "end_frame" not in episodes[-1]:
+        hint = suggest_tail_cut(args.video, fps, episodes[-1]["end"])
+        if hint is not None:
+            print(f"\n   提示: {fmt_time(hint)} 附近是最强的硬切, 且这里没有任何黑帧 —")
+            print("         若那就是 ED 起点, 可在下面的确认里直接输入该时间作为最后一集的结尾。")
+
     if args.confirm or issues:
         preview_dir = args.output_dir / "preview"
         save_preview(args.video, fps, cards, preview_dir, episodes)
         _open_in_shell(preview_dir / "contact_sheet.jpg")
-        try:
-            ans = input("\n按以上方案分割? [y/N]: ")
-        except EOFError:
-            ans = ""
-        if ans.strip().lower() not in ("y", "yes"):
+        while True:
+            try:
+                ans = input("\n按以上方案分割? [y/N] (也可输入最后一集的新结尾时间, 如 22:49.95): ")
+            except EOFError:
+                ans = ""
+            override = parse_time_spec(ans)
+            if override is not None:
+                last = episodes[-1]
+                floor = last["start"] + STORY_MIN_MINUTES * 60.0
+                if not floor < override < last["end"]:
+                    print(f"   无效: 最后一集结尾需在 {fmt_time(floor)} 与 {fmt_time(last['end'])} 之间。")
+                    continue
+                print(f"   最后一集结尾: {fmt_time(last['end'])} -> {fmt_time(override)}")
+                last["end"] = round(override, 3)
+                last.pop("end_frame", None)
+                result["episodes"] = episodes
+                json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"   (已更新 {json_path.name}; 联系表的 END 行仍是旧的结尾)")
+                print("\n建议分割方案:")
+                for ep in episodes:
+                    print(f"  {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
+                continue
+            if ans.strip().lower() in ("y", "yes"):
+                break
             _open_in_shell(preview_dir)
             print(f"已取消。候选预览图在 {preview_dir}/，调整后重跑即可。")
             return 2
 
-    cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu)
+    cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu, force=args.force)
     print("完成。")
     return 0
 

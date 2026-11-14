@@ -16,6 +16,10 @@ Usage:
     uv run python scripts/fetch_doraemon.py --auto   # fetch every aired episode
                                                      # after the newest local one
 
+Reruns only fetch what is missing: an existing ``{ep}_{i}.jpg`` is not
+downloaded again and an existing ``{ep}_{i}_4k.jpg`` is not re-upscaled (ComfyUI
+is not even started when every cover is done). ``--force`` redoes both.
+
 --latest resolves the episode number from the same index that renders the
 backnumber page (https://www.tv-asahi.co.jp/doraemon/story/bk/): the site's own
 JSON at doraemon/json/story.json — each entry is the ``story-item`` the page
@@ -61,6 +65,10 @@ USER_AGENT = (
 # gitignored; per-episode materials go straight to the Desktop materials folder.
 STATE_DIR = Path(__file__).resolve().parent.parent / "logs"
 DESKTOP_DIR = Path.home() / "Desktop"
+# Reruns are the norm (the download/split/upscale stages get re-run by hand), so
+# existing story images and ComfyUI covers are kept: only what is missing gets
+# fetched/re-upscaled. --force redoes both.
+FORCE = "--force" in sys.argv[1:]
 
 
 def desktop_episode_dir(episode: str) -> Path:
@@ -319,30 +327,41 @@ def fetch_one(episode: str) -> int:
             img_url = src if src.startswith("http") else f"https://www.tv-asahi.co.jp{src}"
             ext = Path(img_url.split("?")[0]).suffix or ".jpg"
             img_path = desk_dir / f"{int(episode)}_{i}{ext}"
-            img_path.write_bytes(client.get(img_url).content)
+            if not FORCE and img_path.is_file() and img_path.stat().st_size > 0:
+                print(f"  image     : {img_path}  (已存在, 跳过下载)")
+            else:
+                img_path.write_bytes(client.get(img_url).content)
+                print(f"  image     : {img_path}")
             story["image_file"] = img_path.name
-            print(f"  image     : {img_path}")
 
         broadcast_date = data["broadcast_date"]
         data = save_sources(desk_dir / "metadata.json", data)
         print(f"  desktop   : {desk_dir}")
 
         ep_short = str(int(episode))
-        comfy_url, comfy_proc = ensure_comfyui(client)
-        try:
-            for i, story in enumerate(data["stories"], 1):
-                if story.get("image_file"):
-                    src_img = desk_dir / story["image_file"]
-                    dst_4k = desk_dir / f"{ep_short}_{i}_4k{src_img.suffix}"
+        covers = [
+            (i, desk_dir / story["image_file"], desk_dir / f"{ep_short}_{i}_4k{Path(story['image_file']).suffix}")
+            for i, story in enumerate(data["stories"], 1)
+            if story.get("image_file")
+        ]
+        # ComfyUI takes ~30-60s to boot, so only start it when a cover is
+        # actually missing — a rerun with all covers done costs nothing.
+        pending = [(i, s, d) for i, s, d in covers if FORCE or not (d.is_file() and d.stat().st_size > 0)]
+        if not pending:
+            print("  cover(4k) : 已存在, 跳过 (未启动 ComfyUI)")
+        else:
+            comfy_url, comfy_proc = ensure_comfyui(client)
+            try:
+                for _, src_img, dst_4k in pending:
                     if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
                         print(f"  cover(4k) : {dst_4k}")
                     else:
                         if not comfy_url:
                             print("  cover(4k) : ComfyUI unavailable - using original instead")
                         print(f"  cover     : {src_img}")
-        finally:
-            if comfy_proc is not None:  # only stop the server WE started
-                comfy_proc.terminate()
+            finally:
+                if comfy_proc is not None:  # only stop the server WE started
+                    comfy_proc.terminate()
 
     print(f"\n第{ep}话 {data['episode_title']}")
     print(f"  broadcast : {data['broadcast_date']}")
@@ -473,11 +492,12 @@ def auto_fetch() -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: fetch_doraemon.py <episode_number|--latest|--auto>  (e.g. 934)")
+    argv = [a for a in sys.argv[1:] if a != "--force"]
+    if len(argv) != 1:
+        print("Usage: fetch_doraemon.py <episode_number|--latest|--auto> [--force]  (e.g. 934)")
         sys.exit(2)
-    if sys.argv[1] == "--auto":
+    if argv[0] == "--auto":
         sys.exit(auto_fetch())
-    if sys.argv[1] == "--latest":
+    if argv[0] == "--latest":
         sys.exit(latest_fetch())
-    sys.exit(fetch_one(sys.argv[1]))
+    sys.exit(fetch_one(argv[0]))

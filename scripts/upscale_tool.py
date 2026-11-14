@@ -4,8 +4,14 @@ The third-party engine, model, and dedicated conda environment stay in their
 existing locations; this script only owns the extract/upscale/rebuild workflow.
 It is called by bat/doraemon/run_upscale.bat and returns a non-zero exit code if
 any video fails, so callers can use it without an interactive pause.
+
+Reruns only do the missing work: a video whose ``<name>_4K.mp4`` already exists
+is skipped (``--force`` redoes it). The rebuild writes ``<name>_4K.part.mp4``
+first and renames it only after ffmpeg succeeds, so an interrupted run never
+leaves a truncated file that a later run would mistake for finished.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -24,6 +30,7 @@ MODEL_PATH = REALESRGAN_DIR / "weights/2x_AniScale2S_Compact_i8_60K.pth"
 LOG_FILE = BASE_DIR / "run_log.txt"
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi"}
+FORCE = "--force" in sys.argv[1:]
 
 
 def log(msg):
@@ -63,11 +70,14 @@ def check_setup():
 def upscale(video):
     name = video.stem
     output = BASE_DIR / f"{name}_4K.mp4"
+    # Encode to a .part name and rename only on success: a killed run otherwise
+    # leaves a truncated mp4 that the skip check above would accept as done.
+    tmp_output = output.with_name(f"{output.stem}.part.mp4")
     log(f"\n=== Processing: {name} ===")
 
-    if output.exists():
+    if output.exists() and not FORCE:
         log(f"[SKIP] Output already exists: {output}")
-        return
+        return False
 
     try:
         clean_dirs()
@@ -131,12 +141,16 @@ def upscale(video):
                 "0",
                 "-pix_fmt",
                 "yuv420p",
-                output,
+                tmp_output,
             ]
         )
+        os.replace(tmp_output, output)
         log(f"[SUCCESS] {output}")
     finally:
         clean_dirs()
+        if tmp_output.exists():  # aborted encode: never promote half a file
+            tmp_output.unlink(missing_ok=True)
+    return True
 
 
 def main():
@@ -157,11 +171,13 @@ def main():
         log(f"[ERROR] {exc}")
         return 1
 
-    log(f"[INFO] Found {len(videos)} videos")
+    log(f"[INFO] Found {len(videos)} videos" + (" (--force: redo finished ones)" if FORCE else ""))
     failed = []
+    done = 0
     for video in videos:
         try:
-            upscale(video)
+            if upscale(video):
+                done += 1
         except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             failed.append(video)
             log(f"[ERROR] {video.name}: {exc}")
@@ -170,7 +186,7 @@ def main():
         log(f"\n===== FAILED: {len(failed)} of {len(videos)} videos =====")
         return 1
 
-    log("\n===== ALL DONE =====")
+    log(f"\n===== ALL DONE ({done} upscaled, {len(videos) - done} already existed) =====")
     return 0
 
 

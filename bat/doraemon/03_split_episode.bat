@@ -21,6 +21,10 @@ rem
 rem Flow: split_episode.py detects title cards, opens the contact sheet
 rem (output\preview\contact_sheet.jpg) and waits for console confirmation:
 rem   y = cut immediately (no re-detection), N = open output\preview\ and stop.
+rem At the y/N prompt you can also type a new END time for the LAST story
+rem (e.g. 22:49.95) when the story hard-cuts into the ED with no black frame —
+rem the script then prints the strongest scene change in the usual ~2min ED
+rem tail window as a hint. The split JSON is updated with the new end.
 rem Episode ends snap to a black frame that is 20-60s before the next card
 rem (non-last stories) or 2-3 minutes before the video end (last story) —
 rem closer black runs are the transition-in of the card / the video tail.
