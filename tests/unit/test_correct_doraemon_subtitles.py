@@ -249,26 +249,45 @@ def test_tag_failure_still_corrects_subtitles(correction_run, monkeypatch):
     assert events[-1] == "stop"
 
 
-def test_existing_subtitles_protect_synopsis_until_force(correction_run):
+def test_existing_subtitles_are_skipped_not_failed(correction_run):
     materials, args, events, _ = correction_run
     args.target = materials / "941_1_origin.srt"
     metadata = materials / "metadata.json"
     original_metadata = metadata.read_bytes()
     jp_fixed = materials / "941_1_jp_fixed.srt"
     jp_fixed.write_text("已有字幕", encoding="utf-8")
-    assert cli.main() == 1
+    # A rerun must not fail on files it produced itself, and the synopsis must
+    # not be regenerated behind the human's back: skip, exit 0.
+    assert cli.main() == 0
     assert events == ["start", "stop"]
     assert metadata.read_bytes() == original_metadata
     assert jp_fixed.read_text(encoding="utf-8") == "已有字幕"
+    assert not (materials / "941_1_zh_fixed.srt").exists()
 
     args.force = True
     events.clear()
     assert cli.main() == 0
     assert events == ["start", "synopsis", "tags", "correct", "translate", "stop"]
     assert json.loads(metadata.read_text(encoding="utf-8"))["stories"][0]["zh"]["title"] == "任意门"
+
+    # Now everything is done: a plain rerun is a no-op, not an error.
+    args.force = False
     events.clear()
     assert cli.main() == 0
-    assert events == ["start", "correct", "translate", "stop"]
+    assert events == ["start", "stop"]
+
+
+def test_refresh_translation_updates_metadata_but_skips_subtitles(correction_run):
+    materials, args, events, _ = correction_run
+    args.target = materials / "941_1_origin.srt"
+    args.refresh_translation = True
+    jp_fixed = materials / "941_1_jp_fixed.srt"
+    jp_fixed.write_text("已有字幕", encoding="utf-8")
+
+    assert cli.main() == 0
+    assert events == ["start", "synopsis", "tags", "stop"]
+    assert jp_fixed.read_text(encoding="utf-8") == "已有字幕"
+    assert not (materials / "941_1_zh_fixed.srt").exists()
 
 
 def test_subtitle_failure_keeps_generated_synopsis_and_stops_server(correction_run, monkeypatch):
@@ -340,6 +359,14 @@ def test_correction_launcher_uses_the_saved_folder_without_prompting():
     assert call_lines == ['"%PY%" scripts\\correct_doraemon_subtitles.py %*']
     assert "set /p TARGET=" not in script
     assert "%TARGET%" not in script
+
+
+def test_correction_launcher_is_ascii_only():
+    # cmd.exe mis-parses non-ASCII lines after "chcp 65001" and executes half a
+    # line as a command ('...来' is not recognized as an internal or external
+    # command). Keep the launcher ASCII; Chinese docs live in the .md.
+    launcher = Path(__file__).resolve().parents[2] / "bat" / "doraemon" / "06_correct_subtitles.bat"
+    launcher.read_bytes().decode("ascii")
 
 
 def test_materials_launchers_do_not_invoke_translation():

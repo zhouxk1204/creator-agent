@@ -151,20 +151,31 @@ def main() -> int:
         server = ensure_server(settings.base_url)
         pipeline = SubtitleCorrectionPipeline(settings)
         failed = 0
+        skipped: list[str] = []
         for position, origin in enumerate(inputs, 1):
             print(f"\n===== {position}/{len(inputs)} {origin.name} =====")
             try:
                 base = origin.name.removesuffix("_origin.srt")
-                if not args.force and any(
+                # Rerunning a launcher after a later stage failed must not fail on
+                # the files it already produced: skip them (no overwrite, so a
+                # hand-edited *_fixed.srt stays safe) and still exit 0.
+                done = not args.force and any(
                     origin.with_name(f"{base}_{suffix}_fixed.srt").exists() for suffix in ("jp", "zh")
-                ):
-                    raise SubtitleCorrectionError("字幕输出已存在，请使用 --force 明确覆盖")
+                )
+                if done and not args.refresh_translation:
+                    print(f"[跳过] 字幕已存在：{base}_jp_fixed.srt / {base}_zh_fixed.srt (--force 覆盖)")
+                    skipped.append(origin.name)
+                    continue
                 path = origin.parent / "metadata.json"
                 story = story_for_subtitle(load_metadata(path), origin)
                 print(f"[简介] 翻译 {story['story_id']} 并保存 metadata 平台标签...")
                 _, _, tags_ok = translate_metadata(path, story["story_id"], settings, refresh=args.refresh_translation)
                 if not tags_ok:
                     print("[警告] 发布标签生成失败，继续字幕处理；本次运行将返回失败状态", file=sys.stderr)
+                if done:  # --refresh-translation only asked for the metadata stage
+                    print(f"[跳过] 字幕已存在，仅刷新了简介/标签：{base} (--force 覆盖字幕)")
+                    skipped.append(origin.name)
+                    continue
                 result = pipeline.process_file(origin, force=args.force)
                 if not tags_ok:
                     failed += 1
@@ -178,6 +189,8 @@ def main() -> int:
             )
             if result.questions:
                 print(f"[存疑] {result.questions.name}")
+        if skipped:
+            print(f"\n[跳过] {len(skipped)} 个已有结果：{', '.join(skipped)} (需要重做请加 --force)")
         return 1 if failed else 0
     except Exception as exc:
         print(f"错误：{exc}", file=sys.stderr)
