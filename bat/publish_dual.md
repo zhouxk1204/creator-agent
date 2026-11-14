@@ -54,7 +54,7 @@ Desktop\doraemon_941\
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
 ```
 
-4. 双击 `bat\publish_dual.bat`：显示 `logs/.last_doraemon_materials` 保存的上次素材目录，回车使用默认，或粘贴其他目录/metadata.json（可带引号）。多个故事时输入 `941_1` 等故事标识。也可显式指定：
+4. 双击 `bat\publish_dual.bat`：**不需要输入路径**，直接用 `logs/.last_doraemon_materials` 记录的素材目录（每次跑素材下载都会刷新）。多个故事时输入 `941_1` 等故事标识；要换目录就把路径当参数传，`--ask` 才临时询问（回车仍用默认）。也可显式指定：
 
 ```bat
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941\metadata.json" --story 941_1

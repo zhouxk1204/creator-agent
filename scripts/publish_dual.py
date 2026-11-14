@@ -139,18 +139,37 @@ class PublishJob:
         return commands
 
 
-def choose_target(value: str | None, prompt: bool) -> Path:
+def _stdin_is_interactive() -> bool:
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def choose_target(value: str | None, ask: bool = False) -> Path:
+    """metadata.json to publish, asking only when there is nothing usable saved.
+
+    Same rule as 06_correct_subtitles: the materials launcher refreshes
+    ``logs/.last_doraemon_materials`` on every run, so a weekly publish must not
+    stop at a path prompt — a stray Enter there can send the previous episode.
+    The story choice (when metadata has several stories) is still asked.
+    """
     if value:
         return metadata_path(Path(value))
     state = REPO_ROOT / "logs/.last_doraemon_materials"
     default = state.read_text(encoding="utf-8-sig").strip() if state.is_file() else ""
-    if prompt:
-        if default:
-            print(f"默认素材目录：{default}")
-        entered = input("素材目录或 metadata.json（回车使用默认）: ").strip().strip('"')
-        value = entered or default
-    else:
-        value = default
+    saved = metadata_path(Path(default)) if default else None
+    if not ask and saved is not None and saved.is_file():
+        print(f"素材目录：{saved.parent}")
+        return saved
+    if saved is not None and not saved.is_file():
+        print(f"[!] logs/.last_doraemon_materials 记录的目录已不存在：{default}")
+    if not ask and not _stdin_is_interactive():
+        raise MetadataError("请指定素材目录或 metadata.json（没有可用记录；--ask 可强制询问）")
+    if default:
+        print(f"默认素材目录：{default}")
+    entered = input("素材目录或 metadata.json（回车使用默认）: ").strip().strip('"')
+    value = entered or default
     if not value:
         raise MetadataError("请指定素材目录或 metadata.json")
     return metadata_path(Path(value))
@@ -171,10 +190,16 @@ def main() -> int:
     parser.add_argument("--headed", action="store_true", help="显示抖音浏览器")
     parser.add_argument("--yes", action="store_true", help="明确跳过发布确认")
     parser.add_argument("--dry-run", action="store_true", help="校验并打印命令，不发布")
-    parser.add_argument("--prompt-target", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ask",
+        "--prompt-target",
+        dest="ask",
+        action="store_true",
+        help="强制询问素材目录 (默认直接用 logs/.last_doraemon_materials 里记录的目录)",
+    )
     args = parser.parse_args()
     try:
-        path = choose_target(args.dir, args.prompt_target)
+        path = choose_target(args.dir, args.ask)
         data = load_metadata(path)
         if not args.story and len(data["stories"]) > 1:
             if args.yes:

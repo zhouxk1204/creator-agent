@@ -12,10 +12,12 @@ if errorlevel 1 (
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. Chinese usage docs: publish_dual.md.
 rem Publish one story from metadata.json via social-auto-upload (sau).
-rem Double-click: choose a materials folder (Enter uses the saved default).
+rem Double-click: uses logs\.last_doraemon_materials (no path prompt); the story
+rem choice is still asked in Python when metadata has several stories.
 rem   publish_dual.bat "C:\path\doraemon_941" --story 941_1 --dry-run
 rem   publish_dual.bat "C:\path\metadata.json" --story 941_1 --only bilibili
-rem Python handles quoted interactive paths and story selection.
+rem Python handles quoted interactive paths and story selection. --ask re-enables
+rem the path prompt (Enter accepts the saved folder).
 rem ---------------------------------------------------------------------------
 
 set "SAU_PY=%REPO_ROOT%\tools\social-auto-upload\.venv\Scripts\python.exe"
@@ -32,14 +34,7 @@ echo ========================================
 echo   Publish metadata story to Douyin + Bilibili
 echo ========================================
 echo.
-if not "%~1"=="" goto :with_args
-"%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" --prompt-target
-goto :done
-
-:with_args
 "%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %*
-
-:done
 set "RC=%ERRORLEVEL%"
 echo.
 if not "%RC%"=="0" echo  FAILED or cancelled ^(exit code %RC%^) - see above.

@@ -24,7 +24,7 @@ bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-
 - 标题默认格式 `哆啦a梦941 XXXXX`；抖音标签最多 5 个，描述直接使用这些 `#标签`。
 - 两张封面分别填写 `publish.douyin.cover_portrait_path`（3:4）和 `cover_landscape_path`（4:3）。必须是两个独立文件，没有旧公共目录/通用封面回退。
 - 素材相对路径以 metadata.json 的目录为基准，绝对路径也支持；不会扫描并猜测视频。
-- 默认路径来自仓库 `logs/.last_doraemon_materials`。手动粘贴只覆盖本次选择，不改变记录。
+- 默认路径来自仓库 `logs/.last_doraemon_materials`，直接使用、不再询问路径；`--ask` 才临时挑一次，手动粘贴只覆盖本次选择，不改变记录。
 - 旧文本发布包不再支持，磁盘上已有文件不会自动删除。
 - 自主声明：**虚构演绎，仅供娱乐**。
 - 合集：**哆啦A梦2026合集**（需已存在于创作者账号）。

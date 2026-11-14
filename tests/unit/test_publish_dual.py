@@ -222,9 +222,41 @@ def test_saved_target_accepts_bom_and_quoted_override(tmp_path, monkeypatch):
     assert publish_dual.choose_target(None, True) == tmp_path / "manual/metadata.json"
 
 
+def test_saved_target_is_used_without_asking(tmp_path, monkeypatch):
+    # A weekly publish must not stop at a path prompt: the materials launcher
+    # just re-recorded the folder.
+    monkeypatch.setattr(publish_dual, "REPO_ROOT", tmp_path)
+    (tmp_path / "logs").mkdir()
+    saved = tmp_path / "doraemon_942"
+    saved.mkdir()
+    (saved / "metadata.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "logs/.last_doraemon_materials").write_text(f"{saved}\n", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("must not prompt when a folder is saved"))
+
+    assert publish_dual.choose_target(None) == saved / "metadata.json"
+
+
+def test_saved_target_that_vanished_fails_fast_without_a_terminal(tmp_path, monkeypatch):
+    monkeypatch.setattr(publish_dual, "REPO_ROOT", tmp_path)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs/.last_doraemon_materials").write_text(str(tmp_path / "deleted"), encoding="utf-8")
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("must not prompt without a terminal"))
+
+    with pytest.raises(MetadataError, match="没有可用记录"):
+        publish_dual.choose_target(None)
+
+
 def test_publisher_imports_without_site_packages():
     script = Path(publish_dual.__file__).resolve()
-    result = subprocess.run([sys.executable, "-S", str(script), "--help"], capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        [sys.executable, "-S", str(script), "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     assert result.returncode == 0, result.stderr
     assert "--story" in result.stdout
 
@@ -236,6 +268,7 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     assert b"\n" not in raw.replace(b"\r\n", b"")
     text = raw.decode("ascii")
     assert "setlocal DisableDelayedExpansion" in text
-    assert "--prompt-target" in text
+    # No path prompt of its own: the saved materials folder is used as-is.
+    assert "--prompt-target" not in text
     assert 'publish_dual.py" %*' in text
     assert "title.txt" not in text

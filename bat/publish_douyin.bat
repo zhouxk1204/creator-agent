@@ -7,9 +7,9 @@ if errorlevel 1 goto :fail
 
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. Chinese usage docs: publish_douyin.md.
-rem Double-click to choose a materials folder or metadata.json in Python.
-rem Enter accepts the saved materials folder. Multiple stories need a selection.
-rem All arguments are forwarded, including --story and --dry-run.
+rem Double-click: uses logs\.last_doraemon_materials (no path prompt).
+rem Multiple stories still need a selection, asked in Python.
+rem All arguments are forwarded, including --story, --dry-run and --ask.
 rem ---------------------------------------------------------------------------
 
 set "SAU_PY=%REPO_ROOT%\tools\social-auto-upload\.venv\Scripts\python.exe"
@@ -24,14 +24,7 @@ if not exist "%SAU_PY%" (
 echo.
 echo Douyin metadata publisher. Headed mode; confirm actual uploads with Y.
 echo.
-if not "%~1"=="" goto :with_args
-"%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" --prompt-target --only douyin --headed
-goto :done
-
-:with_args
 "%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %* --only douyin --headed
-
-:done
 set "RC=%ERRORLEVEL%"
 echo.
 if not "%RC%"=="0" echo FAILED or cancelled ^(exit code %RC%^) - see above.

@@ -1,4 +1,4 @@
-﻿# Doraemon metadata.json 素材与发布标准
+# Doraemon metadata.json 素材与发布标准
 
 `metadata.json` 是剧集资料、中文翻译、字幕背景和发布配置的唯一来源。`fetch_doraemon.py`、`translate_doraemon.py`、`06_correct_subtitles` 和 `publish_dual.py` 共用它；不再生成或读取日中简介 Markdown，也不再读取旧的 `title.txt` / `desc.txt` / `tags.txt` / `meta.txt` 发布包。
 
@@ -119,7 +119,7 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only b
 bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
 ```
 
-不传路径时使用 `logs/.last_doraemon_materials` 保存的本机目录；双击 BAT 可回车接受默认，或粘贴其他目录/metadata.json。多个故事时必须选择 `story_id`；命令行和自动化任务应显式传 `--story`。
+不传路径时直接用 `logs/.last_doraemon_materials` 保存的本机目录，**不再询问路径**（该记录在每次素材下载后刷新）；要换目录把路径当参数传，`--ask` 才临时询问并回车接受默认。多个故事时必须选择 `story_id`；命令行和自动化任务应显式传 `--story`。
 
 `--dry-run` 只校验素材并打印命令，不上传。正式发布显示摘要，输入 `Y` 才继续；只有明确指定 `--yes` 才跳过确认。账号通过 `--douyin-account` / `--bilibili-account` 选择，默认均为 `default`。某个平台失败仍继续另一个，最后返回非零，可用 `--only` 单独重试失败平台，避免重复发布已成功的平台。
 
