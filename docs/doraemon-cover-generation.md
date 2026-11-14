@@ -1,4 +1,4 @@
-# 抖音竖版封面：自动生成方案
+﻿# 抖音竖版封面：自动生成方案
 
 > 目标：把「剪映里手工做 3:4 封面」变成一条命令，并自动写回
 > `metadata.json` 的 `publish.douyin.cover_portrait_path`。
@@ -43,10 +43,22 @@ assets/doraemon_cover_template/               封面模板（明文时间线 + �
 tests/unit/test_doraemon_covers.py            路径/写回/幂等规则（不碰剪映）
 ```
 
-渲染原理：模板草稿是 1440×1920、5 帧的静帧工程（图片 + 黑底白圆角边框 + 三行字）。
+渲染原理：模板草稿是 5 帧的静帧工程（图片 + 白圆角边框 + 三行字）。
 `jianying_cover` 复制骨架 → 写一份**明文** `draft_content.json`（换图、标题那行写故事标题、
 集数那行写集号、`Doraemon` 固定不动）→ 启动剪映打开草稿 → 走剪映自己的导出对话框（原始分辨率）
-→ ffmpeg 抽首帧 → 存成 JPG。
+→ ffmpeg 抽首帧 → 按需叠白框 → 存成 JPG。
+
+两套模板（都在 `assets/`）：
+
+| 模板 | 画布 | 说明 |
+| --- | --- | --- |
+| `doraemon_cover_template` | 1440×1920（3:4） | 竖版，直接用你原来的模板：图片 + 黑底白圆角边框层 + 三行字 |
+| `doraemon_cover_template_landscape` | 1440×1080（4:3） | 横版，只保留三行字（花字）；图片裁切/渐隐和白框由渲染器合成 |
+
+横版为什么这样拆：3:4 的边框/卡片图层（960×1280、804×1072）放到 4:3 画布上会被剪映按比例
+重新适配，白框会缩到画面中间；而白框、底部渐隐都是静态美术，交给 Pillow 反而能 1:1 复刻
+（`prepare_photo` 里遮罩渐隐，`render_cover` 里叠 `layers/border_ring.png`）。
+花字是剪映私有效果，所以仍然由剪映渲染。
 
 ## 4. 用法
 
@@ -54,40 +66,45 @@ tests/unit/test_doraemon_covers.py            路径/写回/幂等规则（不�
 :: 先看看要生成什么（不起剪映、不写文件）
 bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942" --dry-run
 
-:: 生成全部故事
+:: 生成全部故事（横竖各一张）
 bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942"
 
-:: 只做一条 / 已有封面也重做
+:: 只做一条 / 只做横版 / 已有封面也重做
 bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942" --story 942_1
+bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942" --covers landscape
 bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942" --force
 ```
 
 不传目录时用 `logs/.last_doraemon_materials` 里上次的素材目录。
 
-输出：`<素材目录>/<story_id>_douyin_portrait.jpg`（1440×1920），并把
-`publish.douyin.cover_portrait_path` 写成相对文件名（如 `942_1_douyin_portrait.jpg`）。
+输出：
+
+- `<素材目录>/<story_id>_douyin_portrait.jpg`（1440×1920）→ `publish.douyin.cover_portrait_path`
+- `<素材目录>/<story_id>_douyin_landscape.jpg`（1440×1080）→ `publish.douyin.cover_landscape_path`
+
+两者都写成相对文件名（如 `942_1_douyin_portrait.jpg`），路径以 metadata.json 所在目录为基准。
+每条故事横竖各渲染一次，所以单条耗时约 2 倍（一次剪映启动只出一张）。
 
 ## 5. 写回规则（重要）
 
 - **只填空缺或文件已丢失的路径**：已有封面文件且不是本次生成的文件时，直接拒绝，加 `--force` 才覆盖。
   人工做的封面不会被一次误跑冲掉。
 - 标题取 `zh.title`，**翻译缺失/过期直接报错**，不回退日文标题（避免发出错封面）。
-- 只写 `cover_portrait_path`；`cover_landscape_path` 不动。
+- 横竖分开判断：只覆盖各自字段/文件，竖版已有不影响横版生成。
 - 写文件走 `metadata.update_metadata`（文件锁 + 原子替换），多故事连续生成不会互相覆盖。
 
 ## 6. 横版（4:3）封面怎么办
 
-竖版模板现成，横版没有对应版式——4:3 需要重新排版（图片区、黑底条、三行字的位置都不一样），
-硬把 1440×1920 的时间线改成 1440×1080 会走形。
+已实现，见第 3 节的横版模板。数值来自你的 `横屏封面模版` 草稿渲染出的 1440×1080 参考图：
 
-两条路，二选一：
+| 项 | 值 |
+| --- | --- |
+| 白框 | 左 25、右 26、上 17、下 23，线宽 7，圆角 34（叠在成品上） |
+| 图片 | 4:3 居中裁切铺满，底部 660→900 px 渐隐到黑 |
+| 标题 / Doraemon / 集数 | 纵向 -0.395 / -0.554 / -0.719（与竖版同样的三行位置） |
 
-1. **在剪映里复制一版 4:3 模板**（画布 1440×1080，图片铺满、标题和集数放左下/右下），
-   导出一次明文时间线给我 → 我把它放进 `assets/doraemon_cover_template_landscape/`，
-   渲染器按同样的替换规则出图，`--landscape` 一起写回。**推荐**：版式由你把关，效果和竖版一致。
-2. 先用竖版渲染、再用 Pillow 把竖版重排成 4:3 —— 花字会被重新缩放/裁切，效果不可控，不建议。
-
-在横版模板到位之前，`cover_landscape_path` 继续人工填；发布前 `publish_dual.py` 会照常校验。
+想微调版式，改 `src/creator_agent/doraemon/jianying_cover.py` 顶部的
+`FADE_START / FADE_END` 和 `assets/doraemon_cover_template_landscape/template.json` 里三行文字的 `transform.y`。
 
 ## 7. 失败与验收
 
@@ -102,3 +119,4 @@ bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_942" --force
 2. 真跑后 `<story_id>_douyin_portrait.jpg` 存在，尺寸 1440×1920，画面与剪映里手工导出一致。
 3. `metadata.json` 的 `cover_portrait_path` 被写成相对文件名，`publish_dual.py --dry-run` 能通过校验。
 4. 再跑一次 → 全部 `SKIP`（幂等）；`--force` 才会重做。
+

@@ -1,4 +1,4 @@
-# Doraemon metadata.json 素材与发布标准
+﻿# Doraemon metadata.json 素材与发布标准
 
 `metadata.json` 是剧集资料、中文翻译、字幕背景和发布配置的唯一来源。`fetch_doraemon.py`、`translate_doraemon.py`、`06_correct_subtitles` 和 `publish_dual.py` 共用它；不再生成或读取日中简介 Markdown，也不再读取旧的 `title.txt` / `desc.txt` / `tags.txt` / `meta.txt` 发布包。
 
@@ -126,3 +126,4 @@ bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-
 `06` 的 `--force` 只允许覆盖字幕；不代表重新翻译已有简介。需要重新翻译中文 metadata 时另加 `--refresh-translation`；已有字幕也要覆盖时两者一起用。刷新简介会清空并重新生成两平台标签（包括人工修改的标签），但保留人工发布标题和视频/封面路径。普通重跑复用当前有效的中文和标签，只补齐空缺或不合法的平台标签。成功的中文 metadata 在后续标签或字幕失败时仍保留。
 
 安装、扫码登录和上传故障处理见 [`bat/publish_dual.md`](../bat/publish_dual.md)。
+

@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal DisableDelayedExpansion
 chcp 65001 >nul
 call "%~dp0..\_bootstrap.bat"
@@ -11,11 +11,11 @@ if errorlevel 1 (
 call .venv\Scripts\activate.bat >nul 2>&1
 
 echo ========================================
-echo   Douyin portrait cover (剪映 template)
+echo   Douyin covers - portrait 3:4 + landscape 4:3 (剪映 templates)
 echo ========================================
 echo.
 echo  Input : metadata.json with zh.title + <story>_1.jpg in the materials dir
-echo  Output: ^<story_id^>_douyin_portrait.jpg + publish.douyin.cover_portrait_path
+echo  Output: ^<story_id^>_douyin_portrait.jpg / _landscape.jpg + both publish.douyin paths
 echo  Needs : Windows, 剪映 11.7, and "uv sync --extra covers" once.
 echo.
 
@@ -29,3 +29,4 @@ if "%RC%"=="0" echo  Done! Press any key to close.
 echo ========================================
 pause >nul
 exit /b %RC%
+
