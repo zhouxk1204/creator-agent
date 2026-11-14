@@ -36,6 +36,42 @@ def default_target() -> Path:
     return Path.home() / "Desktop" / f"doraemon_{int(episode)}"
 
 
+def _stdin_is_interactive() -> bool:
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def resolve_target(ask: bool = False) -> Path:
+    """The folder to process, asking only when there is nothing usable saved.
+
+    The materials launcher writes ``logs/.last_doraemon_materials`` on every run,
+    so a weekly ``06`` must start straight away — pressing Enter every time is
+    pure friction, and a wrong Enter silently processes the previous episode.
+    ``--ask`` (alias ``--prompt-target``) still offers the choice explicitly.
+    """
+    if ask:
+        return prompt_target()
+    try:
+        target = default_target()
+    except SubtitleCorrectionError as exc:
+        if not _stdin_is_interactive():
+            raise
+        print(f"  No usable saved folder: {exc}")
+        return prompt_target()
+    if not target.exists():
+        # The record outlived the folder (deleted / moved / different machine).
+        # Fall back to asking instead of failing on a path the user cannot fix.
+        if not _stdin_is_interactive():
+            raise SubtitleCorrectionError(f"记录的素材目录已不存在：{target}")
+        print(f"  Saved folder is gone: {target}")
+        return prompt_target()
+    print(f'  Materials folder: "{target}"')
+    print("  (logs/.last_doraemon_materials — --ask 可改用其它目录)")
+    return target
+
+
 def prompt_target() -> Path:
     default = None
     default_error = None
@@ -87,7 +123,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--force", action="store_true", help="明确覆盖已有 *_jp_fixed.srt / *_zh_fixed.srt")
     parser.add_argument("--refresh-translation", action="store_true", help="重新翻译 metadata 中文简介并重建两平台标签")
-    parser.add_argument("--prompt-target", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ask",
+        "--prompt-target",
+        dest="ask",
+        action="store_true",
+        help="强制询问素材目录 (默认直接用 logs/.last_doraemon_materials 里记录的目录)",
+    )
     return parser.parse_args()
 
 
@@ -96,7 +138,7 @@ def main() -> int:
     try:
         target = args.target
         if target is None:
-            target = prompt_target() if args.prompt_target else default_target()
+            target = resolve_target(args.ask)
         inputs = discover_inputs(target)
         load_metadata(inputs[0].parent / "metadata.json")
     except (SubtitleCorrectionError, MetadataError) as exc:

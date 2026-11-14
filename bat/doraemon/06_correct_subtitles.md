@@ -292,13 +292,16 @@ Windows：
 bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
 ```
 
-双击 Windows `06_correct_subtitles.bat` 时，会显示 `logs/.last_doraemon_materials` 中保存的素材目录：
+双击 Windows `06_correct_subtitles.bat` 时，**不需要输入路径**：直接用 `logs/.last_doraemon_materials`
+里的素材目录开始处理，控制台会打印这次用的是哪个目录。
 
-- 直接按回车：使用该目录。
-- 粘贴其他目录：仅本次使用粘贴的路径，支持空格及 Windows“复制为路径”自带的双引号。
-- 命令行显式传入目录或单个 `*_origin.srt`：优先使用传入路径。
+- 想改目录：把目录（或单个 `*_origin.srt`）当参数传给 bat，只影响本次。
+- 想临时挑一次：加 `--ask`（旧名 `--prompt-target`），会显示上次的目录，回车接受或粘贴新路径。
+- 只在两种情况下才会真的问你：`logs` 里没有记录（会用 `logs/.last_fetched` 推桌面目录），或者记录的目录已经被删掉/移走。
 
-`最新话doraemon素材下载.bat` / `.sh` 在完整模式创建素材目录后，将其绝对路径写入 `logs/.last_doraemon_materials`；只查询指定集号的简介不会覆盖该记录。该记录是本机状态，不随 Git 同步。
+`最新话doraemon素材下载.bat` / `.sh` 在完整模式创建素材目录后，将其绝对路径写入 `logs/.last_doraemon_materials`，
+**每次执行都会刷新**（所以每周跑完素材下载，当天再跑 06 就是零输入）；只查询指定集号的简介不会覆盖该记录。
+该记录是本机状态，不随 Git 同步。
 
 不传路径时优先读取该记录；尚无记录时，读取 `logs/.last_fetched` 并使用对应的桌面 `doraemon_<集号>` 目录。若已记录的目录被移动或删除，请粘贴新路径。
 

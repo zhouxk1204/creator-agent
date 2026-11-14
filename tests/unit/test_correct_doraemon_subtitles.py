@@ -86,6 +86,47 @@ def test_prompt_target_requires_path_when_no_default(materials_logs, monkeypatch
         cli.prompt_target()
 
 
+def test_resolve_target_uses_saved_folder_without_asking(materials_logs, tmp_path, monkeypatch):
+    # A weekly 06 must not ask: the launcher just re-recorded the folder.
+    saved = tmp_path / "doraemon_942"
+    saved.mkdir()
+    (materials_logs / ".last_doraemon_materials").write_text(f"{saved}\n", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("must not prompt when a folder is saved"))
+
+    assert cli.resolve_target() == saved
+
+
+def test_resolve_target_asks_when_the_saved_folder_is_gone(materials_logs, tmp_path, monkeypatch):
+    # logs may point at last week's folder after a cleanup: ask instead of dying.
+    (materials_logs / ".last_doraemon_materials").write_text(f"{tmp_path / 'deleted'}\n", encoding="utf-8")
+    other = tmp_path / "other materials"
+    other.mkdir()
+    monkeypatch.setattr(cli, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: str(other))
+
+    assert cli.resolve_target() == other
+
+
+def test_resolve_target_fails_fast_without_a_saved_folder_or_a_terminal(materials_logs, monkeypatch):
+    # Scheduled/redirected runs must not hang waiting on stdin.
+    monkeypatch.setattr(cli, "_stdin_is_interactive", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("must not prompt without a terminal"))
+
+    with pytest.raises(corrector.SubtitleCorrectionError, match="均不存在"):
+        cli.resolve_target()
+
+
+def test_resolve_target_ask_forces_the_prompt(materials_logs, tmp_path, monkeypatch):
+    saved = tmp_path / "doraemon_942"
+    saved.mkdir()
+    (materials_logs / ".last_doraemon_materials").write_text(f"{saved}\n", encoding="utf-8")
+    other = tmp_path / "other materials"
+    other.mkdir()
+    monkeypatch.setattr("builtins.input", lambda _prompt: str(other))
+
+    assert cli.resolve_target(ask=True) == other
+
+
 @pytest.fixture
 def correction_run(tmp_path, monkeypatch):
     materials = tmp_path / "custom materials"
@@ -108,7 +149,7 @@ def correction_run(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     settings = TranslateSettings(project_dir=str(tmp_path / "knowledge"))
-    args = SimpleNamespace(target=materials, force=False, prompt_target=False, refresh_translation=False)
+    args = SimpleNamespace(target=materials, force=False, ask=False, refresh_translation=False)
     events = []
     prompts = []
     proc = Mock()
@@ -286,17 +327,19 @@ def test_materials_launchers_record_folder_before_download():
             assert script.index("exit 0") < marker
 
 
-def test_correction_launcher_delegates_interactive_target_to_python():
+def test_correction_launcher_uses_the_saved_folder_without_prompting():
     root = Path(__file__).resolve().parents[2]
     launcher = root / "bat" / "doraemon" / "06_correct_subtitles.bat"
     data = launcher.read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
     assert script.startswith("@echo off\nsetlocal DisableDelayedExpansion\n")
-    assert "scripts\\correct_doraemon_subtitles.py --prompt-target" in script
+    # No prompt flag and no path prompt of its own: the saved folder is used
+    # as-is (python asks only when nothing usable is recorded).
+    call_lines = [line.strip() for line in script.splitlines() if "correct_doraemon_subtitles.py" in line]
+    assert call_lines == ['"%PY%" scripts\\correct_doraemon_subtitles.py %*']
     assert "set /p TARGET=" not in script
     assert "%TARGET%" not in script
-    assert "scripts\\correct_doraemon_subtitles.py %*" in script
 
 
 def test_materials_launchers_do_not_invoke_translation():

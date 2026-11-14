@@ -1,4 +1,4 @@
-﻿# 哆啦A梦每周自动下载（定时任务）
+# 哆啦A梦每周自动下载（定时任务）
 
 每周六 19:00（北京时间）自动跑：**TVer 下载最新一集 → 抓取新播出集的简介 → 翻译成中文**。
 TVer 每周六 17:00（日本时间 = 北京时间 16:00）更新，19:00 跑留 3 小时缓冲。
@@ -17,7 +17,7 @@ TVer 每周六 17:00（日本时间 = 北京时间 16:00）更新，19:00 跑留
 - 输入了番号 = 只抓该话日文简介和封面，**不翻译、不下载、不分割、不超分**。
 - TVer 下载按简介页的**放送日**匹配剧集（`--broadcast-date`），TVer 还没更新最新话时会在下载步停下并报错，不会把上一话错存成新番号。
 - 标题/简介翻译与发布标签在 `06_correct_subtitles.bat` 内前置执行：按 `941_1_origin.srt` 匹配 metadata 的 `story_id`，更新同故事 `zh` 和 `publish`，后续字幕矫正和重翻再从 metadata 读取日中背景，共用一次模型启动。`02` 和下述每周定时任务的独立翻译也写入同一份 metadata。
-- `06` 双击显示 `logs/.last_doraemon_materials` 中的上次素材目录，回车使用，或粘贴别的路径。有效的中文翻译默认复用，`--refresh-translation` 才强制刷新；`--force` 仅允许覆盖已有字幕。
+- `06` 双击**不需要输入路径**：直接用 `logs/.last_doraemon_materials`（上次素材下载刚刷新过）开始处理；要换目录就把路径当参数传，`--ask` 才临时询问。有效的中文翻译默认复用，`--refresh-translation` 才强制刷新；`--force` 仅允许覆盖已有字幕。
 - 后续抖音/B站发布同样按故事读取 metadata，不再使用文本发布包；标题、平台标签和独立封面路径规则见 [发布标准](../../docs/publish-package.md)。
 - 抖音**横竖两张封面**都可自动生成：`07_make_covers.bat`（排在 `06` 之后、发布之前）。它用剪映封面模板渲染 `<story_id>_douyin_portrait.jpg`（1440×1920）和 `<story_id>_douyin_landscape.jpg`（1440×1080），并写回 `publish.douyin.cover_portrait_path` / `cover_landscape_path`；已有封面不会覆盖（`--force` 重做，`--covers portrait|landscape` 只做一张）。原理与时机见 [封面自动生成](../../docs/doraemon-cover-generation.md)。
 - 超分依赖本机已有的 `C:\to4k\Real-ESRGAN`（含模型与 ffmpeg）和 `C:\Users\34696\miniconda3\envs\upscale` 环境；项目内的 `run_upscale.bat` / `scripts\upscale_tool.py` 只是流程入口，不包含第三方引擎本体。

@@ -16,17 +16,12 @@ echo ========================================
 echo.
 echo  Input : *_origin.srt + metadata.json with matching story IDs
 echo  Output: updated metadata.json + *_jp_fixed.srt + *_zh_fixed.srt
+echo  Folder: logs\.last_doraemon_materials (上次素材下载记录), 不需要输入
+echo          --ask 才询问 / 或直接把目录当参数传进来
 echo  One LLM server is shared by all stages.
 echo.
 
-if not "%~1"=="" goto :with_args
-"%PY%" scripts\correct_doraemon_subtitles.py --prompt-target
-goto :done
-
-:with_args
 "%PY%" scripts\correct_doraemon_subtitles.py %*
-
-:done
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
