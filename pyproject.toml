@@ -23,6 +23,14 @@ dependencies = [
     "scenedetect[opencv-headless]>=0.6,<0.7",
 ]
 
+[project.optional-dependencies]
+# 仅 Windows + 剪映 11.7 需要：scripts/make_douyin_covers.py 用剪映渲染抖音竖版封面。
+# 不装也不影响其它流程，只是无法自动生成封面（安装：uv sync --extra covers）。
+covers = [
+    "pillow>=10,<13",
+    "jianying-tool>=0.5,<0.6",
+]
+
 [project.scripts]
 creator-agent = "creator_agent.cli.main:app"
 

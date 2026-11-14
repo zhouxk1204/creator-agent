@@ -19,6 +19,7 @@ TVer 每周六 17:00（日本时间 = 北京时间 16:00）更新，19:00 跑留
 - 标题/简介翻译与发布标签在 `06_correct_subtitles.bat` 内前置执行：按 `941_1_origin.srt` 匹配 metadata 的 `story_id`，更新同故事 `zh` 和 `publish`，后续字幕矫正和重翻再从 metadata 读取日中背景，共用一次模型启动。`02` 和下述每周定时任务的独立翻译也写入同一份 metadata。
 - `06` 双击显示 `logs/.last_doraemon_materials` 中的上次素材目录，回车使用，或粘贴别的路径。有效的中文翻译默认复用，`--refresh-translation` 才强制刷新；`--force` 仅允许覆盖已有字幕。
 - 后续抖音/B站发布同样按故事读取 metadata，不再使用文本发布包；标题、平台标签和独立封面路径规则见 [发布标准](../../docs/publish-package.md)。
+- 抖音**竖版封面**可自动生成：`07_make_covers.bat`（排在 `06` 之后、发布之前）。它用剪映封面模板渲染 1440×1920 的 `<story_id>_douyin_portrait.jpg` 并写回 `publish.douyin.cover_portrait_path`；已有封面不会覆盖。原理、时机选择和横版封面方案见 [封面自动生成](../../docs/doraemon-cover-generation.md)。
 - 超分依赖本机已有的 `C:\to4k\Real-ESRGAN`（含模型与 ffmpeg）和 `C:\Users\34696\miniconda3\envs\upscale` 环境；项目内的 `run_upscale.bat` / `scripts\upscale_tool.py` 只是流程入口，不包含第三方引擎本体。
 
 ## 一次性安装（家里 Windows 机）

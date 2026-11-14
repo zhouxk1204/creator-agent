@@ -83,7 +83,7 @@ Desktop/doraemon_941/
 | `publish.title` | 两平台共用，格式 `哆啦a梦941 XXXXX`；单行；抖音 ≤55 字，单独发B站 ≤80 字 |
 | `publish.video_path` | 默认 `<story_id>_final.mp4`，剪映按此名称导出到素材目录；可改为自定义路径。支持 `.mp4 .mov .flv .mkv .avi`，建议 H.264 + AAC MP4 |
 | `publish.douyin.tags` | 1–5 个字符串，不带 `#`；抖音描述由它生成，如 `#哆啦A梦 #大雄 #新番` |
-| `publish.douyin.cover_portrait_path` | 必填，独立制作的 **3:4** 竖封面，建议 1080×1440 |
+| `publish.douyin.cover_portrait_path` | 必填，独立制作的 **3:4** 竖封面，建议 1080×1440；可用 `07_make_covers` 自动生成（1440×1920） |
 | `publish.douyin.cover_landscape_path` | 必填，独立制作的 **4:3** 横封面，建议 1440×1080；不可与竖图指向同一文件 |
 | `publish.bilibili.tags` | 1–11 个字符串，不带 `#` |
 | `publish.bilibili.tid` | 正整数分区号，默认 24；以当前B站投稿页为准，可用 `--tid` 覆盖 |
@@ -105,7 +105,11 @@ Desktop/doraemon_941/
 
 1. 运行 `02_fetch_doraemon`（资料及独立简介翻译），或最新话素材下载入口（仅抓取，中文延后至 `06`）。
 2. 将 `941_1_origin.srt` 等剪映双语字幕放进素材目录，运行 `06_correct_subtitles`。它先写中文 metadata，再从 metadata 读取匹配的日中背景进行字幕处理。
-3. 剪映将最终视频导出为素材目录下的 `941_1_final.mp4` 等对应文件。单独制作抖音两张封面，在该故事的 `publish.douyin` 中填写两个封面路径，检查发布标题与平台标签。若成片采用其他名字或目录，手动修改 `publish.video_path`。
+3. 剪映将最终视频导出为素材目录下的 `941_1_final.mp4` 等对应文件。竖版抖音封面可以自动生成：
+   `bat\doraemon\07_make_covers.bat "%USERPROFILE%\Desktop\doraemon_941"`，它会渲染
+   `<story_id>_douyin_portrait.jpg` 并写回 `cover_portrait_path`（已有封面不覆盖，`--force` 才重做）。
+   横版封面仍需单独制作并填 `cover_landscape_path`；原理与时序见
+   [封面自动生成](./doraemon-cover-generation.md)。若成片采用其他名字或目录，手动修改 `publish.video_path`。
 4. 先运行校验，再确认发布：
 
 ```bat
