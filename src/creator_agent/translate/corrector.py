@@ -71,6 +71,8 @@ CORRECTION_SYSTEM_PROMPT = """你是《哆啦A梦》日语字幕审校员。输�
    一个句子被剪映切在相邻两条时，各自只修好自己那半句（前半句用「、」或「…」收尾，
    不硬加句末标点），两条连起来读通顺即可。本条是残句就保持残句，不得把下一条的
    词句补进本条，也不得凭剧情把本条补成完整句。
+   【前文】【后文】只有正文、没有 ID，只是为了让断在词中间的残句能判断读音和语序，
+   不得输出它们的内容，也不得把它们的词句搬进待处理的条目。
 5. 必须覆盖给定的每一个 ID，每个 ID 恰好出现一次；不得创造、丢失或重复 ID；
    不得只输出开头的几句就结束。
 6. 标点用日文全角：句末「。」「！」「？」，句内停顿「、」。
@@ -90,6 +92,7 @@ TRANSLATION_SYSTEM_PROMPT = """你是《哆啦A梦》专业日中字幕翻译。
 4. 每个输入 ID 恰好输出一次，不能合并或拆分；译文不得残留日文假名。
 5. 原文被剪映切得很碎，一条常常只是半句：每条只译自己这一条，不补上一句的内容，
    但用词要让相邻两条连读成一句通顺的口语（不要把整句意思重复写进每条）。
+   【前文】【后文】没有 ID，只用来判断碎句拼起来的完整意思，不得输出。
 6. 只输出 JSON，不要 Markdown 代码块或解释。
 
 输出格式：
@@ -342,6 +345,7 @@ def build_correction_prompt(
     cursor: int,
     target_end: int,
     context_cues: int,
+    context_after_cues: int,
     episode_context: dict[str, str],
 ) -> str:
     sections = [_context_section(episode_context)]
@@ -355,6 +359,14 @@ def build_correction_prompt(
         + _cue_lines(cues, cursor, target_end)
         + "\n\n每条只修自己这一句，不合并、不拆分，行数必须等于条目数。"
     )
+    look_ahead_end = min(len(cues), target_end + context_after_cues)
+    if target_end < look_ahead_end:
+        # ASR splits Japanese mid-word, so the batch's last cue usually only
+        # makes sense together with the next one or two. They are read-only: no
+        # IDs, and the parser drops any line that echoes them.
+        sections.append(
+            "【后文，仅供理解断句和读音，没有 ID，禁止输出】\n" + _plain_lines(cues, target_end, look_ahead_end)
+        )
     sections.append(
         f"现在逐行输出，第一行必须是最小 ID {cursor + 1}，最后一行必须是 ID {target_end}，"
         "一条原始条目一行，写作 `ID|修正后的日语`："
@@ -415,6 +427,10 @@ def parse_correction_lines(
         if not match:
             raise SubtitleCorrectionError(f"模型输出了无法解析的行：{line[:60]}")
         first, last = _line_range(match)
+        if first > target_end:
+            # The model echoed the read-only 后文 (or ran into the next batch):
+            # those cues are not ours to accept, and the batch itself is fine.
+            break
         if first != expected:
             raise SubtitleCorrectionError(f"ID 未连续覆盖，期待 {expected}，得到 {first}")
         if last != first:
@@ -456,6 +472,7 @@ def build_translation_prompt(
     start: int,
     end: int,
     context_cues: int,
+    context_after_cues: int,
     episode_context: dict[str, str],
     memory_note: str = "",
 ) -> str:
@@ -470,6 +487,14 @@ def build_translation_prompt(
     sections.append(
         f"【待翻译，共 {end - start} 条】\n" + "\n".join(f"{i + 1}. {cues[i].text}" for i in range(start, end))
     )
+    look_ahead_end = min(len(cues), end + context_after_cues)
+    if end < look_ahead_end:
+        # Same reason as the correction prompt: cues are mid-sentence fragments,
+        # so the tail of the batch needs the next cues to be rendered naturally.
+        sections.append(
+            "【后文，仅供理解，没有 ID，禁止输出】\n"
+            + "\n".join(" ".join(cues[i].text.split()) for i in range(end, look_ahead_end))
+        )
     sections.append("现在只输出上述 ID 的 JSON 对象：")
     return "\n\n".join(sections)
 
@@ -560,6 +585,7 @@ class SubtitleCorrectionPipeline:
             cursor,
             target_end,
             self.settings.context_cues,
+            self.settings.context_after_cues,
             episode_context,
         )
         try:
@@ -633,7 +659,15 @@ class SubtitleCorrectionPipeline:
             if self._memory is not None
             else ""
         )
-        prompt = build_translation_prompt(cues, start, end, self.settings.context_cues, episode_context, memory_note)
+        prompt = build_translation_prompt(
+            cues,
+            start,
+            end,
+            self.settings.context_cues,
+            self.settings.context_after_cues,
+            episode_context,
+            memory_note,
+        )
         try:
             return self._request_checked(
                 TRANSLATION_SYSTEM_PROMPT,

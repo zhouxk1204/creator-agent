@@ -95,6 +95,8 @@ translate:
   model: qwen3.5-9b         # llama-server --alias (see /v1/models)
   batch_size: 30            # 每次发给模型的字幕条数（20~50）
   context_cues: 5           # 每批附带的上文条数（不翻译，仅供上下文）
+  context_after_cues: 5     # 每批附带的后文条数（只读）：ASR 常把日语切在词中间，
+                            # 最后几条要靠后文才能判断读音和断句，见 942「寝たま」「ま学校へ行ける」
   ffmpeg_path: "C:/Users/34696/Downloads/ffmpeg-2026-03-01-git-862338fe31-full_build/bin/ffmpeg.exe"
   burn_font: Microsoft YaHei
   burn_fontsize: 16

@@ -142,6 +142,9 @@ class TranslateSettings(BaseModel):
     model: str = "qwen3.5:9b"  # whatever tag the installed Qwen3.5 9B has
     batch_size: int = 30  # cues per LLM call (keep within 20~50)
     context_cues: int = 5  # preceding untranslated cues sent as context
+    # ASR cuts Japanese mid-word (942: 「寝たま」「ま学校へ行ける」), so a batch's
+    # last cues cannot be judged without the next ones — send them read-only too.
+    context_after_cues: int = 5
     timeout_sec: float = 300
     # Subtitle burn-in (ffmpeg subtitles filter, needs libass).
     ffmpeg_path: str = ""  # blank -> shutil.which("ffmpeg")

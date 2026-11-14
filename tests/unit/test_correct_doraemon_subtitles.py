@@ -372,6 +372,45 @@ def test_parse_correction_lines_fills_short_tail_with_raw_text():
     assert questions == []
 
 
+def test_correction_prompt_sends_read_only_look_ahead():
+    # 942 cut 「寝たま」「ま学校へ行ける」 across cues: the batch's last cue is only
+    # judgeable with the following ones, so they must be in the prompt but
+    # without IDs (the model mirrors IDs it can see).
+    cues = make_cues(10)
+    prompt = corrector.build_correction_prompt(cues, 0, 4, 2, 3, {"title": "t", "synopsis": "s"})
+    assert "【后文，仅供理解断句和读音，没有 ID，禁止输出】" in prompt
+    look_ahead = prompt.split("【后文，仅供理解断句和读音，没有 ID，禁止输出】")[1]
+    assert "行5" in look_ahead and "行7" in look_ahead
+    assert "行8" not in look_ahead
+    assert "5." not in look_ahead  # no IDs anywhere in the context block
+
+
+def test_correction_prompt_omits_look_ahead_at_the_end():
+    cues = make_cues(4)
+    prompt = corrector.build_correction_prompt(cues, 0, 4, 2, 3, {"title": "t", "synopsis": "s"})
+    assert "【后文" not in prompt
+
+
+def test_parse_correction_lines_ignores_echoed_look_ahead():
+    # The model sometimes keeps going into the read-only 后文; those cues belong
+    # to the next batch, so the batch still counts as complete.
+    fixed, questions, consumed = corrector.parse_correction_lines(
+        "1|あ\n2|い\n3|う\n4|え\n5|お（后文）", make_cues(8), 0, 4
+    )
+    assert consumed == 4
+    assert [cue.source_ids for cue in fixed] == [(1,), (2,), (3,), (4,)]
+    assert fixed[3].text == "え"
+    assert questions == []
+
+
+def test_translation_prompt_sends_read_only_look_ahead():
+    cues = [corrector.FixedCue((i,), f"00:00:{i:02d},000", f"00:00:{i + 1:02d},000", f"行{i}") for i in range(1, 9)]
+    prompt = corrector.build_translation_prompt(cues, 0, 4, 1, 2, {"title": "t", "synopsis": "s"})
+    look_ahead = prompt.split("【后文，仅供理解，没有 ID，禁止输出】")[1]
+    assert "行5" in look_ahead and "行6" in look_ahead
+    assert "行7" not in look_ahead
+
+
 def test_guard_correction_reverts_damage_but_keeps_fixes():
     # 941 run: head character dropped, and one kana swapped into a worse form.
     assert corrector.guard_correction("のびのび太だろ", "びのび太だろ") == "のびのび太だろ"
