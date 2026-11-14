@@ -272,12 +272,13 @@ def _wait_for_home(timeout: float = 150.0) -> None:
 def _export(draft_name: str, workdir: Path, title: str) -> Path:
     from jianying_tool.control import api as control_api
 
+    # 只改分辨率，其余保持剪映导出对话框的现状：格式本来就是 MP4，少点一次下拉
+    # 就少一次被吞点击/弹层错位的风险。
     result = control_api.export_draft(
         draft_name,
         output_dir=workdir,
         title=title,
         resolution="原始",
-        format="MP4",
         close=True,
         timeout=900.0,
         log=lambda message: log(f"   [剪映] {message}"),
