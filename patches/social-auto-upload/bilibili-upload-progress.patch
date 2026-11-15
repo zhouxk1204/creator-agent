@@ -1,0 +1,34 @@
+diff --git a/sau_commands/bilibili.py b/sau_commands/bilibili.py
+index 88aed4d..9f2c81d 100644
+--- a/sau_commands/bilibili.py
++++ b/sau_commands/bilibili.py
+@@ -103,9 +103,18 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
+     if isinstance(request.publish_date, datetime):
+         arguments.extend(["--dtime", str(int(request.publish_date.timestamp()))])
+ 
+-    result = run_biliup_command(arguments)
++    print(f"[Bilibili] Upload started: {request.video_file}", flush=True)
++    if request.thumbnail_file:
++        print(f"[Bilibili] Cover: {request.thumbnail_file}", flush=True)
++    print("[Bilibili] biliup uploads the cover, then the video, then submits the draft.", flush=True)
++    print("[Bilibili] Live upload bytes, percentage, speed and ETA are shown below.", flush=True)
++    # Do not capture stdout/stderr here: biliup's indicatif progress bar writes
++    # to the terminal and would otherwise remain invisible until the process
++    # exits. The caller already shows its own success/failure summary.
++    result = run_biliup_command(arguments, interactive=True)
+     if result.returncode != 0:
+-        raise RuntimeError((result.stderr or result.stdout or "").strip() or "Bilibili upload failed")
++        raise RuntimeError("Bilibili upload failed; see the live biliup log above")
++    print(f"[Bilibili] Draft submitted: {request.video_file}", flush=True)
+     return account_file
+ 
+ 
+diff --git a/tests/test_sau_bilibili_cli.py b/tests/test_sau_bilibili_cli.py
+index 8b2e459..7529ac8 100644
+--- a/tests/test_sau_bilibili_cli.py
++++ b/tests/test_sau_bilibili_cli.py
+@@ -58,3 +58,4 @@ class BilibiliCliTests(unittest.TestCase):
+                 asyncio.run(sau_commands.bilibili.upload_bilibili_video(request))
+         self.assertIn("--cover", run_biliup.call_args.args[0])
+         self.assertIn("cover.png", run_biliup.call_args.args[0])
++        self.assertIs(run_biliup.call_args.kwargs["interactive"], True)

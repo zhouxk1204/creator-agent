@@ -36,6 +36,7 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [2/2] Publish every _b video to Bilibili. Confirm actual uploads with Y.
+echo       Live biliup progress, speed and ETA will be shown below.
 echo.
 "%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %* --b --only bilibili
 set "RC=%ERRORLEVEL%"

@@ -47,7 +47,7 @@ if not exist "%SAU_DIR%\uploader\douyin_uploader\main.py" (
 rem Apply our platform fixes without tracking the third-party repo in this one.
 rem Keep these as separate patches so existing installs can add a new fix
 rem without reverting any of the others first.
-for %%P in (douyin-dual-cover douyin-upload-reliability bilibili-runtime-download) do (
+for %%P in (douyin-dual-cover douyin-upload-reliability bilibili-runtime-download bilibili-upload-progress) do (
     call :apply_sau_patch "%%~P"
     if errorlevel 1 goto :fail
 )

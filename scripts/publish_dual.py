@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -477,16 +478,23 @@ def main() -> int:
         print(f"[X] {exc}", file=sys.stderr)
         return 1
     failed = 0
-    for job, commands in plan:
-        if len(plan) > 1:
-            print(f"\n--- {job.story_id}: {job.video_douyin or job.video_bilibili} ---")
+    for position, (job, commands) in enumerate(plan, 1):
+        print(f"\n===== 发布 {position}/{len(plan)}：{job.story_id} =====", flush=True)
         for name, cmd in commands:
             platform = "douyin" if cmd[1] == "douyin" else "bilibili"
             account = job.douyin_account if platform == "douyin" else job.bilibili_account
+            upload = Path(cmd[cmd.index("--file") + 1])
+            size_mib = upload.stat().st_size / 1024 / 1024
+            print(f"[{name}] 开始上传：{upload.name}（{size_mib:.2f} MiB）", flush=True)
+            print(f"[{name}] 下方显示实时日志；视频传完后还要等待稿件提交。", flush=True)
+            started = time.monotonic()
             try:
-                ok = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode == 0
+                returncode = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode
+                ok = returncode == 0
+                if not ok:
+                    print(f"[{name}] 上传命令退出码 {returncode}，正在检查登录状态…", flush=True)
             except OSError as exc:
-                print(f"[{name}] 上传失败：{exc}")
+                print(f"[{name}] 上传失败：{exc}", flush=True)
                 ok = False
             if not ok:
                 # A cookie that expired between the pre-flight check and the
@@ -495,17 +503,22 @@ def main() -> int:
                 usable, _ = check_session(platform, account)
                 if not usable:
                     try:
-                        print(f"[{name}] 上传失败且登录已失效，登录后重试一次…")
+                        print(f"[{name}] 上传失败且登录已失效，登录后重试一次…", flush=True)
                         ensure_session(platform, account)
                     except MetadataError as exc:
-                        print(f"[{name}] 自动登录失败：{exc}", file=sys.stderr)
+                        print(f"[{name}] 自动登录失败：{exc}", file=sys.stderr, flush=True)
                     else:
                         try:
-                            ok = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode == 0
+                            print(f"[{name}] 正在重试上传：{upload.name}", flush=True)
+                            returncode = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode
+                            ok = returncode == 0
+                            if not ok:
+                                print(f"[{name}] 重试命令退出码 {returncode}", flush=True)
                         except OSError as exc:
-                            print(f"[{name}] 重试失败：{exc}")
+                            print(f"[{name}] 重试失败：{exc}", flush=True)
                             ok = False
-            print(f"[{name}] {'成功' if ok else '失败'}")
+            elapsed = time.monotonic() - started
+            print(f"[{name}] {'成功' if ok else '失败'}（耗时 {elapsed:.1f} 秒）", flush=True)
             failed += not ok
     return 1 if failed else 0
 

@@ -379,6 +379,29 @@ def test_one_failed_platform_does_not_block_other(materials, monkeypatch):
     assert [cmd[1] for cmd in uploads] == ["douyin", "bilibili"]
 
 
+def test_upload_logs_show_job_progress_file_size_and_completion(materials, monkeypatch, capsys):
+    folder, _ = materials
+    executable = folder / "sau"
+    executable.touch()
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: executable)
+    monkeypatch.setattr(
+        sys, "argv", ["publish_dual.py", str(folder), "--story", "941_1", "--only", "bilibili", "--yes"]
+    )
+    monkeypatch.setattr(
+        publish_dual.subprocess,
+        "run",
+        Mock(return_value=SimpleNamespace(returncode=0, stdout="valid", stderr="")),
+    )
+
+    assert publish_dual.main() == 0
+    printed = capsys.readouterr().out
+    assert "发布 1/1：941_1" in printed
+    assert "开始上传：941_1_final.mp4" in printed
+    assert "MiB" in printed
+    assert "实时日志" in printed
+    assert "成功（耗时" in printed
+
+
 def session_stub(monkeypatch, folder, results):
     """sau stub: results decide each `check`/`login` return code in order."""
     monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "sau.exe")
@@ -559,12 +582,20 @@ def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
     assert "--only douyin" in text
 
 
-def test_setup_installs_biliup_download_fallback_patch():
+def test_setup_installs_biliup_runtime_patches():
     root = Path(__file__).resolve().parents[2]
     setup = (root / "bat" / "setup_publish.bat").read_text(encoding="ascii")
-    patch = (root / "patches" / "social-auto-upload" / "bilibili-runtime-download.patch").read_text(encoding="utf-8")
+    download_patch = (root / "patches" / "social-auto-upload" / "bilibili-runtime-download.patch").read_text(
+        encoding="utf-8"
+    )
+    progress_patch = (root / "patches" / "social-auto-upload" / "bilibili-upload-progress.patch").read_text(
+        encoding="utf-8"
+    )
 
     assert "bilibili-runtime-download" in setup
-    assert "fetch_latest_release_via_git" in patch
-    assert "GITHUB_DOWNLOAD_MIRRORS" in patch
-    assert "403 rate limit exceeded" in patch
+    assert "bilibili-upload-progress" in setup
+    assert "fetch_latest_release_via_git" in download_patch
+    assert "GITHUB_DOWNLOAD_MIRRORS" in download_patch
+    assert "403 rate limit exceeded" in download_patch
+    assert "run_biliup_command(arguments, interactive=True)" in progress_patch
+    assert "Live upload bytes, percentage, speed and ETA" in progress_patch
