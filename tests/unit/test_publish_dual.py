@@ -92,13 +92,27 @@ def test_explicit_story_required_for_multiple_stories(materials):
     assert job(folder, story=None).story_id == "941_1"
 
 
-@pytest.mark.parametrize("platform, count", [("douyin", 6), ("bilibili", 12)])
-def test_platform_tag_limits(materials, platform, count):
+def test_douyin_trims_to_five_tags(materials, capsys):
+    # Douyin takes 5 topics at most. A metadata.json with more (hand-edited, or
+    # written by an older tag rule) must still publish instead of failing.
     folder, data = materials
-    data["stories"][0]["publish"][platform]["tags"] = [f"标签{i}" for i in range(count)]
+    data["stories"][0]["publish"]["douyin"]["tags"] = [f"标签{i}" for i in range(8)]
+    save(folder, data)
+
+    selected = job(folder)
+    douyin = dict(selected.build_commands(headed=True))["抖音"]
+    assert flag(douyin, "--tags") == "标签0,标签1,标签2,标签3,标签4"
+    assert flag(douyin, "--desc") == "#标签0 #标签1 #标签2 #标签3 #标签4"
+    assert flag(douyin, "--desc").count("#") == 5
+    assert "最多 5 个标签" in capsys.readouterr().err
+
+
+def test_bilibili_keeps_its_own_limit(materials):
+    folder, data = materials
+    data["stories"][0]["publish"]["bilibili"]["tags"] = [f"标签{i}" for i in range(12)]
     save(folder, data)
     with pytest.raises(MetadataError, match="标签必须"):
-        job(folder)
+        job(folder, only="bilibili")
 
 
 @pytest.mark.parametrize("tags", [[], ["#大雄"], ["大雄", "大雄"], ["大 雄"], "大雄"])

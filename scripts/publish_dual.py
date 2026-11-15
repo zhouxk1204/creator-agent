@@ -33,6 +33,8 @@ VIDEO_EXTS = {".mp4", ".mov", ".flv", ".mkv", ".avi"}
 COVER_EXTS = {".jpg", ".jpeg", ".png"}
 DEFAULT_DOUYIN_DECLARATION = "虚构演绎，仅供娱乐"
 DEFAULT_DOUYIN_COLLECTION = "哆啦A梦2026合集"
+# Douyin shows 5 topics per video; more are ignored by the UI or rejected.
+DOUYIN_TAG_LIMIT = 5
 
 
 def sau_exe() -> Path:
@@ -141,7 +143,19 @@ class PublishJob:
             if len(self.title) > 55:
                 raise MetadataError("抖音标题最多 55 字，请编辑 publish.title")
             douyin = publish["douyin"]
-            tags = validate_tags(douyin["tags"], 5)
+            # Douyin accepts at most 5 topics; the metadata writer already caps
+            # them, but a hand-edited or older metadata.json must not push more
+            # — trim instead of refusing to publish the video.
+            raw_tags = douyin["tags"]
+            if not isinstance(raw_tags, list):
+                raise MetadataError("抖音标签必须是字符串数组")
+            if len(raw_tags) > DOUYIN_TAG_LIMIT:
+                kept = ", ".join(str(tag) for tag in raw_tags[:DOUYIN_TAG_LIMIT])
+                print(
+                    f"[!] 抖音最多 {DOUYIN_TAG_LIMIT} 个标签，本次只取前 {DOUYIN_TAG_LIMIT} 个：{kept}",
+                    file=sys.stderr,
+                )
+            tags = validate_tags(list(raw_tags[:DOUYIN_TAG_LIMIT]), DOUYIN_TAG_LIMIT)
             self.douyin_tags = ",".join(tags)
             self.douyin_desc = " ".join(f"#{tag}" for tag in tags)
             if not douyin.get("cover_portrait_path") or not douyin.get("cover_landscape_path"):

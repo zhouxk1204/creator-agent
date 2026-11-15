@@ -26,7 +26,8 @@ bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-
 ```
 
 - 仅发布抖音，固定有头浏览器，不发布B站。
-- 标题取 `publish.title`，格式 `哆啦a梦<集号> <中文标题>`（如 `哆啦a梦942 机器人服`）；抖音标签最多 5 个，简介就是这些 `#标签`。
+- 标题取 `publish.title`，格式 `哆啦a梦<集号> <中文标题>`（如 `哆啦a梦942 机器人服`）；简介就是这些 `#标签`。
+- **抖音标签最多 5 个**：metadata 里多于 5 个时只取前 5 个并在控制台提示，不会因此拒绝发布。
 - 两张封面由第一步自动生成并写回 `publish.douyin.cover_portrait_path`（3:4）和 `cover_landscape_path`（4:3），必须是两个独立文件；没生成就直接报“封面还没生成”，不会退回旧通用封面。
 - 视频优先取 `publish.douyin.video_path`，没有就用 `<故事>_dy\<故事>_dy.mp4`，再退回 `publish.video_path`；不会扫描并猜测其它文件名。
 - 同一个故事有多个 `_dy` 文件时，会用同一套标题/标签/封面各发一条（控制台会提示）。
