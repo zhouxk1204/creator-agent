@@ -1,5 +1,9 @@
 """Publish one Doraemon metadata story to Douyin/Bilibili via social-auto-upload.
 
+Douyin takes the 剪映 export: every ``<materials>/<story>_dy/<name>_dy.mp4`` is a
+finished vertical cut with burned subtitles, and ``--dy`` publishes each of them
+in turn (one Douyin video per file). Bilibili keeps using ``publish.video_path``.
+
 This entry point and its metadata dependency use only the standard library,
 so they also run inside social-auto-upload's separate virtual environment.
 """
@@ -42,11 +46,69 @@ def required_asset(path: Path, value, extensions: set[str]) -> Path:
     return asset
 
 
+def dy_videos(materials: Path, stories: list[dict]) -> list[tuple[str, Path]]:
+    """``(story_id, video)`` for every 剪映 ``_dy`` export under the materials folder.
+
+    The convention is ``<materials>/<story_id>_dy/<story_id>_dy.mp4``: the folder
+    holds the vertical cut with burned subtitles, exported from 剪映 after the
+    subtitle stage. A story may export more than one file (a split upload), and
+    not every story has been exported yet, so discovery — not a fixed path — is
+    what drives the loop.
+    """
+    known = {story["story_id"] for story in stories}
+    found: list[tuple[str, Path]] = []
+    for folder in sorted(materials.glob("*_dy")):
+        if not folder.is_dir():
+            continue
+        story_id = folder.name[: -len("_dy")]
+        if story_id not in known:
+            print(f"[!] 跳过 {folder.name}：metadata 里没有故事 {story_id}")
+            continue
+        videos = sorted(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in VIDEO_EXTS)
+        named = [path for path in videos if path.stem.endswith("_dy")]
+        for video in named or videos:
+            found.append((story_id, video))
+    return found
+
+
+def douyin_video(metadata: Path, story: dict, override: Path | None = None) -> Path:
+    """The file Douyin uploads: explicit override, then the ``_dy`` export.
+
+    ``publish.video_path`` is the Bilibili master and is allowed to be missing
+    for Douyin, because the 剪映 export in ``<story>_dy/`` is what actually gets
+    uploaded there.
+    """
+    if override is not None:
+        if not override.is_file():
+            raise MetadataError(f"抖音视频不存在：{override}")
+        return override
+    story_id = story["story_id"]
+    explicit = (story.get("publish", {}).get("douyin") or {}).get("video_path")
+    if explicit:
+        return required_asset(metadata, explicit, VIDEO_EXTS)
+    exported = metadata.parent / f"{story_id}_dy" / f"{story_id}_dy.mp4"
+    if exported.is_file():
+        return exported
+    master = (story.get("publish") or {}).get("video_path")
+    if master and resolve_asset(metadata, master).is_file():
+        return required_asset(metadata, master, VIDEO_EXTS)
+    raise MetadataError(
+        f"{story_id} 没有抖音视频：请把剪映导出的 {story_id}_dy/{story_id}_dy.mp4 放到素材目录，"
+        "或在 metadata 的 publish.douyin.video_path 指定"
+    )
+
+
 class PublishJob:
-    def __init__(self, target: Path, args: argparse.Namespace):
+    def __init__(
+        self,
+        target: Path,
+        args: argparse.Namespace,
+        story_id: str | None = None,
+        video: Path | None = None,
+    ):
         self.path = metadata_path(target)
         data = load_metadata(self.path)
-        story_id = args.story
+        story_id = story_id or args.story
         if not story_id:
             if len(data["stories"]) != 1:
                 raise MetadataError("有多个故事，请用 --story 941_1 明确选择一个")
@@ -62,7 +124,10 @@ class PublishJob:
         prefix = f"哆啦a梦{int(data['episode'])} "
         if not self.title.startswith(prefix) or not self.title[len(prefix) :].strip():
             raise MetadataError(f"publish.title 格式应为：{prefix}中文标题")
-        self.video = required_asset(self.path, publish["video_path"], VIDEO_EXTS)
+        self.do_douyin = args.only in (None, "douyin")
+        self.do_bilibili = args.only in (None, "bilibili")
+        self.video_douyin = douyin_video(self.path, story, video) if self.do_douyin else None
+        self.video_bilibili = required_asset(self.path, publish["video_path"], VIDEO_EXTS) if self.do_bilibili else None
         self.do_douyin = args.only in (None, "douyin")
         self.do_bilibili = args.only in (None, "bilibili")
         self.schedule = args.schedule or publish.get("schedule")
@@ -79,6 +144,11 @@ class PublishJob:
             tags = validate_tags(douyin["tags"], 5)
             self.douyin_tags = ",".join(tags)
             self.douyin_desc = " ".join(f"#{tag}" for tag in tags)
+            if not douyin.get("cover_portrait_path") or not douyin.get("cover_landscape_path"):
+                raise MetadataError(
+                    f"{story_id} 的抖音横竖封面还没生成：先跑 scripts/make_douyin_covers.py "
+                    "（publish_douyin.bat 的第一步会自动做）"
+                )
             self.cover_douyin_portrait = required_asset(self.path, douyin["cover_portrait_path"], COVER_EXTS)
             self.cover_douyin_landscape = required_asset(self.path, douyin["cover_landscape_path"], COVER_EXTS)
             if self.cover_douyin_portrait.samefile(self.cover_douyin_landscape):
@@ -96,11 +166,23 @@ class PublishJob:
             if not str(self.tid).isdigit() or int(self.tid) <= 0:
                 raise MetadataError("B站分区号 tid 必须是正整数")
 
+    @property
+    def video(self) -> Path | None:
+        """The file this job uploads first (Douyin, else Bilibili)."""
+        return self.video_douyin or self.video_bilibili
+
     def build_commands(self, headed: bool) -> list[tuple[str, list[str]]]:
         commands = []
-        for platform, selected, account, desc, tags in (
-            ("douyin", self.do_douyin, self.douyin_account, self.douyin_desc, self.douyin_tags),
-            ("bilibili", self.do_bilibili, self.bilibili_account, self.bilibili_desc, self.bilibili_tags),
+        for platform, selected, account, desc, tags, video in (
+            ("douyin", self.do_douyin, self.douyin_account, self.douyin_desc, self.douyin_tags, self.video_douyin),
+            (
+                "bilibili",
+                self.do_bilibili,
+                self.bilibili_account,
+                self.bilibili_desc,
+                self.bilibili_tags,
+                self.video_bilibili,
+            ),
         ):
             if not selected:
                 continue
@@ -111,7 +193,7 @@ class PublishJob:
                 "--account",
                 account,
                 "--file",
-                str(self.video),
+                str(video),
                 "--title",
                 self.title,
                 "--desc",
@@ -182,6 +264,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="读取 metadata.json，发布一个故事到抖音/B站")
     parser.add_argument("dir", nargs="?", help="素材目录或 metadata.json；默认使用上次素材目录")
     parser.add_argument("--story", help="故事标识，如 941_1")
+    parser.add_argument(
+        "--dy",
+        action="store_true",
+        help="发布素材目录下所有 <故事>_dy/ 里的剪映导出（一个视频一条抖音），逐个循环",
+    )
     parser.add_argument("--only", choices=["douyin", "bilibili"], help="只发一个平台")
     parser.add_argument("--tid", help="覆盖 metadata 中的 B站分区号")
     parser.add_argument("--schedule", help='定时发布 "YYYY-MM-DD HH:MM"')
@@ -201,35 +288,57 @@ def main() -> int:
     try:
         path = choose_target(args.dir, args.ask)
         data = load_metadata(path)
-        if not args.story and len(data["stories"]) > 1:
-            if args.yes:
-                raise MetadataError("自动发布必须用 --story 明确选择故事")
-            for story in data["stories"]:
-                print(f"  {story['story_id']}：{story['publish']['title'] or story['title']}")
-            args.story = input("选择故事标识（例如 941_1）: ").strip()
-        job = PublishJob(path, args)
-        commands = job.build_commands(args.headed)
+        if args.dy:
+            videos = dy_videos(path.parent, data["stories"])
+            if args.story:
+                videos = [(story_id, video) for story_id, video in videos if story_id == args.story]
+            if not videos:
+                named = f"{args.story} 的" if args.story else ""
+                raise MetadataError(f"{path.parent} 下没有 {named}_dy 视频：先用剪映导出 <故事>_dy/<故事>_dy.mp4")
+            by_story: dict[str, int] = {}
+            for story_id, _ in videos:
+                by_story[story_id] = by_story.get(story_id, 0) + 1
+            for story_id, count in by_story.items():
+                if count > 1:
+                    print(f"[!] {story_id} 有 {count} 个 _dy 视频，将用同一个标题/简介/封面各发一条", file=sys.stderr)
+            jobs = [PublishJob(path, args, story_id=story_id, video=video) for story_id, video in videos]
+        else:
+            if not args.story and len(data["stories"]) > 1:
+                if args.yes:
+                    raise MetadataError("自动发布必须用 --story 明确选择故事")
+                for story in data["stories"]:
+                    print(f"  {story['story_id']}：{story['publish']['title'] or story['title']}")
+                args.story = input("选择故事标识（例如 941_1）: ").strip()
+            jobs = [PublishJob(path, args)]
+        plan = [(job, job.build_commands(args.headed)) for job in jobs]
     except (MetadataError, OSError, UnicodeError, EOFError) as exc:
         print(f"[X] {exc}", file=sys.stderr)
         return 2
 
+    for job, _ in plan:
+        print("=" * 50)
+        print(f"  metadata : {job.path}")
+        print(f"  故事     : {job.story_id}")
+        if job.do_douyin:
+            print(f"  抖音视频 : {job.video_douyin}")
+        if job.do_bilibili:
+            print(f"  B站视频  : {job.video_bilibili}")
+        print(f"  标题     : {job.title}")
+        if job.do_douyin:
+            print(f"  抖音标签 : {job.douyin_desc}")
+            print(f"  抖音封面 : {job.cover_douyin_portrait} / {job.cover_douyin_landscape}")
+            print(f"  抖音声明 : {DEFAULT_DOUYIN_DECLARATION}；合集：{DEFAULT_DOUYIN_COLLECTION}")
+        if job.do_bilibili:
+            print(f"  B站标签  : {job.bilibili_tags}")
+            print(f"  B站封面  : {job.cover_bilibili}")
+            print(f"  B站简介  :\n{job.bilibili_desc}")
     print("=" * 50)
-    print(f"  metadata : {job.path}")
-    print(f"  故事     : {job.story_id}")
-    print(f"  视频     : {job.video}")
-    print(f"  标题     : {job.title}")
-    if job.do_douyin:
-        print(f"  抖音标签 : {job.douyin_desc}")
-        print(f"  抖音封面 : {job.cover_douyin_portrait} / {job.cover_douyin_landscape}")
-        print(f"  抖音声明 : {DEFAULT_DOUYIN_DECLARATION}；合集：{DEFAULT_DOUYIN_COLLECTION}")
-    if job.do_bilibili:
-        print(f"  B站标签  : {job.bilibili_tags}")
-        print(f"  B站封面  : {job.cover_bilibili}")
-        print(f"  B站简介  :\n{job.bilibili_desc}")
-    print("=" * 50)
+    if len(plan) > 1:
+        print(f"  共 {len(plan)} 条待发布")
     if args.dry_run:
-        for name, cmd in commands:
-            print(f"[{name}] {subprocess.list2cmdline(cmd)}")
+        for _, commands in plan:
+            for name, cmd in commands:
+                print(f"[{name}] {subprocess.list2cmdline(cmd)}")
         return 0
     if not sau_exe().is_file():
         print("[X] 未安装 sau CLI，请先运行 bat\\setup_publish.bat")
@@ -243,15 +352,18 @@ def main() -> int:
             print("已取消。")
             return 1
     failed = 0
-    for name, cmd in commands:
-        try:
-            proc = subprocess.run(cmd, cwd=SAU_ROOT, check=False)
-            ok = proc.returncode == 0
-        except OSError as exc:
-            print(f"[{name}] 上传失败：{exc}")
-            ok = False
-        print(f"[{name}] {'成功' if ok else '失败'}")
-        failed += not ok
+    for job, commands in plan:
+        if len(plan) > 1:
+            print(f"\n--- {job.story_id}: {job.video_douyin or job.video_bilibili} ---")
+        for name, cmd in commands:
+            try:
+                proc = subprocess.run(cmd, cwd=SAU_ROOT, check=False)
+                ok = proc.returncode == 0
+            except OSError as exc:
+                print(f"[{name}] 上传失败：{exc}")
+                ok = False
+            print(f"[{name}] {'成功' if ok else '失败'}")
+            failed += not ok
     return 1 if failed else 0
 
 

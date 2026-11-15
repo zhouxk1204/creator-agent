@@ -123,9 +123,12 @@ def test_default_video_name_is_used_without_scanning_other_videos(materials):
     folder, data = materials
     data["stories"][0]["publish"]["video_path"] = None
     save(folder, data)
+    # Normalized metadata names <story>_final.mp4; that is used as the Douyin
+    # master when no <story>_dy/<story>_dy.mp4 export exists.
     assert job(folder).video == folder / "941_1_final.mp4"
     (folder / "941_1_final.mp4").rename(folder / "different-name.mp4")
-    with pytest.raises(MetadataError, match="941_1_final.mp4"):
+    # Other files in the folder are never guessed into a publish.
+    with pytest.raises(MetadataError, match=r"941_1_dy/941_1_dy\.mp4"):
         job(folder)
 
 
@@ -134,13 +137,16 @@ def test_no_video_or_cover_fallbacks(materials):
     publish = data["stories"][0]["publish"]
     publish["video_path"] = ""
     save(folder, data)
-    with pytest.raises(MetadataError, match="路径未填写"):
+    # Douyin takes the 剪映 export; with no _dy file and no master there is
+    # nothing to upload and the message says exactly which file is expected.
+    with pytest.raises(MetadataError, match=r"941_1_dy/941_1_dy\.mp4"):
         job(folder)
     publish["video_path"] = "941_1_final.mp4"
     publish["douyin"]["cover_portrait_path"] = None
     (folder / "cover.jpg").write_bytes(b"old cover")
     save(folder, data)
-    with pytest.raises(MetadataError, match="路径未填写"):
+    # Covers come from make_douyin_covers; say so instead of "asset path missing".
+    with pytest.raises(MetadataError, match="封面还没生成"):
         job(folder)
     publish["douyin"]["cover_portrait_path"] = publish["douyin"]["cover_landscape_path"]
     save(folder, data)
@@ -153,6 +159,82 @@ def test_old_publish_package_is_not_supported(tmp_path):
     (tmp_path / "video.mp4").write_bytes(b"old video")
     with pytest.raises(MetadataError, match="metadata.json"):
         job(tmp_path)
+
+
+def dy_export(folder, story_id, name=None):
+    """Create the 剪映 export folder the way the editor leaves it."""
+    export = folder / f"{story_id}_dy"
+    export.mkdir(exist_ok=True)
+    video = export / (name or f"{story_id}_dy.mp4")
+    video.write_bytes(b"jianying export")
+    (export / f"{video.stem}.srt").write_text("1\n", encoding="utf-8")
+    return video
+
+
+def test_douyin_prefers_the_jianying_dy_export(materials):
+    folder, _ = materials
+    exported = dy_export(folder, "941_1")
+    selected = job(folder)
+    commands = dict(selected.build_commands(headed=True))
+    # Douyin uploads the exported cut, Bilibili keeps the master.
+    assert flag(commands["抖音"], "--file") == str(exported)
+    assert flag(commands["B站"], "--file") == str(folder / "941_1_final.mp4")
+
+
+def test_dy_videos_lists_every_export_and_skips_unknown_stories(materials):
+    folder, data = materials
+    first = dy_export(folder, "941_1")
+    second = dy_export(folder, "941_2")
+    stranger = folder / "999_1_dy"
+    stranger.mkdir()
+    (stranger / "999_1_dy.mp4").write_bytes(b"not in metadata")
+
+    assert publish_dual.dy_videos(folder, data["stories"]) == [("941_1", first), ("941_2", second)]
+
+
+def test_dy_videos_loops_over_several_files_of_one_story(materials):
+    folder, data = materials
+    dy_export(folder, "941_1")
+    part = dy_export(folder, "941_1", "941_1_part2_dy.mp4")
+
+    found = publish_dual.dy_videos(folder, data["stories"])
+    assert [story for story, _ in found] == ["941_1", "941_1"]
+    assert found[-1][1] == part
+
+
+def test_dry_run_with_dy_publishes_each_export(materials, monkeypatch, capsys):
+    folder, _ = materials
+    dy_export(folder, "941_1")
+    dy_export(folder, "941_2")
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "not-installed")
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--dy", "--only", "douyin", "--dry-run"])
+
+    assert publish_dual.main() == 0
+    printed = capsys.readouterr().out
+    assert printed.count("upload-video") == 2
+    assert "941_1_dy.mp4" in printed and "941_2_dy.mp4" in printed
+
+
+def test_dry_run_with_dy_can_be_limited_to_one_story(materials, monkeypatch, capsys):
+    folder, _ = materials
+    dy_export(folder, "941_1")
+    dy_export(folder, "941_2")
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "not-installed")
+    monkeypatch.setattr(
+        sys, "argv", ["publish_dual.py", str(folder), "--dy", "--story", "941_2", "--only", "douyin", "--dry-run"]
+    )
+
+    assert publish_dual.main() == 0
+    printed = capsys.readouterr().out
+    assert "941_2_dy.mp4" in printed and "941_1_dy.mp4" not in printed
+
+
+def test_dy_without_exports_explains_what_is_missing(materials, monkeypatch):
+    folder, _ = materials
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--dy", "--dry-run"])
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "not-installed")
+
+    assert publish_dual.main() == 2
 
 
 def test_stale_translation_is_not_publishable(materials):
@@ -272,3 +354,14 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     assert "--prompt-target" not in text
     assert 'publish_dual.py" %*' in text
     assert "title.txt" not in text
+
+
+def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
+    # The Douyin flow is one double-click: covers first (both orientations, so
+    # the metadata paths exist), then one upload per 剪映 _dy export.
+    text = (Path(__file__).resolve().parents[2] / "bat" / "publish_douyin.bat").read_text(encoding="ascii")
+    covers = text.index("make_douyin_covers.py")
+    publish = text.index("publish_dual.py")
+    assert covers < publish
+    assert "--dy" in text
+    assert "--only douyin" in text

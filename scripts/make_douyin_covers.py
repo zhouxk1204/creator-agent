@@ -57,6 +57,11 @@ def main() -> int:
     parser.add_argument("dir", nargs="?", help="素材目录或 metadata.json；默认使用上次素材目录")
     parser.add_argument("--story", action="append", help="只处理指定故事，如 942_1；可重复")
     parser.add_argument(
+        "--dy-only",
+        action="store_true",
+        help="只处理已经有剪映导出（<故事>_dy/<故事>_dy.mp4）的故事，配合 publish_douyin.bat 用",
+    )
+    parser.add_argument(
         "--covers", default="portrait,landscape", help="要生成的封面，逗号分隔：portrait,landscape（默认两个都做）"
     )
     parser.add_argument("--force", action="store_true", help="已有封面也重新生成并覆盖路径")
@@ -73,6 +78,14 @@ def main() -> int:
         path = choose_target(args.dir)
         data = load(path)
         stories = stories_to_render(data, args.story)
+        if args.dy_only:
+            # Same convention publish_dual.py publishes from: a story is only
+            # publishable once 剪映 exported <story>_dy/<story>_dy.mp4, so there
+            # is no point spending a 剪映 render on the others yet.
+            stories = [story for story in stories if any((path.parent / f"{story['story_id']}_dy").glob("*_dy.mp4"))]
+            if not stories:
+                print("[X] 没有可发布的故事：先导出 <故事>_dy/<故事>_dy.mp4", file=sys.stderr)
+                return 2
     except (MetadataError, OSError, UnicodeError) as exc:
         print(f"[X] {exc}", file=sys.stderr)
         return 2

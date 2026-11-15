@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,8 @@ from creator_agent.doraemon.metadata import (
     source_hash,
     update_metadata,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 
 def make_metadata(tmp_path, *, zh_title: str | None = "机器人服") -> Path:
@@ -81,6 +84,31 @@ def test_cover_title_requires_current_translation(tmp_path):
 def test_cover_title_returns_chinese_title(tmp_path):
     data = load_metadata(make_metadata(tmp_path))
     assert cover_title(data["stories"][0]) == "机器人服"
+
+
+def test_dy_only_skips_stories_without_a_jianying_export(tmp_path, monkeypatch, capsys):
+    # publish_douyin.bat only renders covers for what it can actually publish,
+    # otherwise every run would pay a JianYing render for a story with no _dy
+    # export yet.
+    path = make_metadata(tmp_path)
+    data = load_metadata(path)
+    second = dict(data["stories"][0], story_id="942_2", story_index=2, image_file="942_2.jpg")
+    second["zh"] = dict(data["stories"][0]["zh"], source_hash=source_hash(second))
+    second["publish"] = dict(data["stories"][0]["publish"], title="哆啦a梦942 未来收音机")
+    data["stories"].append(second)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "942_2.jpg").write_bytes(b"jpg")
+    export = tmp_path / "942_1_dy"
+    export.mkdir()
+    (export / "942_1_dy.mp4").write_bytes(b"export")
+
+    import make_douyin_covers
+
+    monkeypatch.setattr(sys, "argv", ["make_douyin_covers.py", str(path), "--dry-run", "--dy-only"])
+    assert make_douyin_covers.main() == 0
+    out = capsys.readouterr().out
+    assert "MAKE 942_1" in out
+    assert "942_2" not in out
 
 
 def test_set_portrait_cover_writes_relative_name(tmp_path):
