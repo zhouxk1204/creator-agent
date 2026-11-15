@@ -1,0 +1,273 @@
+diff --git a/tests/test_bilibili_runtime.py b/tests/test_bilibili_runtime.py
+index 5c871c8..be8bdc9 100644
+--- a/tests/test_bilibili_runtime.py
++++ b/tests/test_bilibili_runtime.py
+@@ -1,10 +1,17 @@
++import io
++import tempfile
+ import unittest
++import zipfile
+ from pathlib import Path
+-from unittest.mock import Mock, patch
++from unittest.mock import MagicMock, Mock, patch
+ 
++import requests
+ from uploader.bilibili_uploader.runtime import (
+     build_biliup_runtime_path,
++    download_biliup_asset,
+     ensure_biliup_binary,
++    fetch_latest_release,
++    fetch_latest_release_via_git,
+     run_biliup_command,
+ )
+ 
+@@ -44,6 +51,66 @@ class BiliupRuntimeTests(unittest.TestCase):
+         mock_download.assert_not_called()
+         mock_write_version.assert_not_called()
+ 
++    @patch("uploader.bilibili_uploader.runtime.fetch_latest_release_via_git")
++    @patch("uploader.bilibili_uploader.runtime.requests.get")
++    def test_fetch_latest_release_uses_git_when_api_is_rate_limited(self, mock_get, mock_git):
++        mock_get.return_value.raise_for_status.side_effect = requests.HTTPError("403 rate limit exceeded")
++        expected = {
++            "tag_name": "v1.3.5",
++            "asset_url": "https://github.com/biliup/biliup/releases/download/v1.3.5/asset.zip",
++            "asset_name": "asset.zip",
++        }
++        mock_git.return_value = expected
++
++        self.assertEqual(fetch_latest_release(), expected)
++        mock_git.assert_called_once_with()
++
++    @patch("uploader.bilibili_uploader.runtime._release_asset_pattern", return_value="x86_64-windows.zip")
++    @patch("uploader.bilibili_uploader.runtime.subprocess.run")
++    def test_fetch_latest_release_via_git_selects_latest_stable_tag(self, mock_run, _mock_pattern):
++        mock_run.return_value = Mock(
++            returncode=0,
++            stdout=(
++                "old\trefs/tags/v1.3.4\n"
++                "new\trefs/tags/v1.3.5\n"
++                "pre\trefs/tags/v0.4.32a5\n"
++            ),
++            stderr="",
++        )
++
++        release = fetch_latest_release_via_git()
++
++        self.assertEqual(release["tag_name"], "v1.3.5")
++        self.assertEqual(release["asset_name"], "biliupR-v1.3.5-x86_64-windows.zip")
++        self.assertEqual(
++            release["asset_url"],
++            "https://github.com/biliup/biliup/releases/download/v1.3.5/"
++            "biliupR-v1.3.5-x86_64-windows.zip",
++        )
++
++    @patch("uploader.bilibili_uploader.runtime._normalize_system", return_value="windows")
++    @patch("uploader.bilibili_uploader.runtime.requests.get")
++    def test_download_biliup_asset_falls_back_to_mirror(self, mock_get, _mock_system):
++        archive = io.BytesIO()
++        with zipfile.ZipFile(archive, "w") as zip_file:
++            zip_file.writestr("biliupR.exe", b"working executable")
++        response = MagicMock()
++        response.__enter__.return_value = response
++        response.iter_content.return_value = [archive.getvalue()]
++        official_url = "https://github.com/biliup/biliup/releases/download/v1.3.5/biliup.zip"
++        mock_get.side_effect = [requests.ConnectionError("connection reset"), response]
++
++        with tempfile.TemporaryDirectory() as temp_dir:
++            destination = Path(temp_dir) / "biliup.exe"
++            download_biliup_asset(
++                {"asset_url": official_url, "asset_name": "biliup.zip"},
++                destination,
++            )
++            self.assertEqual(destination.read_bytes(), b"working executable")
++
++        self.assertEqual(mock_get.call_count, 2)
++        self.assertEqual(mock_get.call_args_list[1].args[0], f"https://gh-proxy.org/{official_url}")
++
+     @patch("uploader.bilibili_uploader.runtime.subprocess.run")
+     @patch("uploader.bilibili_uploader.runtime.ensure_biliup_binary")
+     def test_run_biliup_command_returns_completed_process(self, mock_ensure_binary, mock_run):
+diff --git a/uploader/bilibili_uploader/runtime.py b/uploader/bilibili_uploader/runtime.py
+index a77b99c..1bc4a9e 100644
+--- a/uploader/bilibili_uploader/runtime.py
++++ b/uploader/bilibili_uploader/runtime.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import platform
++import re
+ import shutil
+ import stat
+ import subprocess
+@@ -11,8 +12,17 @@ from pathlib import Path
+ 
+ import requests
+ 
+-
++GITHUB_REPOSITORY = "https://github.com/biliup/biliup"
+ GITHUB_RELEASE_API = "https://api.github.com/repos/biliup/biliup/releases/latest"
++GITHUB_DOWNLOAD_MIRRORS = ("https://gh-proxy.org/", "https://gh-proxy.com/")
++RELEASE_ASSET_PATTERNS = {
++    "windows-x86_64": "x86_64-windows.zip",
++    "linux-x86_64": "x86_64-linux.tar.xz",
++    "linux-aarch64": "aarch64-linux.tar.xz",
++    "linux-arm": "arm-linux.tar.xz",
++    "macos-x86_64": "x86_64-macos.tar.xz",
++    "macos-aarch64": "aarch64-macos.tar.xz",
++}
+ 
+ 
+ def get_biliup_runtime_root() -> Path:
+@@ -49,23 +59,20 @@ def _build_biliup_version_path(system_name: str | None = None) -> Path:
+     return build_biliup_runtime_path(system_name).with_name("version.txt")
+ 
+ 
+-def _select_release_asset(assets: list[dict]) -> dict:
++def _release_asset_pattern() -> str:
+     platform_key = _build_platform_key()
+-    preferred_patterns = {
+-        "windows-x86_64": ("x86_64-windows.zip",),
+-        "linux-x86_64": ("x86_64-linux.tar.xz",),
+-        "linux-aarch64": ("aarch64-linux.tar.xz",),
+-        "linux-arm": ("arm-linux.tar.xz",),
+-        "macos-x86_64": ("x86_64-macos.tar.xz",),
+-        "macos-aarch64": ("aarch64-macos.tar.xz",),
+-    }
+-    patterns = preferred_patterns.get(platform_key)
+-    if not patterns:
+-        raise RuntimeError(f"Unsupported biliup platform: {platform_key}")
++    try:
++        return RELEASE_ASSET_PATTERNS[platform_key]
++    except KeyError as exc:
++        raise RuntimeError(f"Unsupported biliup platform: {platform_key}") from exc
++
+ 
++def _select_release_asset(assets: list[dict]) -> dict:
++    platform_key = _build_platform_key()
++    pattern = _release_asset_pattern()
+     for asset in assets:
+         asset_name = asset.get("name", "")
+-        if any(pattern in asset_name for pattern in patterns):
++        if pattern in asset_name:
+             return {
+                 "asset_name": asset_name,
+                 "asset_url": asset.get("browser_download_url", ""),
+@@ -74,25 +81,69 @@ def _select_release_asset(assets: list[dict]) -> dict:
+     raise RuntimeError(f"No matching biliup release asset found for platform: {platform_key}")
+ 
+ 
+-def fetch_latest_release() -> dict:
+-    response = requests.get(
+-        GITHUB_RELEASE_API,
+-        headers={
+-            "Accept": "application/vnd.github+json",
+-            "User-Agent": "social-auto-upload",
+-        },
++def _stable_release_version(tag_name: str) -> tuple[int, int, int] | None:
++    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag_name)
++    return tuple(map(int, match.groups())) if match else None
++
++
++def fetch_latest_release_via_git() -> dict:
++    """Resolve the latest stable release without GitHub's rate-limited API."""
++    result = subprocess.run(
++        ["git", "ls-remote", "--tags", "--refs", f"{GITHUB_REPOSITORY}.git"],
++        check=False,
++        capture_output=True,
++        text=True,
++        encoding="utf-8",
++        errors="replace",
+         timeout=30,
+     )
+-    response.raise_for_status()
+-    payload = response.json()
+-    selected_asset = _select_release_asset(payload.get("assets", []))
++    if result.returncode != 0:
++        detail = (result.stderr or result.stdout or "git ls-remote failed").strip()
++        raise RuntimeError(f"Unable to list biliup release tags: {detail}")
++    releases = []
++    for line in result.stdout.splitlines():
++        _, separator, ref = line.partition("\t")
++        tag_name = ref.removeprefix("refs/tags/") if separator else ""
++        version = _stable_release_version(tag_name)
++        if version is not None:
++            releases.append((version, tag_name))
++    if not releases:
++        raise RuntimeError("No stable biliup release tag found")
++    tag_name = max(releases, key=lambda item: item[0])[1]
++    asset_name = f"biliupR-{tag_name}-{_release_asset_pattern()}"
+     return {
+-        "tag_name": payload.get("tag_name", ""),
+-        "asset_name": selected_asset["asset_name"],
+-        "asset_url": selected_asset["asset_url"],
++        "tag_name": tag_name,
++        "asset_name": asset_name,
++        "asset_url": f"{GITHUB_REPOSITORY}/releases/download/{tag_name}/{asset_name}",
+     }
+ 
+ 
++def fetch_latest_release() -> dict:
++    try:
++        response = requests.get(
++            GITHUB_RELEASE_API,
++            headers={
++                "Accept": "application/vnd.github+json",
++                "User-Agent": "social-auto-upload",
++            },
++            timeout=30,
++        )
++        response.raise_for_status()
++        payload = response.json()
++        selected_asset = _select_release_asset(payload.get("assets", []))
++        return {
++            "tag_name": payload.get("tag_name", ""),
++            "asset_name": selected_asset["asset_name"],
++            "asset_url": selected_asset["asset_url"],
++        }
++    except (requests.RequestException, RuntimeError, ValueError) as api_error:
++        try:
++            return fetch_latest_release_via_git()
++        except (OSError, RuntimeError, subprocess.SubprocessError) as git_error:
++            message = f"Unable to resolve biliup release via GitHub API ({api_error}) or Git ({git_error})"
++            raise RuntimeError(message) from git_error
++
++
+ def read_local_biliup_version() -> str | None:
+     version_path = _build_biliup_version_path()
+     if not version_path.exists():
+@@ -125,12 +176,28 @@ def download_biliup_asset(release: dict, destination: Path) -> Path:
+     with tempfile.TemporaryDirectory(prefix="biliup-download-") as temp_dir:
+         temp_root = Path(temp_dir)
+         archive_path = temp_root / release["asset_name"]
+-        with requests.get(release["asset_url"], stream=True, timeout=120) as response:
+-            response.raise_for_status()
+-            with archive_path.open("wb") as file_obj:
+-                for chunk in response.iter_content(chunk_size=1024 * 1024):
+-                    if chunk:
+-                        file_obj.write(chunk)
++        errors = []
++        official_url = release["asset_url"]
++        urls = [official_url, *(f"{mirror}{official_url}" for mirror in GITHUB_DOWNLOAD_MIRRORS)]
++        for url in urls:
++            try:
++                with requests.get(
++                    url,
++                    stream=True,
++                    timeout=(20, 120),
++                    headers={"User-Agent": "social-auto-upload"},
++                ) as response:
++                    response.raise_for_status()
++                    with archive_path.open("wb") as file_obj:
++                        for chunk in response.iter_content(chunk_size=1024 * 1024):
++                            if chunk:
++                                file_obj.write(chunk)
++                break
++            except requests.RequestException as exc:
++                archive_path.unlink(missing_ok=True)
++                errors.append(f"{url}: {exc}")
++        else:
++            raise RuntimeError("Unable to download biliup from GitHub or its mirrors:\n" + "\n".join(errors))
+ 
+         extract_root = temp_root / "extract"
+         extract_root.mkdir(parents=True, exist_ok=True)

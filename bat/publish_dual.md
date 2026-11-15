@@ -114,7 +114,7 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --schedu
   `tools\social-auto-upload\verify_code.txt`，或在终端提示时手动输入。
 - **登录过期**：重新跑上面的 `sau ... login` 命令即可。可用
   `sau douyin check --account default` / `sau bilibili check --account default` 检查有效性。
-- **B站首次运行慢**：sau 会自动从 GitHub 下载 biliup 上传器，需要能访问 GitHub。
+- **B站首次运行慢**：sau 会自动准备 biliup 上传器。GitHub API 匿名限流时改用官方 Git 标签解析版本；官方下载连接失败时自动尝试 `gh-proxy` 镜像。下载一次后保存到用户目录并直接复用，不需要手动安装。
 - **想升级 sau**：`cd tools\social-auto-upload && git pull`，然后重跑
   `bat\setup_publish.bat`。注意 sau 上游正在重构期，升级前先在 `--dry-run` 下验证。
 - 本工具与本项目的抖音采集登录（`storage\.browser_profile`）**互相独立**，互不影响。

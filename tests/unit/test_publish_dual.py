@@ -555,3 +555,14 @@ def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
     assert covers < publish
     assert "--dy" in text
     assert "--only douyin" in text
+
+
+def test_setup_installs_biliup_download_fallback_patch():
+    root = Path(__file__).resolve().parents[2]
+    setup = (root / "bat" / "setup_publish.bat").read_text(encoding="ascii")
+    patch = (root / "patches" / "social-auto-upload" / "bilibili-runtime-download.patch").read_text(encoding="utf-8")
+
+    assert "bilibili-runtime-download" in setup
+    assert "fetch_latest_release_via_git" in patch
+    assert "GITHUB_DOWNLOAD_MIRRORS" in patch
+    assert "403 rate limit exceeded" in patch

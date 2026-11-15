@@ -44,10 +44,10 @@ if not exist "%SAU_DIR%\uploader\douyin_uploader\main.py" (
     echo [OK] repo already cloned: %SAU_DIR%
 )
 
-rem Apply our Douyin fixes without tracking the third-party repo in this one.
-rem Keep these as separate patches so existing installs with the cover patch
-rem can add the upload reliability fix without reverting anything first.
-for %%P in (douyin-dual-cover douyin-upload-reliability) do (
+rem Apply our platform fixes without tracking the third-party repo in this one.
+rem Keep these as separate patches so existing installs can add a new fix
+rem without reverting any of the others first.
+for %%P in (douyin-dual-cover douyin-upload-reliability bilibili-runtime-download) do (
     call :apply_sau_patch "%%~P"
     if errorlevel 1 goto :fail
 )
