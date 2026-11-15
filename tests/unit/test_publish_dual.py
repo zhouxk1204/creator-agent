@@ -32,6 +32,7 @@ def materials(tmp_path):
             f"941_{i}_final.mp4",
             f"941_{i}.jpg",
             f"941_{i}_4k.jpg",
+            f"941_{i}_4k_bilibili.jpg",
             f"portrait_{i}.jpg",
             f"landscape_{i}.jpg",
         ):
@@ -281,7 +282,7 @@ def test_b_videos_lists_known_bilibili_exports_only(materials):
     assert publish_dual.b_videos(folder, data["stories"]) == [("941_1", first), ("941_2", second)]
 
 
-def test_bilibili_batch_uses_b_video_4k_cover_and_multiline_description(materials):
+def test_bilibili_batch_uses_b_video_optimized_cover_and_multiline_description(materials):
     folder, data = materials
     video = b_export(folder, "941_1")
 
@@ -292,7 +293,7 @@ def test_bilibili_batch_uses_b_video_4k_cover_and_multiline_description(material
     assert flag(command, "--title") == "哆啦a梦941 故事1"
     assert flag(command, "--desc") == data["stories"][0]["zh"]["synopsis"]
     assert "\n\n第二段。\n" in flag(command, "--desc")
-    assert flag(command, "--thumbnail") == str(folder / "941_1_4k.jpg")
+    assert flag(command, "--thumbnail") == str(folder / "941_1_4k_bilibili.jpg")
 
 
 def test_dry_run_with_b_publishes_each_bilibili_export(materials, monkeypatch, capsys):
@@ -307,7 +308,7 @@ def test_dry_run_with_b_publishes_each_bilibili_export(materials, monkeypatch, c
     assert printed.count("upload-video") == 2
     assert printed.count(" bilibili upload-video ") == 2
     assert "941_1_b.mp4" in printed and "941_2_b.mp4" in printed
-    assert "941_1_4k.jpg" in printed and "941_2_4k.jpg" in printed
+    assert "941_1_4k_bilibili.jpg" in printed and "941_2_4k_bilibili.jpg" in printed
 
 
 def test_b_without_exports_explains_what_is_missing(materials, monkeypatch, capsys):
@@ -539,8 +540,9 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     assert "title.txt" not in text
 
 
-def test_bilibili_launcher_publishes_every_b_export():
+def test_bilibili_launcher_prepares_covers_then_publishes_every_b_export():
     text = (Path(__file__).resolve().parents[2] / "bat" / "publish_bilibili.bat").read_text(encoding="ascii")
+    assert text.index("make_bilibili_covers.py") < text.index('publish_dual.py" %*')
     assert "--b" in text
     assert "--only bilibili" in text
     assert "--dy" not in text

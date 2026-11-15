@@ -4,7 +4,7 @@ Douyin takes the 剪映 export: every ``<materials>/<story>_dy/<name>_dy.mp4`` i
 finished vertical cut with burned subtitles, and ``--dy`` publishes each of them
 in turn (one Douyin video per file). The dual-platform flow keeps using
 ``publish.video_path`` for Bilibili; ``--b`` instead publishes every root-level
-``<story>_b`` video with its ``<story>_4k.jpg`` cover.
+``<story>_b`` video with an optimized JPEG made from its ``<story>_4k.jpg`` cover.
 
 This entry point and its metadata dependency use only the standard library,
 so they also run inside social-auto-upload's separate virtual environment.
@@ -199,7 +199,7 @@ class PublishJob:
             self.bilibili_desc = story["zh"]["synopsis"]
             if len(self.bilibili_desc) > 2000:
                 raise MetadataError("B站简介最多 2000 字，请编辑 zh.synopsis；不会静默截断")
-            cover = f"{story_id}_4k.jpg" if self.bilibili_batch else story.get("image_file")
+            cover = f"{story_id}_4k_bilibili.jpg" if self.bilibili_batch else story.get("image_file")
             self.cover_bilibili = required_asset(self.path, cover, COVER_EXTS)
             self.tid = args.tid or bilibili["tid"]
             if not str(self.tid).isdigit() or int(self.tid) <= 0:
@@ -369,7 +369,7 @@ def main() -> int:
     batch.add_argument(
         "--b",
         action="store_true",
-        help="发布素材目录下所有 <故事>_b 视频到B站，封面用对应的 <故事>_4k.jpg",
+        help="发布素材目录下所有 <故事>_b 视频到B站，封面用对应4K图的优化JPEG",
     )
     parser.add_argument("--only", choices=["douyin", "bilibili"], help="只发一个平台")
     parser.add_argument("--tid", help="覆盖 metadata 中的 B站分区号")

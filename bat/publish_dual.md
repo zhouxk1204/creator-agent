@@ -77,8 +77,9 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only b
 ## B站单平台快捷入口
 
 只发 B 站成品时，双击 `bat\publish_bilibili.bat`。它会批量发布素材目录根下所有
-`<故事>_b.mp4`，使用 `publish.title`、保留换行的 `zh.synopsis` 中文简介和对应的
-`<故事>_4k.jpg` 封面。详见 [`publish_bilibili.md`](./publish_bilibili.md)。
+`<故事>_b.mp4`，使用 `publish.title`、保留换行的 `zh.synopsis` 中文简介和对应
+`<故事>_4k.jpg` 自动转出的同尺寸优化 JPEG 封面，原始 4K 图保持不变。
+详见 [`publish_bilibili.md`](./publish_bilibili.md)。
 
 ## 其他参数
 
