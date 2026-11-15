@@ -34,5 +34,6 @@ bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-
 - 旧文本发布包不再支持，磁盘上已有文件不会自动删除。
 - 自主声明：**虚构演绎，仅供娱乐**。
 - 合集：**哆啦A梦2026合集**（需已存在于创作者账号）。
+- 登录：发布前会先用 `sau douyin check` 验证 cookie。缺失或过期时**自动打开登录窗口**（有头浏览器，扫码后继续），不用再手动敲 `sau douyin login`；上传中途失效会自动重登并重试一次。没有终端可扫码时（计划任务/重定向）直接报错并给出该敲的命令。
 - 首次使用或缺少 social-auto-upload 时，先运行 `bat\setup_publish.bat`。
 - 登录过期时，按 [`publish_dual.md`](./publish_dual.md) 的说明重新扫码。

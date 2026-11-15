@@ -287,11 +287,113 @@ def test_one_failed_platform_does_not_block_other(materials, monkeypatch):
     executable.touch()
     monkeypatch.setattr(publish_dual, "sau_exe", lambda: executable)
     monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--story", "941_1", "--yes"])
-    run = Mock(side_effect=[OSError("upload error"), SimpleNamespace(returncode=0)])
+    # First call is each platform's session check, then the uploads.
+    ok_result = SimpleNamespace(returncode=0, stdout="valid", stderr="")
+    # check douyin, check bilibili, douyin upload (dies), re-check douyin, bilibili upload
+    run = Mock(side_effect=[ok_result, ok_result, OSError("upload error"), ok_result, ok_result])
     monkeypatch.setattr(publish_dual.subprocess, "run", run)
     assert publish_dual.main() == 1
-    assert run.call_count == 2
-    assert run.call_args_list[1].args[0][1] == "bilibili"
+    uploads = [call.args[0] for call in run.call_args_list if "upload-video" in call.args[0]]
+    assert [cmd[1] for cmd in uploads] == ["douyin", "bilibili"]
+
+
+def session_stub(monkeypatch, folder, results):
+    """sau stub: results decide each `check`/`login` return code in order."""
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "sau.exe")
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=results.pop(0) if results else 0, stdout="", stderr="")
+
+    monkeypatch.setattr(publish_dual.subprocess, "run", run)
+    return calls
+
+
+def test_ensure_session_skips_login_when_the_check_passes(materials, monkeypatch):
+    folder, _ = materials
+    calls = session_stub(monkeypatch, folder, [0])
+
+    assert publish_dual.ensure_session("douyin", "default") is True
+    assert [cmd[2] for cmd in calls] == ["check"]
+
+
+def test_ensure_session_logs_in_when_the_cookie_is_gone(materials, monkeypatch, capsys):
+    folder, _ = materials
+    calls = session_stub(monkeypatch, folder, [1, 0])  # check invalid -> login ok
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: True)
+
+    assert publish_dual.ensure_session("douyin", "default") is True
+    assert calls[0][2] == "check"
+    # The login is exactly what sau's error message tells the user to run.
+    assert calls[1][2:] == ["login", "--account", "default", "--headed"]
+    assert "[登录]" in capsys.readouterr().out
+
+
+def test_ensure_session_login_for_bilibili_has_no_headed_flag(materials, monkeypatch):
+    folder, _ = materials
+    calls = session_stub(monkeypatch, folder, [1, 0])
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: True)
+
+    assert publish_dual.ensure_session("bilibili", "main") is True
+    assert calls[1][2:] == ["login", "--account", "main"]
+
+
+def test_ensure_session_without_a_terminal_explains_the_manual_command(materials, monkeypatch):
+    folder, _ = materials
+    session_stub(monkeypatch, folder, [1])
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: False)
+
+    with pytest.raises(MetadataError, match="sau douyin login --account default"):
+        publish_dual.ensure_session("douyin", "default")
+
+
+def test_ensure_session_fails_when_the_login_is_abandoned(materials, monkeypatch):
+    folder, _ = materials
+    session_stub(monkeypatch, folder, [1, 1])  # check invalid -> login failed
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: True)
+
+    with pytest.raises(MetadataError, match="登录没有完成"):
+        publish_dual.ensure_session("douyin", "default")
+
+
+def test_publish_logs_in_before_the_first_upload(materials, monkeypatch):
+    folder, _ = materials
+    dy_export(folder, "941_1")
+    for name in ("portrait_1.jpg", "landscape_1.jpg"):
+        (folder / name).write_bytes(b"cover")
+    data = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    data["stories"][0]["publish"]["douyin"]["cover_portrait_path"] = "portrait_1.jpg"
+    data["stories"][0]["publish"]["douyin"]["cover_landscape_path"] = "landscape_1.jpg"
+    save(folder, data)
+    executable = folder / "sau.exe"
+    executable.touch()
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: executable)
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--dy", "--only", "douyin", "--yes"])
+    calls = session_stub(monkeypatch, folder, [1, 0, 0])  # check -> login -> upload
+
+    assert publish_dual.main() == 0
+    assert [cmd[2] for cmd in calls] == ["check", "login", "upload-video"]
+
+
+def test_failed_upload_relogs_in_and_retries_once(materials, monkeypatch):
+    folder, data = materials
+    dy_export(folder, "941_1")
+    for name in ("portrait_1.jpg", "landscape_1.jpg"):
+        (folder / name).write_bytes(b"cover")
+    data["stories"][0]["publish"]["douyin"]["cover_portrait_path"] = "portrait_1.jpg"
+    data["stories"][0]["publish"]["douyin"]["cover_landscape_path"] = "landscape_1.jpg"
+    save(folder, data)
+    (folder / "sau.exe").touch()
+    monkeypatch.setattr(publish_dual, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--dy", "--only", "douyin", "--yes"])
+    # check ok -> upload fails -> re-check invalid -> ensure_session check ->
+    # login ok -> retried upload ok
+    calls = session_stub(monkeypatch, folder, [0, 1, 1, 1, 0, 0])
+
+    assert publish_dual.main() == 0
+    assert [cmd[2] for cmd in calls] == ["check", "upload-video", "check", "check", "login", "upload-video"]
 
 
 def test_saved_target_accepts_bom_and_quoted_override(tmp_path, monkeypatch):

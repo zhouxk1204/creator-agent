@@ -221,6 +221,63 @@ class PublishJob:
         return commands
 
 
+def login_command(platform: str, account: str) -> list[str]:
+    """The sign-in command sau asks for in its cookie error message.
+
+    Douyin's login needs a visible browser (QR code), Bilibili's does not take
+    a --headed flag at all.
+    """
+    cmd = [str(sau_exe()), platform, "login", "--account", account]
+    if platform == "douyin":
+        cmd.append("--headed")
+    return cmd
+
+
+def check_session(platform: str, account: str) -> tuple[bool, str]:
+    """``(usable, detail)`` for an account's saved session.
+
+    ``sau <platform> check`` covers both "cookie file missing" and "cookie
+    expired" (it validates the session headless), so no separate file probing is
+    needed and the answer matches what the uploader will do.
+    """
+    check = subprocess.run(
+        [str(sau_exe()), platform, "check", "--account", account],
+        cwd=SAU_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    detail = " ".join(((check.stdout or "") + (check.stderr or "")).split())[-200:]
+    return check.returncode == 0, detail
+
+
+def ensure_session(platform: str, account: str) -> bool:
+    """Make sure ``account`` can upload, signing in when its cookie is gone.
+
+    The fix sau's own error message tells the user to run by hand —
+    ``sau <platform> login`` — happens here instead of failing the whole publish
+    after the videos were prepared. Only possible when a human can scan the QR
+    code; otherwise the error names the exact command to run.
+    """
+    name = "抖音" if platform == "douyin" else "B站"
+    usable, detail = check_session(platform, account)
+    if usable:
+        return True
+    if not _stdin_is_interactive():
+        raise MetadataError(
+            f"{name} 账号 {account} 未登录或登录已过期，且当前没有终端可以扫码；"
+            f"请先运行 sau {platform} login --account {account}"
+        )
+    print(f"[登录] {name} 账号 {account} 未登录/已过期（{detail or 'check failed'}），正在打开登录窗口，请扫码…")
+    login = subprocess.run(login_command(platform, account), cwd=SAU_ROOT, check=False)
+    if login.returncode != 0:
+        raise MetadataError(f"{name} 登录没有完成，请手动运行 sau {platform} login --account {account}")
+    print(f"[登录] {name} 完成")
+    return True
+
+
 def _stdin_is_interactive() -> bool:
     try:
         return sys.stdin is not None and sys.stdin.isatty()
@@ -351,17 +408,50 @@ def main() -> int:
         if not confirmed:
             print("已取消。")
             return 1
+    # Log in before uploading, not after the first upload already failed: a
+    # missing/expired cookie is a two-second `check`, and the login it asks for
+    # is exactly what we can run here.
+    sessions: list[tuple[str, str]] = []
+    for job, _ in plan:
+        if job.do_douyin:
+            sessions.append(("douyin", job.douyin_account))
+        if job.do_bilibili:
+            sessions.append(("bilibili", job.bilibili_account))
+    try:
+        for platform, account in dict.fromkeys(sessions):
+            ensure_session(platform, account)
+    except MetadataError as exc:
+        print(f"[X] {exc}", file=sys.stderr)
+        return 1
     failed = 0
     for job, commands in plan:
         if len(plan) > 1:
             print(f"\n--- {job.story_id}: {job.video_douyin or job.video_bilibili} ---")
         for name, cmd in commands:
+            platform = "douyin" if cmd[1] == "douyin" else "bilibili"
+            account = job.douyin_account if platform == "douyin" else job.bilibili_account
             try:
-                proc = subprocess.run(cmd, cwd=SAU_ROOT, check=False)
-                ok = proc.returncode == 0
+                ok = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode == 0
             except OSError as exc:
                 print(f"[{name}] 上传失败：{exc}")
                 ok = False
+            if not ok:
+                # A cookie that expired between the pre-flight check and the
+                # upload looks like any other failure; only a session that is
+                # now invalid is worth a login + one retry.
+                usable, _ = check_session(platform, account)
+                if not usable:
+                    try:
+                        print(f"[{name}] 上传失败且登录已失效，登录后重试一次…")
+                        ensure_session(platform, account)
+                    except MetadataError as exc:
+                        print(f"[{name}] 自动登录失败：{exc}", file=sys.stderr)
+                    else:
+                        try:
+                            ok = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode == 0
+                        except OSError as exc:
+                            print(f"[{name}] 重试失败：{exc}")
+                            ok = False
             print(f"[{name}] {'成功' if ok else '失败'}")
             failed += not ok
     return 1 if failed else 0
