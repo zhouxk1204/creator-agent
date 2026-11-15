@@ -28,7 +28,13 @@ def materials(tmp_path):
         }
     )
     for i, story in enumerate(data["stories"], 1):
-        for name in (f"941_{i}_final.mp4", f"941_{i}.jpg", f"portrait_{i}.jpg", f"landscape_{i}.jpg"):
+        for name in (
+            f"941_{i}_final.mp4",
+            f"941_{i}.jpg",
+            f"941_{i}_4k.jpg",
+            f"portrait_{i}.jpg",
+            f"landscape_{i}.jpg",
+        ):
             (folder / name).write_bytes(b"local test asset")
         story["image_file"] = f"941_{i}.jpg"
         story["zh"] = {
@@ -51,7 +57,15 @@ def materials(tmp_path):
 
 
 def job(folder, **overrides):
-    args = dict(story="941_1", schedule=None, tid=None, douyin_account="default", bilibili_account="default", only=None)
+    args = dict(
+        story="941_1",
+        schedule=None,
+        tid=None,
+        douyin_account="default",
+        bilibili_account="default",
+        only=None,
+        b=False,
+    )
     args.update(overrides)
     return publish_dual.PublishJob(folder, SimpleNamespace(**args))
 
@@ -185,6 +199,12 @@ def dy_export(folder, story_id, name=None):
     return video
 
 
+def b_export(folder, story_id):
+    video = folder / f"{story_id}_b.mp4"
+    video.write_bytes(b"bilibili export")
+    return video
+
+
 def test_douyin_prefers_the_jianying_dy_export(materials):
     folder, _ = materials
     exported = dy_export(folder, "941_1")
@@ -249,6 +269,53 @@ def test_dy_without_exports_explains_what_is_missing(materials, monkeypatch):
     monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "not-installed")
 
     assert publish_dual.main() == 2
+
+
+def test_b_videos_lists_known_bilibili_exports_only(materials):
+    folder, data = materials
+    first = b_export(folder, "941_1")
+    second = b_export(folder, "941_2")
+    (folder / "999_1_b.mp4").write_bytes(b"not in metadata")
+    (folder / "941_1_b.srt").write_text("not a video", encoding="utf-8")
+
+    assert publish_dual.b_videos(folder, data["stories"]) == [("941_1", first), ("941_2", second)]
+
+
+def test_bilibili_batch_uses_b_video_4k_cover_and_multiline_description(materials):
+    folder, data = materials
+    video = b_export(folder, "941_1")
+
+    selected = job(folder, only="bilibili", b=True)
+    command = dict(selected.build_commands(headed=False))["B站"]
+
+    assert flag(command, "--file") == str(video)
+    assert flag(command, "--title") == "哆啦a梦941 故事1"
+    assert flag(command, "--desc") == data["stories"][0]["zh"]["synopsis"]
+    assert "\n\n第二段。\n" in flag(command, "--desc")
+    assert flag(command, "--thumbnail") == str(folder / "941_1_4k.jpg")
+
+
+def test_dry_run_with_b_publishes_each_bilibili_export(materials, monkeypatch, capsys):
+    folder, _ = materials
+    b_export(folder, "941_1")
+    b_export(folder, "941_2")
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: folder / "not-installed")
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--b", "--dry-run"])
+
+    assert publish_dual.main() == 0
+    printed = capsys.readouterr().out
+    assert printed.count("upload-video") == 2
+    assert printed.count(" bilibili upload-video ") == 2
+    assert "941_1_b.mp4" in printed and "941_2_b.mp4" in printed
+    assert "941_1_4k.jpg" in printed and "941_2_4k.jpg" in printed
+
+
+def test_b_without_exports_explains_what_is_missing(materials, monkeypatch, capsys):
+    folder, _ = materials
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--b", "--dry-run"])
+
+    assert publish_dual.main() == 2
+    assert "_b.mp4" in capsys.readouterr().err
 
 
 def test_stale_translation_is_not_publishable(materials):
@@ -459,7 +526,7 @@ def test_publisher_imports_without_site_packages():
     assert "--story" in result.stdout
 
 
-@pytest.mark.parametrize("name", ["publish_douyin", "publish_dual"])
+@pytest.mark.parametrize("name", ["publish_douyin", "publish_dual", "publish_bilibili"])
 def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     path = Path(__file__).resolve().parents[2] / "bat" / f"{name}.bat"
     raw = path.read_bytes()
@@ -470,6 +537,13 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     assert "--prompt-target" not in text
     assert 'publish_dual.py" %*' in text
     assert "title.txt" not in text
+
+
+def test_bilibili_launcher_publishes_every_b_export():
+    text = (Path(__file__).resolve().parents[2] / "bat" / "publish_bilibili.bat").read_text(encoding="ascii")
+    assert "--b" in text
+    assert "--only bilibili" in text
+    assert "--dy" not in text
 
 
 def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():

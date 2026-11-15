@@ -74,6 +74,12 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only b
 只想发抖音时，双击 `bat\publish_douyin.bat`，选择素材目录和故事即可。
 它固定使用有头浏览器，仍在发布前显示摘要并要求输入 `Y` 确认。详见 [`publish_douyin.md`](./publish_douyin.md)。
 
+## B站单平台快捷入口
+
+只发 B 站成品时，双击 `bat\publish_bilibili.bat`。它会批量发布素材目录根下所有
+`<故事>_b.mp4`，使用 `publish.title`、保留换行的 `zh.synopsis` 中文简介和对应的
+`<故事>_4k.jpg` 封面。详见 [`publish_bilibili.md`](./publish_bilibili.md)。
+
 ## 其他参数
 
 ```bat

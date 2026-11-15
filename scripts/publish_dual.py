@@ -2,7 +2,9 @@
 
 Douyin takes the 剪映 export: every ``<materials>/<story>_dy/<name>_dy.mp4`` is a
 finished vertical cut with burned subtitles, and ``--dy`` publishes each of them
-in turn (one Douyin video per file). Bilibili keeps using ``publish.video_path``.
+in turn (one Douyin video per file). The dual-platform flow keeps using
+``publish.video_path`` for Bilibili; ``--b`` instead publishes every root-level
+``<story>_b`` video with its ``<story>_4k.jpg`` cover.
 
 This entry point and its metadata dependency use only the standard library,
 so they also run inside social-auto-upload's separate virtual environment.
@@ -73,6 +75,21 @@ def dy_videos(materials: Path, stories: list[dict]) -> list[tuple[str, Path]]:
     return found
 
 
+def b_videos(materials: Path, stories: list[dict]) -> list[tuple[str, Path]]:
+    """``(story_id, video)`` for every Bilibili ``<story_id>_b`` export."""
+    known = {story["story_id"] for story in stories}
+    found: list[tuple[str, Path]] = []
+    for video in sorted(materials.glob("*_b.*")):
+        if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
+            continue
+        story_id = video.stem[: -len("_b")]
+        if story_id not in known:
+            print(f"[!] 跳过 {video.name}：metadata 里没有故事 {story_id}")
+            continue
+        found.append((story_id, video))
+    return found
+
+
 def douyin_video(metadata: Path, story: dict, override: Path | None = None) -> Path:
     """The file Douyin uploads: explicit override, then the ``_dy`` export.
 
@@ -128,10 +145,17 @@ class PublishJob:
             raise MetadataError(f"publish.title 格式应为：{prefix}中文标题")
         self.do_douyin = args.only in (None, "douyin")
         self.do_bilibili = args.only in (None, "bilibili")
+        self.bilibili_batch = getattr(args, "b", False)
         self.video_douyin = douyin_video(self.path, story, video) if self.do_douyin else None
-        self.video_bilibili = required_asset(self.path, publish["video_path"], VIDEO_EXTS) if self.do_bilibili else None
-        self.do_douyin = args.only in (None, "douyin")
-        self.do_bilibili = args.only in (None, "bilibili")
+        if self.do_bilibili:
+            bilibili_source = (
+                (str(video) if video is not None else f"{story_id}_b.mp4")
+                if self.bilibili_batch
+                else publish["video_path"]
+            )
+            self.video_bilibili = required_asset(self.path, bilibili_source, VIDEO_EXTS)
+        else:
+            self.video_bilibili = None
         self.schedule = args.schedule or publish.get("schedule")
         self.douyin_account = args.douyin_account
         self.bilibili_account = args.bilibili_account
@@ -175,7 +199,8 @@ class PublishJob:
             self.bilibili_desc = story["zh"]["synopsis"]
             if len(self.bilibili_desc) > 2000:
                 raise MetadataError("B站简介最多 2000 字，请编辑 zh.synopsis；不会静默截断")
-            self.cover_bilibili = required_asset(self.path, story.get("image_file"), COVER_EXTS)
+            cover = f"{story_id}_4k.jpg" if self.bilibili_batch else story.get("image_file")
+            self.cover_bilibili = required_asset(self.path, cover, COVER_EXTS)
             self.tid = args.tid or bilibili["tid"]
             if not str(self.tid).isdigit() or int(self.tid) <= 0:
                 raise MetadataError("B站分区号 tid 必须是正整数")
@@ -335,10 +360,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="读取 metadata.json，发布一个故事到抖音/B站")
     parser.add_argument("dir", nargs="?", help="素材目录或 metadata.json；默认使用上次素材目录")
     parser.add_argument("--story", help="故事标识，如 941_1")
-    parser.add_argument(
+    batch = parser.add_mutually_exclusive_group()
+    batch.add_argument(
         "--dy",
         action="store_true",
         help="发布素材目录下所有 <故事>_dy/ 里的剪映导出（一个视频一条抖音），逐个循环",
+    )
+    batch.add_argument(
+        "--b",
+        action="store_true",
+        help="发布素材目录下所有 <故事>_b 视频到B站，封面用对应的 <故事>_4k.jpg",
     )
     parser.add_argument("--only", choices=["douyin", "bilibili"], help="只发一个平台")
     parser.add_argument("--tid", help="覆盖 metadata 中的 B站分区号")
@@ -359,19 +390,27 @@ def main() -> int:
     try:
         path = choose_target(args.dir, args.ask)
         data = load_metadata(path)
-        if args.dy:
-            videos = dy_videos(path.parent, data["stories"])
+        if args.b and args.only == "douyin":
+            raise MetadataError("--b 只发布B站，不能和 --only douyin 一起使用")
+        if args.b:
+            args.only = "bilibili"
+        if args.dy or args.b:
+            kind = "_b" if args.b else "_dy"
+            videos = b_videos(path.parent, data["stories"]) if args.b else dy_videos(path.parent, data["stories"])
             if args.story:
                 videos = [(story_id, video) for story_id, video in videos if story_id == args.story]
             if not videos:
                 named = f"{args.story} 的" if args.story else ""
-                raise MetadataError(f"{path.parent} 下没有 {named}_dy 视频：先用剪映导出 <故事>_dy/<故事>_dy.mp4")
+                expected = "<故事>_b.mp4" if args.b else "<故事>_dy/<故事>_dy.mp4"
+                raise MetadataError(f"{path.parent} 下没有 {named}{kind} 视频：请先准备 {expected}")
             by_story: dict[str, int] = {}
             for story_id, _ in videos:
                 by_story[story_id] = by_story.get(story_id, 0) + 1
             for story_id, count in by_story.items():
                 if count > 1:
-                    print(f"[!] {story_id} 有 {count} 个 _dy 视频，将用同一个标题/简介/封面各发一条", file=sys.stderr)
+                    print(
+                        f"[!] {story_id} 有 {count} 个 {kind} 视频，将用同一个标题/简介/封面各发一条", file=sys.stderr
+                    )
             jobs = [PublishJob(path, args, story_id=story_id, video=video) for story_id, video in videos]
         else:
             if not args.story and len(data["stories"]) > 1:
