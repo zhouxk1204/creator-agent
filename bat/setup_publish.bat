@@ -26,7 +26,17 @@ set "SAU_DIR=%REPO_ROOT%\tools\social-auto-upload"
 
 rem -- uv is needed below; _bootstrap already made sure it is on PATH. --
 
-if not exist "%SAU_DIR%\.git" (
+rem A clone interrupted mid-way leaves tools\social-auto-upload\.git behind
+rem WITHOUT a HEAD or any working tree, so ".git exists" is not proof of a
+rem usable checkout: the patch step then fails with "does not match this sau
+rem revision" and nothing says why. Verify a real file instead, and clear the
+rem broken leftover before cloning.
+if not exist "%SAU_DIR%\uploader\douyin_uploader\main.py" (
+    if exist "%SAU_DIR%" (
+        echo [*] Removing an incomplete copy in tools\social-auto-upload ...
+        rmdir /s /q "%SAU_DIR%"
+        if errorlevel 1 goto :fail
+    )
     echo [*] Cloning social-auto-upload into tools\social-auto-upload ...
     git clone --depth 50 https://github.com/dreammis/social-auto-upload.git "%SAU_DIR%"
     if errorlevel 1 goto :fail
@@ -76,7 +86,7 @@ rem sau_cli eagerly imports playwright.async_api (baijiahao uploader) even
 rem though the runtime browser is patchright - install plain playwright too.
 "%SAU_PY%" -c "import importlib.util as u,sys;sys.exit(0 if u.find_spec('playwright') else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo [*] Installing playwright (import dependency of sau) ...
+    echo [*] Installing playwright ^(import dependency of sau^) ...
     uv pip install --python "%SAU_PY%" playwright
     if errorlevel 1 goto :fail
 ) else (
