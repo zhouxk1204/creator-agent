@@ -1,7 +1,7 @@
 @echo off
 setlocal DisableDelayedExpansion
 chcp 65001 >nul
-REM Temporary materials-only test mode: set to 1 to restore video stages.
+REM Video stages enabled by default; set to 0 for materials-only mode.
 set "DOWNLOAD_VIDEO=1"
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (

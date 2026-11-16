@@ -9,11 +9,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_batch_video_stages_are_disabled_after_materials_state():
+def test_batch_video_stages_are_enabled_with_materials_only_guard():
     data = (ROOT / "bat/doraemon/最新话doraemon素材下载.bat").read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
-    assert 'set "DOWNLOAD_VIDEO=0"' in script
+    assert 'set "DOWNLOAD_VIDEO=1"' in script
     guard = script.index('if "%DOWNLOAD_VIDEO%"=="0" (')
     assert script.index("os.replace(temp, target)") < guard < script.index("scripts\\download_tver.py")
     assert script.index("goto :done", guard) < script.index("scripts\\download_tver.py")
