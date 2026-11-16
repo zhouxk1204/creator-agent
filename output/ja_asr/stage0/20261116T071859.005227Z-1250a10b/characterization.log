@@ -1,0 +1,52 @@
+EEE                                                                      [100%]
+==================================== ERRORS ====================================
+_ ERROR at setup of test_stage0_boundary_overwrites_word_timing_before_export __
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+___ ERROR at setup of test_stage0_boundary_min_duration_creates_end_overlap ____
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+__ ERROR at setup of test_stage0_optional_sidecars_can_describe_previous_run ___
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+- generated xml file: /Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/characterization.xml -
+=========================== short test summary info ============================
+ERROR tests/unit/test_ja_asr_stage0_audit.py::test_stage0_boundary_overwrites_word_timing_before_export
+ERROR tests/unit/test_ja_asr_stage0_audit.py::test_stage0_boundary_min_duration_creates_end_overlap
+ERROR tests/unit/test_ja_asr_stage0_audit.py::test_stage0_optional_sidecars_can_describe_previous_run
+3 errors in 0.10s
+
+--- stderr ---

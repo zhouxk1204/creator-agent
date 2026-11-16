@@ -1,0 +1,81 @@
+{
+  "case_id": "S0-TIME-04",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "质量门的局部修复不应原地覆盖原始 aligner 返回值；修复时间不是原始测量。",
+  "requirement_status": "MET",
+  "evidence": [
+    "src/creator_agent/asr/ja_worker.py:794-833 _gate_alignment"
+  ],
+  "inputs": {
+    "raw_alignment": {
+      "ok": true,
+      "words": [
+        [
+          "はい",
+          1.0,
+          1.5
+        ],
+        [
+          "そう",
+          1.5,
+          1.5
+        ],
+        [
+          "です",
+          1.6,
+          2.0
+        ]
+      ]
+    },
+    "chunk": {
+      "start": 0.9,
+      "end": 2.1,
+      "text": "はいそうです"
+    }
+  },
+  "observed": {
+    "raw_alignment_after": {
+      "ok": true,
+      "words": [
+        [
+          "はい",
+          1.0,
+          1.5
+        ],
+        [
+          "そう",
+          1.5,
+          1.5
+        ],
+        [
+          "です",
+          1.6,
+          2.0
+        ]
+      ]
+    },
+    "repaired_words": [
+      [
+        "はい",
+        1.0,
+        1.5
+      ],
+      [
+        "そう",
+        1.5,
+        1.55
+      ],
+      [
+        "です",
+        1.6,
+        2.0
+      ]
+    ],
+    "check": {
+      "ok": true,
+      "reason": "",
+      "coverage": 1.0,
+      "detail": "repaired 1 zero/short word time(s)"
+    }
+  }
+}

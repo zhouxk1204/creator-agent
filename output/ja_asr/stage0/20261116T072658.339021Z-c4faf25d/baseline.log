@@ -1,0 +1,21 @@
+........................................................................ [ 55%]
+..............F...........................................               [100%]
+=================================== FAILURES ===================================
+__________________ test_speech_fallback_gap_is_hard_boundary ___________________
+
+    def test_speech_fallback_gap_is_hard_boundary():
+        # One long sentence whose span contains a >pause_sec gap: the cue is cut
+        # at the gap even though there is no punctuation there.
+        speech = [(0.0, 2.0), (5.0, 7.0)]  # 3s gap
+        cues = split_cues("ああああいいいい", 0.0, 7.0, max_chars=24, pause_sec=0.6, speech=speech)
+>       assert len(cues) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len([{'end': 7.0, 'start': 0.0, 'text': 'ああああいいいい'}])
+
+tests/unit/test_cue_splitter.py:261: AssertionError
+- generated xml file: /Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072658.339021Z-c4faf25d/baseline.xml -
+=========================== short test summary info ============================
+FAILED tests/unit/test_cue_splitter.py::test_speech_fallback_gap_is_hard_boundary
+1 failed, 129 passed in 0.23s
+
+--- stderr ---

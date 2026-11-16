@@ -1,0 +1,40 @@
+{
+  "case_id": "S0-SPLIT-01",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "长词内部按字符拆 cue 时，不能把后半文本推到该词 ForcedAligner 结束之后。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/cue_splitter.py:237-247 _wrap",
+    "src/creator_agent/asr/cue_splitter.py:326-342 _word_timeline",
+    "src/creator_agent/asr/cue_splitter.py:132-137 split_cues"
+  ],
+  "inputs": {
+    "text": "学校へ行ける",
+    "words": [
+      [
+        "学校へ行ける",
+        1.0,
+        2.0
+      ]
+    ],
+    "max_chars": 3,
+    "chunk": [
+      0.9,
+      2.1
+    ]
+  },
+  "observed": {
+    "cues": [
+      {
+        "start": 1.0,
+        "end": 2.0,
+        "text": "学校へ"
+      },
+      {
+        "start": 2.0,
+        "end": 2.05,
+        "text": "行ける"
+      }
+    ]
+  }
+}

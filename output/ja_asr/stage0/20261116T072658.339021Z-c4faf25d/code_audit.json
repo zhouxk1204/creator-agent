@@ -1,0 +1,115 @@
+{
+  "stage": 0,
+  "run_id": "20261116T072658.339021Z-c4faf25d",
+  "git_baseline": "7dc264df22acca8699daef81c1db4cc8060963c3",
+  "source_identity": "manifest.json source_sha256",
+  "goal": "代码审计、基线与离线问题复现；不修改生产字幕行为",
+  "production_code_changed": false,
+  "model_parameters_changed": false,
+  "models_executed": false,
+  "real_media_executed": false,
+  "raw_model_output_available": false,
+  "quality_acceptance": "NOT RUN",
+  "next_stage": "BLOCKED_PENDING_USER_CONFIRMATION",
+  "executed_evidence": {
+    "source": "results.json cases / raw/characterization/**/case.json",
+    "case_count": 11,
+    "case_requirement_met_count": 3,
+    "case_requirement_not_met_count": 8,
+    "note": "characterization PASS 表示成功复现实际行为，不代表字幕质量合格。合成模型返回值不是实际模型结果。",
+    "tests": [
+      {"id": "S0-TIME-01", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "默认silencedetect覆盖word_timed起点，原始起点未导出", "target_stage": 1},
+      {"id": "S0-TIME-02", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "媒体末尾min_dur回退start制造0.1秒重叠", "target_stage": 1},
+      {"id": "S0-TIME-03", "test_status": "PASS", "requirement_status": "MET", "summary": "aligner局部时刻加实际窗口起点一次", "target_stage": 1},
+      {"id": "S0-TIME-04", "test_status": "PASS", "requirement_status": "MET", "summary": "gate生成修复词而不原地改raw rec；持久化另属静态缺口", "target_stage": 1},
+      {"id": "S0-TIME-05", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "非默认显示优化可在最终最短时长处理时突破limit", "target_stage": 1},
+      {"id": "S0-SPLIT-01", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "词内字符切分后缀被推到原词结束之后", "target_stage": 3},
+      {"id": "S0-SPLIT-02", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "无标点比例分配丢弃长停顿硬边界", "target_stage": 3},
+      {"id": "S0-TEXT-01", "test_status": "PASS", "requirement_status": "MET", "summary": "八类独立语义短句在split/render局部层未按长度删除", "target_stage": 2},
+      {"id": "S0-TEXT-02", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "mock ASR重复尾在对齐前裁剪，没有raw_text字段", "target_stage": 2},
+      {"id": "S0-CACHE-01", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "同源force提取失败后的残损WAV可复用旧成功sidecar", "target_stage": "later_separately_scoped"},
+      {"id": "S0-QC-01", "test_status": "PASS", "requirement_status": "NOT_MET", "summary": "同目录重跑的旧dropped/check与最新review不一致", "target_stage": 4}
+    ]
+  },
+  "static_findings": [
+    {
+      "id": "S0-STATIC-01",
+      "evidence_type": "CURRENT_CODE_CONTROL_FLOW",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:623-632"],
+      "finding": "tight为空时独立低阈值recovery检测被跳过",
+      "impact_boundary": "真实音频是否存在该VAD组合和触发频率未验证",
+      "minimal_proposal_not_implemented": "先测试tight=[]分支，解除检测入口的不合理依赖，不改VAD阈值",
+      "target_stage": 2
+    },
+    {
+      "id": "S0-STATIC-02",
+      "evidence_type": "CURRENT_CODE_DATA_FLOW",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:633-634", "src/creator_agent/asr/ja_worker.py:662"],
+      "finding": "非空ASR成功chunk的整个跨度被当作覆盖，早于词/cue对齐",
+      "impact_boundary": "字符匹配coverage不是声学完整率；实际内部漏句须真实音频",
+      "minimal_proposal_not_implemented": "分离处理成功与可证实的文本/词覆盖，记录内部漏句候选",
+      "target_stage": 2
+    },
+    {
+      "id": "S0-STATIC-03",
+      "evidence_type": "CURRENT_CODE_CONTROL_FLOW",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:640-657", "src/creator_agent/asr/speaker_turns.py:57-59", "src/creator_agent/asr/vad_chunker.py:139-145"],
+      "finding": "补漏直接构造长chunk；可选speaker旧路径保留单条超长interval",
+      "impact_boundary": "speaker默认关闭；实际长候选模型效果未运行",
+      "minimal_proposal_not_implemented": "复用现有分块硬上限，保留initial/recovered/speaker来源",
+      "target_stage": 2
+    },
+    {
+      "id": "S0-STATIC-04",
+      "evidence_type": "CURRENT_CODE_QC_CONTRACT",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:697", "src/creator_agent/asr/ja_worker.py:717", "src/creator_agent/asr/ja_worker.py:753", "src/creator_agent/asr/ja_worker.py:767"],
+      "finding": "补漏过滤与diag覆盖基线不同；uncovered仅初始VAD且固定1秒下限",
+      "impact_boundary": "空uncovered不能证明没有短句/弱语音漏识别，不能把填充音算必保留漏句",
+      "minimal_proposal_not_implemented": "记录各pass原始区间、统计基线及不计入必保留的过滤原因",
+      "target_stage": 4
+    },
+    {
+      "id": "S0-STATIC-05",
+      "evidence_type": "CURRENT_CODE_OUTPUT_CONTRACT",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:523", "src/creator_agent/asr/ja_worker.py:781-790"],
+      "finding": "返回值无完整raw ASR/raw词/修复词/chunk窗口/VAD；临时中间目录退出即删除",
+      "impact_boundary": "gate内存rec仍保留；不能误说gate当场销毁原始词。当前最终数据不足以离线重放后处理",
+      "minimal_proposal_not_implemented": "新增向后兼容诊断旁路，保存原始、修复、最终三层时间与来源",
+      "target_stage": 1
+    },
+    {
+      "id": "S0-STATIC-06",
+      "evidence_type": "CURRENT_CODE_SEMANTIC_POLICY",
+      "test_status": "NOT RUN",
+      "locations": ["src/creator_agent/asr/ja_worker.py:484", "src/creator_agent/asr/ja_worker.py:711-736", "src/creator_agent/asr/subtitle.py:55-67"],
+      "finding": "没有字符数短句早删，但当前没有上下文语义filler QC；所有cue仍可被VAD覆盖过滤",
+      "impact_boundary": "语义保留局部测试不是ASR识别验收，误删真实短句须听音。不能按一字假名直接删除",
+      "minimal_proposal_not_implemented": "保守候选分类在生成/QC层执行，保护独立语义短句，保留raw与过滤原因",
+      "target_stage": "2_then_3"
+    }
+  ],
+  "test_results": {
+    "baseline": {"status": "FAIL", "tests": 130, "passed": 129, "failures": 1, "errors": 0, "log": "baseline.log", "failing_test": "tests/unit/test_cue_splitter.py::test_speech_fallback_gap_is_hard_boundary"},
+    "characterization": {"status": "PASS", "tests": 11, "failures": 0, "errors": 0, "log": "characterization.log"},
+    "ruff_check": "PASS",
+    "ruff_format": "PASS",
+    "overall_cli_returncode": 1,
+    "overall_cli_reason": "既有pause测试未修复；未隐藏失败"
+  },
+  "not_run": [
+    "Windows bat / Python3.12 / dual conda environments",
+    "BS-RoFormer, Silero, CAM++, ASR and ForcedAligner real inference",
+    "真实视频/人声听校、识别率、短句漏识别率、对齐误差",
+    "完整worker补漏分支模拟与模型中断恢复",
+    "实际分离器延迟、音视频流start_time和重采样长度",
+    "全仓库测试"
+  ],
+  "changed_files": ["scripts/audit_ja_asr_stage0.py", "tests/unit/test_ja_asr_stage0_audit.py", "output/ja_asr/stage0 curated text evidence"],
+  "before_after": "Production behavior unchanged; reproducible diagnostics and evidence added",
+  "local_action": "先运行uv run python scripts/audit_ja_asr_stage0.py，再用全新out-dir保留可选真实视频基线；不用translate/burn，不清理缓存；反馈后明确确认阶段1"
+}

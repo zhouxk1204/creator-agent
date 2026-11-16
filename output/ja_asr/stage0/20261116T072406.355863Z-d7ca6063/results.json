@@ -1,0 +1,478 @@
+{
+  "run_id": "20261116T072406.355863Z-d7ca6063",
+  "stage": 0,
+  "started_at": "2026-11-16T07:24:06.367976+00:00",
+  "git_revision": "7dc264df22acca8699daef81c1db4cc8060963c3",
+  "python": "3.14.7 | packaged by Anaconda, Inc. | (main, Aug 14 2026, 10:13:42) [Clang 20.1.8 ]",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "torch_installed": false,
+  "models_executed": false,
+  "source_sha256": {
+    "src/creator_agent/asr/__init__.py": "9d077afee922fc872faba51ce7bfd6c3f83cc1bb90e17bc406457157b861ba1e",
+    "src/creator_agent/asr/align_check.py": "55e6ac9fac5df5b267bdbc36beca29d89831c899c786020c3916f751372a6787",
+    "src/creator_agent/asr/aligner_worker.py": "b163f8370f54cc5a376e5236acf6bf5b51a71ea97b430480205468f600099005",
+    "src/creator_agent/asr/audio_extractor.py": "5e1541086efc1c78c6e6a0b42c709f3add0f929e703cd47722ef1935277a2d44",
+    "src/creator_agent/asr/boundary_check.py": "f0a3b0bcf83b15fad10bdafb9c5f9d6eb7a37ddca43ef5ce335dc3f615ee57e7",
+    "src/creator_agent/asr/cue_splitter.py": "5393ad5582a8ce2724e4ee0e4f809122eee2911101717373d1cd01be6aedc12b",
+    "src/creator_agent/asr/ja_transcriber.py": "76cdd66285515644773521a5c6607ad2de0b75943a4dc04a3dde1cb9f7a2a8cf",
+    "src/creator_agent/asr/ja_worker.py": "48b67d086f67beb32e0a3ca05be5053621e51d9a15f61b1c504071af5e5f15b9",
+    "src/creator_agent/asr/review.py": "d2cc22ce8abd58d2c26371e7d497c85a6f88e3d1e2522c6c609d04efb4c540f6",
+    "src/creator_agent/asr/speaker_turns.py": "284369a9f007ebf4dcadf1063a93c112a628249217e232ecb67f0af6e32ed6cb",
+    "src/creator_agent/asr/subtitle.py": "c640b8419dbc8eb0bf6beac79592eb11bc034f4a048f91e5c1bbb851ea5f95a7",
+    "src/creator_agent/asr/transcriber.py": "5fc2f7d609ab5b48650e52878dfb20aab4af1a925260dad636069b21b16275b0",
+    "src/creator_agent/asr/vad_chunker.py": "8c8894ca64e7d2fccc35fd230f56506718f73ca06e36f1a946157999c8b8f8c2",
+    "src/creator_agent/asr/worker.py": "83cea8a66f569079cf2bcb5a991cc9e7419247835266ffc1fa182fc95a931561",
+    "scripts/audit_ja_asr_stage0.py": "ea20aa1f2e73f5ff42fb444246ba35724b072c99cf6603ef4c5c4a3ea52e0158",
+    "tests/unit/test_ja_asr_stage0_audit.py": "1217ef1c4ad99ef590ad0f6140193df6cee88feb05064037fc075aadd66f8a9d",
+    "src/creator_agent/config.py": "23ed48717803ec2c880007fa4dc8da78df11e9472ab66dcd23b5edf87d859ac3",
+    "config/settings.validate.yaml": "af9fd6b01de78c5322220af361af12052f4687eeef5dbf632563a3dfa0294808"
+  },
+  "finished_at": "2026-11-16T07:24:07.415996+00:00",
+  "runs": [
+    {
+      "name": "baseline",
+      "command": [
+        "/Users/intasect/Music/g/creator-agent/.venv/bin/python3",
+        "-m",
+        "pytest",
+        "tests/unit/test_audio_extractor.py",
+        "tests/unit/test_ja_transcriber.py",
+        "tests/unit/test_boundary_check.py",
+        "tests/unit/test_review.py",
+        "tests/unit/test_align_check.py",
+        "tests/unit/test_cue_splitter.py",
+        "tests/unit/test_subtitle.py",
+        "tests/unit/test_build_chunks.py",
+        "tests/unit/test_vad_chunker.py",
+        "-q",
+        "--junitxml=/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072406.355863Z-d7ca6063/baseline.xml",
+        "--basetemp=/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072406.355863Z-d7ca6063/raw/baseline"
+      ],
+      "returncode": 1,
+      "status": "FAIL",
+      "elapsed_sec": 0.543,
+      "log": "baseline.log",
+      "counts": {
+        "tests": 130,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "junit": "baseline.xml"
+    },
+    {
+      "name": "characterization",
+      "command": [
+        "/Users/intasect/Music/g/creator-agent/.venv/bin/python3",
+        "-m",
+        "pytest",
+        "tests/unit/test_ja_asr_stage0_audit.py",
+        "-q",
+        "--junitxml=/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072406.355863Z-d7ca6063/characterization.xml",
+        "--basetemp=/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072406.355863Z-d7ca6063/raw/characterization"
+      ],
+      "returncode": 0,
+      "status": "PASS",
+      "elapsed_sec": 0.309,
+      "log": "characterization.log",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "junit": "characterization.xml"
+    },
+    {
+      "name": "ruff_check",
+      "command": [
+        "/Users/intasect/Music/g/creator-agent/.venv/bin/python3",
+        "-m",
+        "ruff",
+        "check",
+        "scripts/audit_ja_asr_stage0.py",
+        "tests/unit/test_ja_asr_stage0_audit.py"
+      ],
+      "returncode": 0,
+      "status": "PASS",
+      "elapsed_sec": 0.148,
+      "log": "ruff_check.log"
+    },
+    {
+      "name": "ruff_format",
+      "command": [
+        "/Users/intasect/Music/g/creator-agent/.venv/bin/python3",
+        "-m",
+        "ruff",
+        "format",
+        "--check",
+        "scripts/audit_ja_asr_stage0.py",
+        "tests/unit/test_ja_asr_stage0_audit.py"
+      ],
+      "returncode": 0,
+      "status": "PASS",
+      "elapsed_sec": 0.024,
+      "log": "ruff_format.log"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "S0-TIME-02",
+      "data_kind": "synthetic; no model inference or human audio reference",
+      "requirement": "边界检查不应为满足 min_dur 在媒体末尾制造字幕重叠。",
+      "requirement_status": "NOT_MET",
+      "evidence": [
+        "src/creator_agent/asr/boundary_check.py:262-270 refine_cues"
+      ],
+      "inputs": {
+        "cues": [
+          {
+            "start": 9.5,
+            "end": 9.9,
+            "text": "はい"
+          },
+          {
+            "start": 9.95,
+            "end": 10.0,
+            "text": "うん"
+          }
+        ],
+        "silences": [],
+        "duration": 10.0
+      },
+      "observed": {
+        "cues": [
+          {
+            "start": 9.5,
+            "end": 9.9,
+            "text": "はい"
+          },
+          {
+            "start": 9.8,
+            "end": 10.0,
+            "text": "うん"
+          }
+        ],
+        "flags": [],
+        "overlap_sec": 0.09999999999999964
+      }
+    },
+    {
+      "case_id": "S0-TIME-01",
+      "data_kind": "synthetic; no model inference or human audio reference",
+      "requirement": "silencedetect 默认仅诊断，不覆盖 ForcedAligner 时间；原始对齐时间应可追溯。",
+      "requirement_status": "NOT_MET",
+      "evidence": [
+        "src/creator_agent/asr/boundary_check.py:205-228 snap_edge",
+        "src/creator_agent/asr/ja_transcriber.py:207-234 _check_boundaries",
+        "src/creator_agent/asr/review.py:84-101 build_review"
+      ],
+      "inputs": {
+        "worker_result": {
+          "video_id": "synthetic",
+          "ok": true,
+          "text": "はい",
+          "duration_sec": 5.0,
+          "segments": [
+            {
+              "start": 1.35,
+              "end": 2.0,
+              "text": "はい",
+              "diag": {
+                "time_source": "word_timed"
+              }
+            }
+          ]
+        },
+        "silences": [
+          [
+            0.0,
+            1.24
+          ]
+        ]
+      },
+      "observed": {
+        "after_boundary": {
+          "video_id": "synthetic",
+          "ok": true,
+          "text": "はい",
+          "duration_sec": 5.0,
+          "segments": [
+            {
+              "start": 1.16,
+              "end": 2.0,
+              "text": "はい",
+              "diag": {
+                "time_source": "word_timed",
+                "boundary": "snapped_start"
+              }
+            }
+          ],
+          "boundary_report": "边界检查报告: synthetic\nvideo duration : 00:05.000\naudio duration : 00:05.000\ncues           : 1（吸附调整 1 条，可疑 0 条）\n\n所有 cue 边界均落在静音附近，无可疑项。\n"
+        },
+        "transcript": {
+          "video_id": "synthetic",
+          "text": "はい",
+          "segments": [
+            {
+              "start": 1.16,
+              "end": 2.0,
+              "text": "はい",
+              "speaker": null
+            }
+          ],
+          "language": "ja",
+          "model": "Qwen/Qwen3-ASR-1.7B-hf",
+          "duration_sec": 5.0,
+          "created_at": "2026-11-16T07:24:07.172875Z"
+        },
+        "review": {
+          "meta": {
+            "source": "synthetic.mp4",
+            "duration_sec": 5.0,
+            "model": "Qwen/Qwen3-ASR-1.7B-hf",
+            "overrides": {
+              "vad_threshold": 0.5,
+              "vad_min_speech_ms": 120,
+              "vad_min_silence_ms": 300,
+              "vad_speech_pad_ms": 150,
+              "max_cue_chars": 24,
+              "max_cue_sec": 8.0,
+              "pause_sec": 0.6,
+              "recover_missed": false,
+              "recover_min_sec": 0.4,
+              "recover_vad_threshold": 0.5,
+              "repeat_tail_max_cps": 0.0,
+              "chunk_target_min_sec": 3.0,
+              "chunk_target_max_sec": 8.0,
+              "max_chunk_sec": 15.0,
+              "asr_max_new_tokens": 1024,
+              "align_pad_sec": 0.3,
+              "align_min_coverage": 0.5,
+              "srt_min_display_sec": 0.0,
+              "srt_lead_in_sec": 0.0,
+              "srt_tail_sec": 0.0,
+              "boundary_check": true,
+              "boundary_snap_sec": 0.5,
+              "boundary_silence_db": -35.0,
+              "boundary_min_silence_sec": 0.12,
+              "boundary_lead_in_sec": 0.08,
+              "boundary_tail_sec": 0.1,
+              "speaker_threshold": 0.5
+            },
+            "summary": {}
+          },
+          "cues": [
+            {
+              "id": 1,
+              "start": 1.16,
+              "end": 2.0,
+              "speech_start": 1.16,
+              "speech_end": 2.0,
+              "text": "はい",
+              "speaker": null,
+              "diag": {
+                "time_source": "word_timed",
+                "boundary": "snapped_start"
+              },
+              "question": "",
+              "expected": ""
+            }
+          ],
+          "dropped": [],
+          "uncovered": []
+        }
+      }
+    },
+    {
+      "case_id": "S0-QC-01",
+      "data_kind": "synthetic; no model inference or human audio reference",
+      "requirement": "同一输出目录重跑时，应标明 sidecar 所属运行，避免旧记录冒充当前结果；保留旧数据。",
+      "requirement_status": "NOT_MET",
+      "evidence": [
+        "src/creator_agent/asr/ja_transcriber.py:410-420 _write_outputs"
+      ],
+      "inputs": {
+        "first": {
+          "text": "はい",
+          "duration_sec": 5.0,
+          "segments": [
+            {
+              "start": 1.0,
+              "end": 2.0,
+              "text": "はい"
+            }
+          ],
+          "dropped": [
+            {
+              "start": 3.0,
+              "end": 4.0,
+              "text": "うん",
+              "speech_cov": 0.1
+            }
+          ],
+          "boundary_report": "synthetic first-run boundary report\n"
+        },
+        "second": {
+          "text": "はい",
+          "duration_sec": 5.0,
+          "segments": [
+            {
+              "start": 1.0,
+              "end": 2.0,
+              "text": "はい"
+            }
+          ],
+          "dropped": [],
+          "boundary_report": null
+        }
+      },
+      "observed": {
+        "dropped_txt": "[3.00-4.00] speech_cov=0.10  うん\n",
+        "check_txt": "synthetic first-run boundary report\n",
+        "reviews": [
+          {
+            "meta": {
+              "source": "synthetic.mp4",
+              "duration_sec": 5.0,
+              "model": "Qwen/Qwen3-ASR-1.7B-hf",
+              "overrides": {
+                "vad_threshold": 0.5,
+                "vad_min_speech_ms": 120,
+                "vad_min_silence_ms": 300,
+                "vad_speech_pad_ms": 150,
+                "max_cue_chars": 24,
+                "max_cue_sec": 8.0,
+                "pause_sec": 0.6,
+                "recover_missed": false,
+                "recover_min_sec": 0.4,
+                "recover_vad_threshold": 0.5,
+                "repeat_tail_max_cps": 0.0,
+                "chunk_target_min_sec": 3.0,
+                "chunk_target_max_sec": 8.0,
+                "max_chunk_sec": 15.0,
+                "asr_max_new_tokens": 1024,
+                "align_pad_sec": 0.3,
+                "align_min_coverage": 0.5,
+                "srt_min_display_sec": 0.0,
+                "srt_lead_in_sec": 0.0,
+                "srt_tail_sec": 0.0,
+                "boundary_check": true,
+                "boundary_snap_sec": 0.5,
+                "boundary_silence_db": -35.0,
+                "boundary_min_silence_sec": 0.12,
+                "boundary_lead_in_sec": 0.08,
+                "boundary_tail_sec": 0.1,
+                "speaker_threshold": 0.5
+              },
+              "summary": {}
+            },
+            "cues": [
+              {
+                "id": 1,
+                "start": 1.0,
+                "end": 2.0,
+                "speech_start": 1.0,
+                "speech_end": 2.0,
+                "text": "はい",
+                "speaker": null,
+                "diag": {
+                  "boundary": null
+                },
+                "question": "",
+                "expected": ""
+              }
+            ],
+            "dropped": [],
+            "uncovered": []
+          },
+          {
+            "meta": {
+              "source": "synthetic.mp4",
+              "duration_sec": 5.0,
+              "model": "Qwen/Qwen3-ASR-1.7B-hf",
+              "overrides": {
+                "vad_threshold": 0.5,
+                "vad_min_speech_ms": 120,
+                "vad_min_silence_ms": 300,
+                "vad_speech_pad_ms": 150,
+                "max_cue_chars": 24,
+                "max_cue_sec": 8.0,
+                "pause_sec": 0.6,
+                "recover_missed": false,
+                "recover_min_sec": 0.4,
+                "recover_vad_threshold": 0.5,
+                "repeat_tail_max_cps": 0.0,
+                "chunk_target_min_sec": 3.0,
+                "chunk_target_max_sec": 8.0,
+                "max_chunk_sec": 15.0,
+                "asr_max_new_tokens": 1024,
+                "align_pad_sec": 0.3,
+                "align_min_coverage": 0.5,
+                "srt_min_display_sec": 0.0,
+                "srt_lead_in_sec": 0.0,
+                "srt_tail_sec": 0.0,
+                "boundary_check": true,
+                "boundary_snap_sec": 0.5,
+                "boundary_silence_db": -35.0,
+                "boundary_min_silence_sec": 0.12,
+                "boundary_lead_in_sec": 0.08,
+                "boundary_tail_sec": 0.1,
+                "speaker_threshold": 0.5
+              },
+              "summary": {}
+            },
+            "cues": [
+              {
+                "id": 1,
+                "start": 1.0,
+                "end": 2.0,
+                "speech_start": 1.0,
+                "speech_end": 2.0,
+                "text": "はい",
+                "speaker": null,
+                "diag": {
+                  "boundary": null
+                },
+                "question": "",
+                "expected": ""
+              }
+            ],
+            "dropped": [
+              {
+                "start": 3.0,
+                "end": 4.0,
+                "text": "うん",
+                "speech_cov": 0.1,
+                "question": ""
+              }
+            ],
+            "uncovered": []
+          }
+        ]
+      }
+    }
+  ],
+  "not_run": [
+    {
+      "test": "Windows 04_ja_asr.bat + dual conda envs",
+      "status": "NOT RUN",
+      "reason": "本脚本不启动实际流水线"
+    },
+    {
+      "test": "BS-RoFormer / Silero / CAM++ / Qwen3-ASR / ForcedAligner inference",
+      "status": "NOT RUN"
+    },
+    {
+      "test": "真实音频听校、日文识别率、短句漏识别率、对齐误差",
+      "status": "NOT RUN"
+    },
+    {
+      "test": "全仓库测试（本次限定日语 ASR 相关单元测试）",
+      "status": "NOT RUN"
+    }
+  ],
+  "quality_acceptance": "NOT RUN",
+  "next_stage": "BLOCKED_PENDING_USER_CONFIRMATION",
+  "interpretation": "characterization PASS 只表示问题复现成功；各 case 的 requirement_status 才表示需求是否满足。"
+}

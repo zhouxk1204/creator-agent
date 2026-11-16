@@ -1,0 +1,168 @@
+{
+  "case_id": "S0-QC-01",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "同一输出目录重跑时，应标明 sidecar 所属运行，避免旧记录冒充当前结果；保留旧数据。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/ja_transcriber.py:410-420 _write_outputs"
+  ],
+  "inputs": {
+    "first": {
+      "text": "はい",
+      "duration_sec": 5.0,
+      "segments": [
+        {
+          "start": 1.0,
+          "end": 2.0,
+          "text": "はい"
+        }
+      ],
+      "dropped": [
+        {
+          "start": 3.0,
+          "end": 4.0,
+          "text": "うん",
+          "speech_cov": 0.1
+        }
+      ],
+      "boundary_report": "synthetic first-run boundary report\n"
+    },
+    "second": {
+      "text": "はい",
+      "duration_sec": 5.0,
+      "segments": [
+        {
+          "start": 1.0,
+          "end": 2.0,
+          "text": "はい"
+        }
+      ],
+      "dropped": [],
+      "boundary_report": null
+    }
+  },
+  "observed": {
+    "dropped_txt": "[3.00-4.00] speech_cov=0.10  うん\n",
+    "check_txt": "synthetic first-run boundary report\n",
+    "reviews": [
+      {
+        "meta": {
+          "source": "synthetic.mp4",
+          "duration_sec": 5.0,
+          "model": "Qwen/Qwen3-ASR-1.7B-hf",
+          "overrides": {
+            "vad_threshold": 0.5,
+            "vad_min_speech_ms": 120,
+            "vad_min_silence_ms": 300,
+            "vad_speech_pad_ms": 150,
+            "max_cue_chars": 24,
+            "max_cue_sec": 8.0,
+            "pause_sec": 0.6,
+            "recover_missed": false,
+            "recover_min_sec": 0.4,
+            "recover_vad_threshold": 0.5,
+            "repeat_tail_max_cps": 0.0,
+            "chunk_target_min_sec": 3.0,
+            "chunk_target_max_sec": 8.0,
+            "max_chunk_sec": 15.0,
+            "asr_max_new_tokens": 1024,
+            "align_pad_sec": 0.3,
+            "align_min_coverage": 0.5,
+            "srt_min_display_sec": 0.0,
+            "srt_lead_in_sec": 0.0,
+            "srt_tail_sec": 0.0,
+            "boundary_check": true,
+            "boundary_snap_sec": 0.5,
+            "boundary_silence_db": -35.0,
+            "boundary_min_silence_sec": 0.12,
+            "boundary_lead_in_sec": 0.08,
+            "boundary_tail_sec": 0.1,
+            "speaker_threshold": 0.5
+          },
+          "summary": {}
+        },
+        "cues": [
+          {
+            "id": 1,
+            "start": 1.0,
+            "end": 2.0,
+            "speech_start": 1.0,
+            "speech_end": 2.0,
+            "text": "はい",
+            "speaker": null,
+            "diag": {
+              "boundary": null
+            },
+            "question": "",
+            "expected": ""
+          }
+        ],
+        "dropped": [],
+        "uncovered": []
+      },
+      {
+        "meta": {
+          "source": "synthetic.mp4",
+          "duration_sec": 5.0,
+          "model": "Qwen/Qwen3-ASR-1.7B-hf",
+          "overrides": {
+            "vad_threshold": 0.5,
+            "vad_min_speech_ms": 120,
+            "vad_min_silence_ms": 300,
+            "vad_speech_pad_ms": 150,
+            "max_cue_chars": 24,
+            "max_cue_sec": 8.0,
+            "pause_sec": 0.6,
+            "recover_missed": false,
+            "recover_min_sec": 0.4,
+            "recover_vad_threshold": 0.5,
+            "repeat_tail_max_cps": 0.0,
+            "chunk_target_min_sec": 3.0,
+            "chunk_target_max_sec": 8.0,
+            "max_chunk_sec": 15.0,
+            "asr_max_new_tokens": 1024,
+            "align_pad_sec": 0.3,
+            "align_min_coverage": 0.5,
+            "srt_min_display_sec": 0.0,
+            "srt_lead_in_sec": 0.0,
+            "srt_tail_sec": 0.0,
+            "boundary_check": true,
+            "boundary_snap_sec": 0.5,
+            "boundary_silence_db": -35.0,
+            "boundary_min_silence_sec": 0.12,
+            "boundary_lead_in_sec": 0.08,
+            "boundary_tail_sec": 0.1,
+            "speaker_threshold": 0.5
+          },
+          "summary": {}
+        },
+        "cues": [
+          {
+            "id": 1,
+            "start": 1.0,
+            "end": 2.0,
+            "speech_start": 1.0,
+            "speech_end": 2.0,
+            "text": "はい",
+            "speaker": null,
+            "diag": {
+              "boundary": null
+            },
+            "question": "",
+            "expected": ""
+          }
+        ],
+        "dropped": [
+          {
+            "start": 3.0,
+            "end": 4.0,
+            "text": "うん",
+            "speech_cov": 0.1,
+            "question": ""
+          }
+        ],
+        "uncovered": []
+      }
+    ]
+  }
+}

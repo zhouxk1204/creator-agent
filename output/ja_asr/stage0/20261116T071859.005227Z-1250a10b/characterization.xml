@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="3" failures="0" skipped="0" tests="3" time="0.100" timestamp="2026-11-16T15:18:59.918461+08:00" hostname="zhouxkMac-mini.local"><testcase classname="tests.unit.test_ja_asr_stage0_audit" name="test_stage0_boundary_overwrites_word_timing_before_export" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_asr_stage0_audit" name="test_stage0_boundary_min_duration_creates_end_overlap" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_asr_stage0_audit" name="test_stage0_optional_sidecars_can_describe_previous_run" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/characterization'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase></testsuite></testsuites>

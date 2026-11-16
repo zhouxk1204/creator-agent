@@ -1,0 +1,36 @@
+{
+  "case_id": "S0-TIME-05",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "非默认显示时长优化开启后，也不能在裁剪到媒体结束后重新扩展越界。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/subtitle.py:96-103 finalize_for_srt"
+  ],
+  "inputs": {
+    "cues": [
+      {
+        "start": 9.98,
+        "end": 10.0,
+        "text": "はい"
+      }
+    ],
+    "min_display_sec": 0.7,
+    "limit": 10.0
+  },
+  "observed": {
+    "displayed_cues": [
+      {
+        "start": 9.98,
+        "end": 10.03,
+        "text": "はい"
+      }
+    ],
+    "source_cues_after": [
+      {
+        "start": 9.98,
+        "end": 10.0,
+        "text": "はい"
+      }
+    ]
+  }
+}

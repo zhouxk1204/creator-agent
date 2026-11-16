@@ -1,0 +1,35 @@
+{
+  "case_id": "S0-SPLIT-02",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "speech-aware 比例分配分支宣称长停顿是硬边界，但无标点时实际跨越该停顿。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/cue_splitter.py:387-389 _snap_offsets_to_breaks",
+    "src/creator_agent/asr/cue_splitter.py:470-471 _speech_timeline",
+    "tests/unit/test_cue_splitter.py:256-262 test_speech_fallback_gap_is_hard_boundary"
+  ],
+  "inputs": {
+    "text": "ああああいいいい",
+    "speech": [
+      [
+        0.0,
+        2.0
+      ],
+      [
+        5.0,
+        7.0
+      ]
+    ],
+    "pause_sec": 0.6
+  },
+  "observed": {
+    "cues": [
+      {
+        "start": 0.0,
+        "end": 7.0,
+        "text": "ああああいいいい"
+      }
+    ],
+    "silent_gap_sec": 3.0
+  }
+}

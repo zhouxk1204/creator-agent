@@ -1,0 +1,337 @@
+...EEEEEEE.EEEEEE.EE........................EEE......................... [ 55%]
+..............F...............EEE.........................               [100%]
+==================================== ERRORS ====================================
+_________ ERROR at setup of test_extract_audio_skips_when_cache_valid __________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_______ ERROR at setup of test_extract_audio_reextracts_without_sidecar ________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_____ ERROR at setup of test_extract_audio_reextracts_when_source_changed ______
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_ ERROR at setup of test_extract_audio_force_reextracts_even_with_valid_cache __
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+________ ERROR at setup of test_extract_audio_raises_when_video_missing ________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_____ ERROR at setup of test_extract_audio_invokes_ffmpeg_and_returns_path _____
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+________ ERROR at setup of test_extract_audio_raises_on_ffmpeg_failure _________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+______ ERROR at setup of test_transcribe_files_missing_env_python_raises _______
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+___ ERROR at setup of test_transcribe_files_happy_path_writes_three_outputs ____
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+__ ERROR at setup of test_transcribe_files_out_dir_overrides_output_location ___
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_____ ERROR at setup of test_transcribe_files_work_dir_keeps_intermediates _____
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+__ ERROR at setup of test_transcribe_files_worker_failure_isolated_per_video ___
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_________ ERROR at setup of test_transcribe_files_nonzero_exit_raises __________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+___________ ERROR at setup of test_scan_videos_finds_only_video_exts ___________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_____________ ERROR at setup of test_split_pending_by_existing_srt _____________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_________ ERROR at setup of TestWriteReview.test_timestamped_filename __________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_______ ERROR at setup of TestWriteReview.test_rerun_keeps_previous_file _______
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+___ ERROR at setup of TestWriteReview.test_same_second_collision_gets_suffix ___
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+__________________ ERROR at setup of test_parse_srt_roundtrip __________________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_____________ ERROR at setup of test_parse_srt_multiline_and_crlf ______________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+_______________________ ERROR at setup of test_write_srt _______________________
+
+self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError
+=================================== FAILURES ===================================
+__________________ test_speech_fallback_gap_is_hard_boundary ___________________
+
+    def test_speech_fallback_gap_is_hard_boundary():
+        # One long sentence whose span contains a >pause_sec gap: the cue is cut
+        # at the gap even though there is no punctuation there.
+        speech = [(0.0, 2.0), (5.0, 7.0)]  # 3s gap
+        cues = split_cues("ああああいいいい", 0.0, 7.0, max_chars=24, pause_sec=0.6, speech=speech)
+>       assert len(cues) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len([{'end': 7.0, 'start': 0.0, 'text': 'ああああいいいい'}])
+
+tests/unit/test_cue_splitter.py:261: AssertionError
+- generated xml file: /Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/baseline.xml -
+=========================== short test summary info ============================
+FAILED tests/unit/test_cue_splitter.py::test_speech_fallback_gap_is_hard_boundary
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_skips_when_cache_valid
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_reextracts_without_sidecar
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_reextracts_when_source_changed
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_force_reextracts_even_with_valid_cache
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_raises_when_video_missing
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_invokes_ffmpeg_and_returns_path
+ERROR tests/unit/test_audio_extractor.py::test_extract_audio_raises_on_ffmpeg_failure
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_missing_env_python_raises
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_happy_path_writes_three_outputs
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_out_dir_overrides_output_location
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_work_dir_keeps_intermediates
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_worker_failure_isolated_per_video
+ERROR tests/unit/test_ja_transcriber.py::test_transcribe_files_nonzero_exit_raises
+ERROR tests/unit/test_ja_transcriber.py::test_scan_videos_finds_only_video_exts
+ERROR tests/unit/test_ja_transcriber.py::test_split_pending_by_existing_srt
+ERROR tests/unit/test_review.py::TestWriteReview::test_timestamped_filename
+ERROR tests/unit/test_review.py::TestWriteReview::test_rerun_keeps_previous_file
+ERROR tests/unit/test_review.py::TestWriteReview::test_same_second_collision_gets_suffix
+ERROR tests/unit/test_subtitle.py::test_parse_srt_roundtrip - FileNotFoundErr...
+ERROR tests/unit/test_subtitle.py::test_parse_srt_multiline_and_crlf - FileNo...
+ERROR tests/unit/test_subtitle.py::test_write_srt - FileNotFoundError: [Errno...
+1 failed, 108 passed, 21 errors in 0.40s
+
+--- stderr ---

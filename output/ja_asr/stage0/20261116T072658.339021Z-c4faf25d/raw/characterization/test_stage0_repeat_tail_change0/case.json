@@ -1,0 +1,38 @@
+{
+  "case_id": "S0-TEXT-02",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "重复尾判定即使裁剪后处理文本，也必须保留完整原始 ASR 文本；不能据字符串证明真幻觉。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/ja_worker.py:488-509 _asr_pass"
+  ],
+  "inputs": {
+    "asr_returned_text": "うんうんうん",
+    "chunk": {
+      "idx": 0,
+      "start": 1.0,
+      "end": 4.0,
+      "reason": "normal",
+      "speaker": null
+    },
+    "repeat_tail_max_cps": 0.0
+  },
+  "observed": {
+    "asr_chunks": [
+      {
+        "idx": 0,
+        "start": 1.0,
+        "end": 4.0,
+        "reason": "normal",
+        "speaker": null,
+        "repeat_tail_cut": true,
+        "wav": "/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T072658.339021Z-c4faf25d/raw/characterization/test_stage0_repeat_tail_change0/synthetic.wav",
+        "text": "うん"
+      }
+    ],
+    "stats": {
+      "asr_repeat_cut": 1,
+      "asr_ok": 1
+    }
+  }
+}

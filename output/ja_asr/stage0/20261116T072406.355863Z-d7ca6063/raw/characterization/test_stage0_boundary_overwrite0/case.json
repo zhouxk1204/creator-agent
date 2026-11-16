@@ -1,0 +1,127 @@
+{
+  "case_id": "S0-TIME-01",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "silencedetect 默认仅诊断，不覆盖 ForcedAligner 时间；原始对齐时间应可追溯。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/boundary_check.py:205-228 snap_edge",
+    "src/creator_agent/asr/ja_transcriber.py:207-234 _check_boundaries",
+    "src/creator_agent/asr/review.py:84-101 build_review"
+  ],
+  "inputs": {
+    "worker_result": {
+      "video_id": "synthetic",
+      "ok": true,
+      "text": "はい",
+      "duration_sec": 5.0,
+      "segments": [
+        {
+          "start": 1.35,
+          "end": 2.0,
+          "text": "はい",
+          "diag": {
+            "time_source": "word_timed"
+          }
+        }
+      ]
+    },
+    "silences": [
+      [
+        0.0,
+        1.24
+      ]
+    ]
+  },
+  "observed": {
+    "after_boundary": {
+      "video_id": "synthetic",
+      "ok": true,
+      "text": "はい",
+      "duration_sec": 5.0,
+      "segments": [
+        {
+          "start": 1.16,
+          "end": 2.0,
+          "text": "はい",
+          "diag": {
+            "time_source": "word_timed",
+            "boundary": "snapped_start"
+          }
+        }
+      ],
+      "boundary_report": "边界检查报告: synthetic\nvideo duration : 00:05.000\naudio duration : 00:05.000\ncues           : 1（吸附调整 1 条，可疑 0 条）\n\n所有 cue 边界均落在静音附近，无可疑项。\n"
+    },
+    "transcript": {
+      "video_id": "synthetic",
+      "text": "はい",
+      "segments": [
+        {
+          "start": 1.16,
+          "end": 2.0,
+          "text": "はい",
+          "speaker": null
+        }
+      ],
+      "language": "ja",
+      "model": "Qwen/Qwen3-ASR-1.7B-hf",
+      "duration_sec": 5.0,
+      "created_at": "2026-11-16T07:24:07.172875Z"
+    },
+    "review": {
+      "meta": {
+        "source": "synthetic.mp4",
+        "duration_sec": 5.0,
+        "model": "Qwen/Qwen3-ASR-1.7B-hf",
+        "overrides": {
+          "vad_threshold": 0.5,
+          "vad_min_speech_ms": 120,
+          "vad_min_silence_ms": 300,
+          "vad_speech_pad_ms": 150,
+          "max_cue_chars": 24,
+          "max_cue_sec": 8.0,
+          "pause_sec": 0.6,
+          "recover_missed": false,
+          "recover_min_sec": 0.4,
+          "recover_vad_threshold": 0.5,
+          "repeat_tail_max_cps": 0.0,
+          "chunk_target_min_sec": 3.0,
+          "chunk_target_max_sec": 8.0,
+          "max_chunk_sec": 15.0,
+          "asr_max_new_tokens": 1024,
+          "align_pad_sec": 0.3,
+          "align_min_coverage": 0.5,
+          "srt_min_display_sec": 0.0,
+          "srt_lead_in_sec": 0.0,
+          "srt_tail_sec": 0.0,
+          "boundary_check": true,
+          "boundary_snap_sec": 0.5,
+          "boundary_silence_db": -35.0,
+          "boundary_min_silence_sec": 0.12,
+          "boundary_lead_in_sec": 0.08,
+          "boundary_tail_sec": 0.1,
+          "speaker_threshold": 0.5
+        },
+        "summary": {}
+      },
+      "cues": [
+        {
+          "id": 1,
+          "start": 1.16,
+          "end": 2.0,
+          "speech_start": 1.16,
+          "speech_end": 2.0,
+          "text": "はい",
+          "speaker": null,
+          "diag": {
+            "time_source": "word_timed",
+            "boundary": "snapped_start"
+          },
+          "question": "",
+          "expected": ""
+        }
+      ],
+      "dropped": [],
+      "uncovered": []
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "run_id": "20261116T072658.339021Z-c4faf25d",
+  "validation_kind": "Executed local artifact consistency checks, not ASR quality acceptance",
+  "status": "PASS",
+  "checks": {
+    "case_count_is_11": true,
+    "case_requirement_status_matches_code_audit": true,
+    "local_requirement_met_count_is_3": true,
+    "manifest_source_hashes_match_current_source": true,
+    "production_src_bat_config_diff_is_empty": true,
+    "baseline_failure_is_reported_without_hiding": true,
+    "characterization_has_11_passed_tests": true,
+    "code_changes_patch_matches_staged_code": true,
+    "two_prior_run_results_are_preserved": true
+  },
+  "quality_acceptance": "NOT RUN"
+}

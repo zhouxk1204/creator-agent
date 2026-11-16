@@ -1,0 +1,41 @@
+{
+  "case_id": "S0-TIME-02",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "边界检查不应为满足 min_dur 在媒体末尾制造字幕重叠。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/boundary_check.py:262-270 refine_cues"
+  ],
+  "inputs": {
+    "cues": [
+      {
+        "start": 9.5,
+        "end": 9.9,
+        "text": "はい"
+      },
+      {
+        "start": 9.95,
+        "end": 10.0,
+        "text": "うん"
+      }
+    ],
+    "silences": [],
+    "duration": 10.0
+  },
+  "observed": {
+    "cues": [
+      {
+        "start": 9.5,
+        "end": 9.9,
+        "text": "はい"
+      },
+      {
+        "start": 9.8,
+        "end": 10.0,
+        "text": "うん"
+      }
+    ],
+    "flags": [],
+    "overlap_sec": 0.09999999999999964
+  }
+}

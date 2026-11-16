@@ -1,0 +1,40 @@
+{
+  "case_id": "S0-TIME-03",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "局部词时间应加实际对齐窗口起点一次，不漏加、重复加或使用未带 pad 的 ASR 起点。",
+  "requirement_status": "MET",
+  "evidence": [
+    "src/creator_agent/asr/aligner_worker.py:80-90 _align_one"
+  ],
+  "inputs": {
+    "job": {
+      "wav": "synthetic.wav",
+      "text": "はい",
+      "chunk_start": 9.7
+    },
+    "local_words": [
+      [
+        "はい",
+        0.3,
+        0.8
+      ]
+    ],
+    "asr_chunk_start": 10.0
+  },
+  "observed": {
+    "global_words": [
+      [
+        "はい",
+        10.0,
+        10.5
+      ]
+    ],
+    "local_words_after": [
+      [
+        "はい",
+        0.3,
+        0.8
+      ]
+    ]
+  }
+}

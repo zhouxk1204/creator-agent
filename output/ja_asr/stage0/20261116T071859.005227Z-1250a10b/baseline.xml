@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="21" failures="1" skipped="0" tests="130" time="0.402" timestamp="2026-11-16T15:18:59.303462+08:00" hostname="zhouxkMac-mini.local"><testcase classname="tests.unit.test_audio_extractor" name="test_find_ffmpeg_uses_explicit_path" time="0.000" /><testcase classname="tests.unit.test_audio_extractor" name="test_find_ffmpeg_resolves_from_path" time="0.000" /><testcase classname="tests.unit.test_audio_extractor" name="test_find_ffmpeg_raises_when_missing" time="0.000" /><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_skips_when_cache_valid" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_reextracts_without_sidecar" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_reextracts_when_source_changed" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_force_reextracts_even_with_valid_cache" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_raises_when_video_missing" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_invokes_ffmpeg_and_returns_path" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_audio_extractor" name="test_extract_audio_raises_on_ffmpeg_failure" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_empty_returns_zero" time="0.002" /><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_missing_env_python_raises" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_happy_path_writes_three_outputs" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_out_dir_overrides_output_location" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_work_dir_keeps_intermediates" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_worker_failure_isolated_per_video" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_transcribe_files_nonzero_exit_raises" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_unique_id_disambiguates_duplicate_stems" time="0.000" /><testcase classname="tests.unit.test_ja_transcriber" name="test_scan_videos_finds_only_video_exts" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_ja_transcriber" name="test_split_pending_by_existing_srt" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_boundary_check" name="test_parse_silencedetect_basic" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_parse_silencedetect_closes_trailing_with_duration" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_parse_silencedetect_empty" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_snap_start_inside_silence_moves_to_onset" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_snap_end_inside_silence_pulls_back_to_offset" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_mid_speech_start_polished_to_nearby_onset" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_mid_speech_end_extended_to_nearby_offset" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_mid_speech_edge_without_nearby_silence_untouched_and_unflagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_start_deep_in_silence_kept_and_flagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_end_deep_in_silence_kept_and_flagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_large_snap_within_window_trusted_not_flagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_no_speech_flagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_exceeds_video_clamped_and_flagged" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_audio_video_mismatch_video_level_flag" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_no_overlap_after_snap" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_extra_keys_preserved" time="0.000" /><testcase classname="tests.unit.test_boundary_check" name="test_format_check_report_uncovered" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_cue_ids_match_srt_numbering" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_display_and_speech_times_both_present" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_diag_and_annotation_fields" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_empty_text_cues_skipped_like_srt" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_dropped_and_uncovered_have_question" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_meta" time="0.000" /><testcase classname="tests.unit.test_review.TestBuildReview" name="test_missing_diag_defaults_boundary_none" time="0.000" /><testcase classname="tests.unit.test_review.TestWriteReview" name="test_timestamped_filename" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_review.TestWriteReview" name="test_rerun_keeps_previous_file" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_review.TestWriteReview" name="test_same_second_collision_gets_suffix" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_align_check" name="test_no_words_fails" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_good_alignment_passes_with_full_coverage" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_low_coverage_fails_below_threshold" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_custom_coverage_threshold" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_words_may_spill_within_pad_but_not_beyond" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_invalid_timing_start_after_end" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_invalid_timing_non_monotonic" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_abnormal_duration" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_first_failure_wins" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_clean_words_pass_through_untouched" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_empty_returns_none" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_zero_duration_word_expanded" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_small_overlap_clamped" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_large_overlap_rejected" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_mostly_degenerate_rejected" time="0.000" /><testcase classname="tests.unit.test_align_check" name="test_repair_cascade_of_zero_durations_stays_monotonic" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_empty_and_invalid_input" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_splits_at_sentence_punctuation" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_short_sentences_merge_up_to_max_chars" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_merge_respects_max_chars" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_long_sentence_wraps_at_soft_break" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_long_sentence_hard_cut_without_punctuation" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_proportional_time_allocation_without_words" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_word_timestamps_drive_cue_times" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_word_timestamps_fall_back_when_coverage_poor" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_word_boundaries_ignore_punctuation_drift" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_word_times_outside_chunk_are_kept" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_max_sec_forces_split" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_long_pause_is_a_hard_cue_boundary" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_pause_inside_sentence_splits_without_punctuation" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_short_pause_does_not_split" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cue_times_monotonic_and_clamped" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_splits_at_midpoint" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_untouched_when_clean" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_sorts_and_handles_chains" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_contained_cue_shares_at_boundary" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_too_short_to_share" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_resolve_overlaps_keeps_speaker_field" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_speech_fallback_hugs_utterance_edges" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_speech_fallback_gap_is_hard_boundary" time="0.001"><failure message="AssertionError: assert 1 == 2&#10; +  where 1 = len([{'end': 7.0, 'start': 0.0, 'text': 'ああああいいいい'}])">def test_speech_fallback_gap_is_hard_boundary():
+        # One long sentence whose span contains a &gt;pause_sec gap: the cue is cut
+        # at the gap even though there is no punctuation there.
+        speech = [(0.0, 2.0), (5.0, 7.0)]  # 3s gap
+        cues = split_cues("ああああいいいい", 0.0, 7.0, max_chars=24, pause_sec=0.6, speech=speech)
+&gt;       assert len(cues) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len([{'end': 7.0, 'start': 0.0, 'text': 'ああああいいいい'}])
+
+tests/unit/test_cue_splitter.py:261: AssertionError</failure></testcase><testcase classname="tests.unit.test_cue_splitter" name="test_speech_fallback_no_overlap_falls_back_to_linear" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_speech_fallback_clips_intervals_to_chunk" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_words_take_priority_over_speech" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cut_repeat_tail_truncates_loop" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cut_repeat_tail_keeps_real_speech" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cut_repeat_tail_whole_text_loop" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cut_repeat_tail_cps_guard_keeps_normal_speed" time="0.000" /><testcase classname="tests.unit.test_cue_splitter" name="test_cut_repeat_tail_cps_guard_cuts_impossible_speed" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_basic_srt_format" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_hours_and_millis_rounding" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_negative_start_clamped_to_zero" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_empty_segments_skipped_and_renumbered" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_empty_input_returns_empty_string" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_speaker_not_rendered_in_srt" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_filler_cues_are_kept" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_parse_srt_roundtrip" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_subtitle" name="test_parse_srt_multiline_and_crlf" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_subtitle" name="test_write_srt" time="0.000"><error message="failed on setup with &quot;FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'&quot;">self = PosixPath('/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline')
+mode = 448, parents = False, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+&gt;           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/Users/intasect/Music/g/creator-agent/output/ja_asr/stage0/20261116T071859.005227Z-1250a10b/raw/baseline'
+
+../../../miniconda3/lib/python3.14/pathlib/__init__.py:1011: FileNotFoundError</error></testcase><testcase classname="tests.unit.test_subtitle" name="test_finalize_for_srt_identity_when_off" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_finalize_for_srt_min_display" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_finalize_for_srt_clamped_by_next_cue" time="0.000" /><testcase classname="tests.unit.test_subtitle" name="test_finalize_for_srt_lead_tail_and_limit" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_empty_and_invalid" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_close_segments_merge_into_one_chunk" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_far_groups_pack_until_target_max" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_undersized_chunk_may_stretch_past_target_up_to_hard_max" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_undersized_chunk_closes_when_stretch_would_exceed_hard_max" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_oversized_group_splits_at_natural_pause_near_target" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_single_long_interval_is_hard_split" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_hard_cap_is_never_exceeded" time="0.000" /><testcase classname="tests.unit.test_build_chunks" name="test_padding_and_clamp" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_empty_and_invalid_intervals" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_short_gaps_merge_long_gaps_split" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_unsorted_input_is_sorted" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_oversized_chunk_splits_at_largest_internal_gap" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_oversized_split_recurses" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_single_long_interval_kept_intact" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_padding_applied_and_clamped" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_speech_coverage" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_uncovered_ranges" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_uncovered_ranges_min_sec_filter" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_subtract_intervals" time="0.000" /><testcase classname="tests.unit.test_vad_chunker" name="test_merge_close" time="0.000" /></testsuite></testsuites>

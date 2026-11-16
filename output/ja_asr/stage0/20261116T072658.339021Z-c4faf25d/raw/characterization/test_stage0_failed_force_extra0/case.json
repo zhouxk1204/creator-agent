@@ -1,0 +1,19 @@
+{
+  "case_id": "S0-CACHE-01",
+  "data_kind": "synthetic; no model inference or human audio reference",
+  "requirement": "同一源强制重提取失败后，旧 sidecar 不应让残损音频在下次非 force 运行命中缓存。",
+  "requirement_status": "NOT_MET",
+  "evidence": [
+    "src/creator_agent/asr/audio_extractor.py:28-40,55-57,61-91 _cache_hit/extract_audio"
+  ],
+  "inputs": {
+    "valid_cache_before": true,
+    "source_unchanged": true,
+    "force_extract_returncode": 1
+  },
+  "observed": {
+    "rerun_ffmpeg_calls": 0,
+    "cached_bytes": "truncated",
+    "sidecar_after": "{\"size\": 27, \"mtime_ns\": 1794814019174461087}"
+  }
+}
