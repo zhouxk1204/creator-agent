@@ -116,7 +116,7 @@ Desktop/doraemon_941/
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941\metadata.json" --story 941_1
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only bilibili
-bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-run
+bat\doraemon\publish.bat "%USERPROFILE%\Desktop\doraemon_941" --only douyin --story 941_1 --dry-run
 ```
 
 不传路径时直接用 `logs/.last_doraemon_materials` 保存的本机目录，**不再询问路径**（该记录在每次素材下载后刷新）；要换目录把路径当参数传，`--ask` 才临时询问并回车接受默认。多个故事时必须选择 `story_id`；命令行和自动化任务应显式传 `--story`。
@@ -126,4 +126,9 @@ bat\publish_douyin.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --dry-
 `06` 的 `--force` 只允许覆盖字幕；不代表重新翻译已有简介。需要重新翻译中文 metadata 时另加 `--refresh-translation`；已有字幕也要覆盖时两者一起用。刷新简介会清空并重新生成两平台标签（包括人工修改的标签），但保留人工发布标题和视频/封面路径。普通重跑复用当前有效的中文和标签，只补齐空缺或不合法的平台标签。成功的中文 metadata 在后续标签或字幕失败时仍保留。
 
 安装、扫码登录和上传故障处理见 [`bat/publish_dual.md`](../bat/publish_dual.md)。
+
+哆啦A梦日常批量发布使用 [`bat/doraemon/publish.bat`](../bat/doraemon/publish.md)：
+默认先发根目录的 `<故事>_b.mp4` 到 B 站，再发 `<故事>_dy/` 中的剪映导出到抖音，
+各平台自动处理封面并分别确认。`--only bilibili` / `--only douyin` 只跑对应平台；
+此入口任一步失败或取消会停止后续步骤，重试时用 `--only` 避免重复发布。
 

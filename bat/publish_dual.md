@@ -69,17 +69,20 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941\metadata.json" --story 
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only bilibili
 ```
 
-## 抖音单平台快捷入口
+## 哆啦A梦统一批量入口
 
-只想发抖音时，双击 `bat\publish_douyin.bat`，选择素材目录和故事即可。
-它固定使用有头浏览器，仍在发布前显示摘要并要求输入 `Y` 确认。详见 [`publish_douyin.md`](./publish_douyin.md)。
+双击 `bat\doraemon\publish.bat`，默认先发 B 站再发抖音，两边各自准备封面并在上传前确认。
+只发一个平台时运行：
 
-## B站单平台快捷入口
+```bat
+bat\doraemon\publish.bat --only douyin
+bat\doraemon\publish.bat --only bilibili
+```
 
-只发 B 站成品时，双击 `bat\publish_bilibili.bat`。它会批量发布素材目录根下所有
-`<故事>_b.mp4`，使用 `publish.title`、保留换行的 `zh.synopsis` 中文简介和对应
-`<故事>_4k.jpg` 自动转出的同尺寸优化 JPEG 封面，原始 4K 图保持不变。
-详见 [`publish_bilibili.md`](./publish_bilibili.md)。
+抖音使用 `<故事>_dy\` 里的剪映导出，自动生成横竖封面，固定有头浏览器。
+B 站使用素材目录根下的 `<故事>_b.mp4`，简介取保留换行的 `zh.synopsis`，
+封面由 `<故事>_4k.jpg` 自动转成同尺寸优化 JPEG，原图不变。
+详见 [`doraemon/publish.md`](./doraemon/publish.md)。
 
 ## 其他参数
 
@@ -102,7 +105,7 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --schedu
   改写页面 CSP、阻止抖音上传组件启动 `blob:` Worker 导致的，并不是视频真的已经上传但网速慢。
   运行一次 `bat\setup_publish.bat`，它会安装上游验证过的 Patchright **1.64.4** 和匹配浏览器。
   上传没有越过这一步时，视频预览和封面设置也不会生成；先修复上传，再检查封面。
-- **看不到抖音上传进度条**：双平台入口默认无头，不显示窗口。加 `--headed`，或使用 `publish_douyin.bat`：
+- **看不到抖音上传进度条**：通用单故事入口默认无头，不显示窗口。加 `--headed`，或使用 `bat\doraemon\publish.bat --only douyin`：
   ```bat
   bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only douyin --headed
   ```

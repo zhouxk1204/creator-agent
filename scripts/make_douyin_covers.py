@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from creator_agent.doraemon.covers import (  # noqa: E402
@@ -35,18 +36,8 @@ from creator_agent.doraemon.jianying_cover import (  # noqa: E402
     render_cover,
     requirements_problem,
 )
-from creator_agent.doraemon.metadata import MetadataError, metadata_path  # noqa: E402
-
-
-def choose_target(value: str | None) -> Path:
-    if value:
-        return metadata_path(Path(value))
-    state = REPO_ROOT / "logs/.last_doraemon_materials"
-    default = state.read_text(encoding="utf-8-sig").strip() if state.is_file() else ""
-    if not default:
-        raise MetadataError("请指定素材目录或 metadata.json")
-    print(f"默认素材目录：{default}")
-    return metadata_path(Path(default))
+from creator_agent.doraemon.metadata import MetadataError  # noqa: E402
+from scripts.publish_dual import choose_target  # noqa: E402
 
 
 def main() -> int:
@@ -59,13 +50,24 @@ def main() -> int:
     parser.add_argument(
         "--dy-only",
         action="store_true",
-        help="只处理已经有剪映导出（<故事>_dy/<故事>_dy.mp4）的故事，配合 publish_douyin.bat 用",
+        help="只处理已经有剪映导出（<故事>_dy/<故事>_dy.mp4）的故事，配合 bat/doraemon/publish.bat 用",
     )
     parser.add_argument(
         "--covers", default="portrait,landscape", help="要生成的封面，逗号分隔：portrait,landscape（默认两个都做）"
     )
     parser.add_argument("--force", action="store_true", help="已有封面也重新生成并覆盖路径")
     parser.add_argument("--dry-run", action="store_true", help="只打印将要生成什么，不动剪映也不写文件")
+    parser.add_argument("--ask", "--prompt-target", action="store_true", help="强制询问素材目录")
+    # publish.bat forwards the same arguments to covers and the publisher.
+    parser.add_argument("--dy", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--b", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--only", choices=["douyin", "bilibili"], help=argparse.SUPPRESS)
+    parser.add_argument("--tid", help=argparse.SUPPRESS)
+    parser.add_argument("--schedule", help=argparse.SUPPRESS)
+    parser.add_argument("--douyin-account", help=argparse.SUPPRESS)
+    parser.add_argument("--bilibili-account", help=argparse.SUPPRESS)
+    parser.add_argument("--headed", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     orientations = [item.strip() for item in args.covers.split(",") if item.strip()]
@@ -75,7 +77,7 @@ def main() -> int:
         return 2
 
     try:
-        path = choose_target(args.dir)
+        path = choose_target(args.dir, args.ask)
         data = load(path)
         stories = stories_to_render(data, args.story)
         if args.dy_only:
@@ -86,7 +88,7 @@ def main() -> int:
             if not stories:
                 print("[X] 没有可发布的故事：先导出 <故事>_dy/<故事>_dy.mp4", file=sys.stderr)
                 return 2
-    except (MetadataError, OSError, UnicodeError) as exc:
+    except (MetadataError, OSError, UnicodeError, EOFError) as exc:
         print(f"[X] {exc}", file=sys.stderr)
         return 2
 

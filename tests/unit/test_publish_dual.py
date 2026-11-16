@@ -550,7 +550,7 @@ def test_publisher_imports_without_site_packages():
     assert "--story" in result.stdout
 
 
-@pytest.mark.parametrize("name", ["publish_douyin", "publish_dual", "publish_bilibili"])
+@pytest.mark.parametrize("name", ["doraemon/publish", "publish_dual"])
 def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     path = Path(__file__).resolve().parents[2] / "bat" / f"{name}.bat"
     raw = path.read_bytes()
@@ -564,22 +564,44 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
 
 
 def test_bilibili_launcher_prepares_covers_then_publishes_every_b_export():
-    text = (Path(__file__).resolve().parents[2] / "bat" / "publish_bilibili.bat").read_text(encoding="ascii")
-    assert text.index("make_bilibili_covers.py") < text.index('publish_dual.py" %*')
-    assert "--b" in text
-    assert "--only bilibili" in text
-    assert "--dy" not in text
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
+    assert bilibili.index("make_bilibili_covers.py") < bilibili.index('publish_dual.py" %*')
+    assert "--b --only bilibili" in bilibili
+    assert "--dy" not in bilibili
 
 
 def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
-    # The Douyin flow is one double-click: covers first (both orientations, so
-    # the metadata paths exist), then one upload per 剪映 _dy export.
-    text = (Path(__file__).resolve().parents[2] / "bat" / "publish_douyin.bat").read_text(encoding="ascii")
-    covers = text.index("make_douyin_covers.py")
-    publish = text.index("publish_dual.py")
-    assert covers < publish
-    assert "--dy" in text
-    assert "--only douyin" in text
+    # Covers first (both orientations, so the metadata paths exist), then one
+    # upload per 剪映 _dy export.
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    douyin = text.split("\n:douyin\n", 1)[1].split("\n:done\n", 1)[0]
+    assert douyin.index("make_douyin_covers.py") < douyin.index("publish_dual.py")
+    assert "--dy-only" in douyin
+    assert "--dy --only douyin --headed" in douyin
+    assert "--b " not in douyin
+
+
+def test_merged_launcher_bootstraps_from_parent_and_selects_platform():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    assert 'call "%~dp0..\\_bootstrap.bat"' in text
+    assert 'set "PLATFORM=both"' in text
+    assert 'if /i "%~1"=="--only"' in text
+    assert 'set "PLATFORM=%~2"' in text
+    assert 'if /i "%PLATFORM%"=="douyin" goto :douyin' in text
+    assert 'if /i "%PLATFORM%"=="bilibili" goto :done' in text
+    assert text.index("make_bilibili_covers.py") < text.index("make_douyin_covers.py")
+    assert not (root / "bat/publish_bilibili.bat").exists()
+    assert not (root / "bat/publish_douyin.bat").exists()
+
+
+def test_merged_launcher_stops_on_failure_or_cancellation():
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
+    assert 'set "RC=%ERRORLEVEL%"\nif not "%RC%"=="0" goto :done' in bilibili
+    assert text.count("if errorlevel 1 goto :fail") == 3
+    assert "exit /b %RC%" in text
 
 
 def test_setup_installs_biliup_runtime_patches():

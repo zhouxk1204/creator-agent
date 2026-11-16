@@ -87,7 +87,7 @@ def test_cover_title_returns_chinese_title(tmp_path):
 
 
 def test_dy_only_skips_stories_without_a_jianying_export(tmp_path, monkeypatch, capsys):
-    # publish_douyin.bat only renders covers for what it can actually publish,
+    # publish.bat only renders covers for what it can actually publish,
     # otherwise every run would pay a JianYing render for a story with no _dy
     # export yet.
     path = make_metadata(tmp_path)
@@ -109,6 +109,75 @@ def test_dy_only_skips_stories_without_a_jianying_export(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
     assert "MAKE 942_1" in out
     assert "942_2" not in out
+
+
+def test_cover_step_accepts_forwarded_publish_arguments(tmp_path, monkeypatch, capsys):
+    import make_douyin_covers
+
+    path = make_metadata(tmp_path)
+    export = tmp_path / "942_1_dy"
+    export.mkdir()
+    (export / "942_1_dy.mp4").write_bytes(b"export")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "make_douyin_covers.py",
+            str(path),
+            "--dy-only",
+            "--story",
+            "942_1",
+            "--dry-run",
+            "--yes",
+            "--headed",
+            "--only",
+            "douyin",
+            "--schedule",
+            "2026-12-01 10:15",
+            "--tid",
+            "127",
+            "--douyin-account",
+            "my-douyin",
+            "--bilibili-account",
+            "my-bilibili",
+        ],
+    )
+
+    assert make_douyin_covers.main() == 0
+    assert "MAKE 942_1" in capsys.readouterr().out
+    assert not (tmp_path / portrait_filename("942_1")).exists()
+    assert not (tmp_path / landscape_filename("942_1")).exists()
+
+
+@pytest.mark.parametrize("flag", ["--ask", "--prompt-target"])
+def test_cover_step_passes_prompt_option_to_target_picker(tmp_path, monkeypatch, flag):
+    import make_douyin_covers
+
+    path = make_metadata(tmp_path)
+    calls = []
+
+    def choose_target(value, ask=False):
+        calls.append((value, ask))
+        return path
+
+    monkeypatch.setattr(make_douyin_covers, "choose_target", choose_target)
+    monkeypatch.setattr(sys, "argv", ["make_douyin_covers.py", flag, "--dry-run"])
+
+    assert make_douyin_covers.main() == 0
+    assert calls == [(None, True)]
+
+
+def test_cover_step_handles_cancelled_target_prompt(monkeypatch, capsys):
+    import make_douyin_covers
+
+    def choose_target(value, ask=False):
+        raise EOFError("cancelled")
+
+    monkeypatch.setattr(make_douyin_covers, "choose_target", choose_target)
+    monkeypatch.setattr(sys, "argv", ["make_douyin_covers.py", "--ask"])
+
+    assert make_douyin_covers.main() == 2
+    assert "cancelled" in capsys.readouterr().err
 
 
 def test_set_portrait_cover_writes_relative_name(tmp_path):
