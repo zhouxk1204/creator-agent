@@ -73,6 +73,7 @@ separation model -> ~/.cache/audio-separator-models; ModelScope (speaker)
 from __future__ import annotations
 
 import argparse
+import copy
 import functools
 import json
 import os
@@ -100,6 +101,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from align_check import INVALID_TIMING, NO_WORDS, AlignCheck, check_alignment, repair_word_timing  # noqa: E402
 from cue_splitter import cut_repeat_tail, resolve_overlaps, split_cues  # noqa: E402
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
+from timing_audit import audit_chunk, save_checkpoint  # noqa: E402
 from vad_chunker import build_chunks, merge_close, speech_coverage, subtract_intervals, uncovered_ranges  # noqa: E402
 
 
@@ -369,10 +371,12 @@ def _transcribe_chunk(processor, model, chunk_wav: Path, language: str, max_new_
     ).to(model.device, model.dtype)
     output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     generated = output_ids[:, inputs["input_ids"].shape[1] :]
-    return processor.decode(generated, return_format="transcription_only")[0].strip()
+    return processor.decode(generated, return_format="transcription_only")[0]
 
 
-def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Path, duration: float) -> dict[int, dict]:
+def _align_stream(
+    args, work: Path, asr_chunks: list[dict], vid: str, vocals: Path, duration: float, audit: dict | None = None
+) -> dict[int, dict]:
     """Run the aligner subprocess (separate ``creator-asr-ja-aligner`` env)
     over all chunks of one video and stream per-chunk results back.
 
@@ -396,10 +400,37 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
         for c in asr_chunks:
             astart = max(0.0, c["start"] - args.align_pad)
             aend = min(duration, c["end"] + args.align_pad)
+            # _slice_wav truncates to sample indices. The offset must be the
+            # actual first sample, not the unquantized requested start.
+            first_sample, last_sample = int(astart * _SAMPLE_RATE), int(aend * _SAMPLE_RATE)
+            window = {
+                "requested_start": astart,
+                "requested_end": aend,
+                "start_sample": first_sample,
+                "end_sample": last_sample,
+                "sample_rate": _SAMPLE_RATE,
+                "start": first_sample / _SAMPLE_RATE,
+                "end": last_sample / _SAMPLE_RATE,
+            }
             awav = _slice_wav(vocals, work / f"align_{c['idx']:04d}.wav", astart, aend)
-            jobs.append({"chunk_id": c["idx"], "wav": str(awav), "text": c["text"], "chunk_start": astart})
+            jobs.append(
+                {
+                    "chunk_id": c["idx"],
+                    "wav": str(awav),
+                    "text": c["text"],
+                    "chunk_start": window["start"],
+                    "window": window,
+                }
+            )
+            entry = audit_chunk(audit, c["idx"])
+            if entry is not None:
+                entry["alignment_window"] = window
+                entry["alignment_text"] = c["text"]
+        save_checkpoint(audit, "ALIGNMENT_STARTED")
     except Exception as e:
-        _warn(f"failed to slice alignment windows ({e}); proportional cue times")
+        _warn(f"failed to prepare alignment windows ({e}); proportional cue times")
+        if audit is not None:
+            audit["alignment_error"] = str(e)
         return {}
     jobs_path = work / "align_jobs.json"
     jobs_path.write_text(json.dumps(jobs, ensure_ascii=False), encoding="utf-8")
@@ -419,6 +450,7 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     _progress(vid, f"词级对齐：启动独立环境对齐器（{len(jobs)} 块，模型加载约半分钟）…")
+    results: dict[int, dict] = {}
     try:
         # stdout carries one ===ALIGN_CHUNK=== line per finished chunk (read
         # here, in order); stderr progress is forwarded live on a thread.
@@ -433,7 +465,6 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
 
         t = threading.Thread(target=_forward_stderr, daemon=True)
         t.start()
-        results: dict[int, dict] = {}
         assert proc.stdout is not None
         for raw in iter(proc.stdout.readline, b""):
             line = raw.decode("utf-8", errors="replace").strip()
@@ -442,6 +473,10 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
             try:
                 rec = json.loads(line[len(_CHUNK_MARKER) :])
                 results[int(rec["chunk_id"])] = rec
+                entry = audit_chunk(audit, int(rec["chunk_id"]))
+                if entry is not None:
+                    entry["raw_alignment"] = copy.deepcopy(rec)
+                    save_checkpoint(audit, "ALIGNMENT_PARTIAL")
             except (ValueError, KeyError) as e:
                 _warn(f"unparseable aligner chunk line ({e}); some chunks may fall back")
         rc = proc.wait()
@@ -451,8 +486,10 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
         _progress(vid, f"词级对齐完成：{len(results)}/{len(jobs)} 块返回")
         return results
     except Exception as e:
-        _warn(f"aligner subprocess failed ({e}); proportional cue times")
-        return {}
+        _warn(f"aligner subprocess failed ({e}); missing chunks use proportional cue times")
+        if audit is not None:
+            audit["alignment_error"] = str(e)
+        return results
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +497,18 @@ def _align_stream(args, work: Path, asr_chunks: list[dict], vid: str, vocals: Pa
 # ---------------------------------------------------------------------------
 
 
-def _asr_pass(processor, asr_model, chunks: list[dict], args, stats, work: Path, vocals: Path, tight, total: int):
+def _asr_pass(
+    processor,
+    asr_model,
+    chunks: list[dict],
+    args,
+    stats,
+    work: Path,
+    vocals: Path,
+    tight,
+    total: int,
+    audit: dict | None = None,
+):
     """ASR every chunk on the vocal stem (+ hallucination repeat-tail cut).
 
     Returns the chunks that produced text, each with its wav path and text
@@ -473,15 +521,29 @@ def _asr_pass(processor, asr_model, chunks: list[dict], args, stats, work: Path,
     for c in chunks:
         cid = f"CHUNK {c['idx'] + 1:03d}/{total:03d}"
         tc = time.monotonic()
+        c["asr_window"] = {
+            "requested_start": c["start"],
+            "requested_end": c["end"],
+            "start_sample": int(c["start"] * _SAMPLE_RATE),
+            "end_sample": int(c["end"] * _SAMPLE_RATE),
+            "sample_rate": _SAMPLE_RATE,
+        }
         try:
             chunk_wav = _slice_wav(vocals, work / f"chunk_{c['idx']:04d}.wav", c["start"], c["end"])
             text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language, args.max_new_tokens)
         except Exception as e:
+            c["asr_status"] = "failed"
+            c["asr_error"] = str(e)
+            save_checkpoint(audit, "ASR_PARTIAL")
             stats["asr_failed"] += 1
             _chunk_log(cid, "ASR", f"FAIL reason=EXCEPTION error={e}")
             continue
+        c["raw_text"] = text
+        text = text.strip()
         el = time.monotonic() - tc
         if not text:
+            c["asr_status"] = "empty"
+            save_checkpoint(audit, "ASR_PARTIAL")
             stats["asr_empty"] += 1
             _chunk_log(cid, "ASR", f"EMPTY reason=NO_TEXT ({el:.1f}s)")
             continue
@@ -503,6 +565,9 @@ def _asr_pass(processor, asr_model, chunks: list[dict], args, stats, work: Path,
                 f'repeat-tail cut {len(stripped)}->{len(cut)} chars cps={cps:.1f} tail="{stripped[len(cut) :][:20]}…"',
             )
             text = cut
+        c["asr_status"] = "ok"
+        c["alignment_text"] = text
+        save_checkpoint(audit, "ASR_PARTIAL")
         stats["asr_ok"] += 1
         preview = text[:30] + ("…" if len(text) > 30 else "")
         _chunk_log(cid, "ASR", f'OK {el:.1f}s len={len(text)} text="{preview}"')
@@ -519,12 +584,45 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
 
     vid = job["video_id"]
     stats: Counter = Counter()
+    audit = {
+        "schema_version": 1,
+        "run_id": job.get("run_id"),
+        "checkpoint_path": job.get("timing_audit_path"),
+        "video_id": vid,
+        "source_video": job.get("source_video"),
+        "source_audio": str(audio_path),
+        "duration_sec": duration,
+        "coordinate_system": "absolute seconds on the complete extracted audio; VAD is detection, not pronunciation",
+        "settings": vars(args),
+        "chunks": [],
+        "warnings": [],
+    }
+    save_checkpoint(audit, "AUDIO_READY")
+    audio_snapshot = vocals_snapshot = None
+    if audit["checkpoint_path"]:
+        target = Path(audit["checkpoint_path"]).parent
+        audio_snapshot = target / f"{vid}.audio.{audit['run_id']}.wav"
+        shutil.copy2(audio_path, audio_snapshot)
+        audit["audio_snapshot"] = str(audio_snapshot)
+        save_checkpoint(audit, "AUDIO_SNAPSHOT_READY")
 
     with tempfile.TemporaryDirectory(prefix="ja-asr-") as tmp:
         work = Path(tmp)
         t0 = time.monotonic()
         _progress(vid, "人声分离中…（BS-RoFormer，长视频可能要几分钟）")
         vocals, other_stems = _separate_vocals(separator, audio_path, work)
+        vocal_info = sf.info(str(vocals))
+        if vocal_info.samplerate != _SAMPLE_RATE:
+            raise RuntimeError(f"normalized vocal sample rate is {vocal_info.samplerate}, expected {_SAMPLE_RATE}")
+        audit["vocals_duration_sec"] = float(vocal_info.duration)
+        audit["vocals_sample_rate"] = vocal_info.samplerate
+        if abs(vocal_info.duration - duration) > 1 / _SAMPLE_RATE:
+            audit["warnings"].append("AUDIO_VOCALS_DURATION_MISMATCH")
+        if audit["checkpoint_path"]:
+            vocals_snapshot = Path(audit["checkpoint_path"]).parent / f"{vid}.vocals.{audit['run_id']}.wav"
+            shutil.copy2(vocals, vocals_snapshot)
+            audit["vocals_snapshot"] = str(vocals_snapshot)
+        save_checkpoint(audit, "VOCALS_READY")
         _progress(vid, f"人声分离完成（{time.monotonic() - t0:.0f}s）→ VAD 检测语音段…")
 
         # Chunking pass uses the configured (permissive) params: low
@@ -552,6 +650,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # chunks are timed/audited against this pass so their weak speech isn't
         # dropped as hallucination by the tighter baseline.
         recovery = tight
+        audit["vad"] = {"initial": intervals, "tight": tight, "recovery": recovery}
         stats["vad_segments"] = len(intervals)
         stats["vad_short"] = sum(1 for s, e in intervals if e - s < _SHORT_SEG_SEC)
         stats["vad_long"] = sum(1 for s, e in intervals if e - s > args.max_chunk)
@@ -589,6 +688,8 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             )
         for i, c in enumerate(chunks):
             c["idx"] = i
+            c["pass"] = "initial"
+            c["asr_status"] = "pending"
             c.setdefault("speaker", None)
             stats[f"chunk_{c['reason']}"] += 1
             _debug(
@@ -600,11 +701,16 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             )
 
         align_on = bool(args.aligner_model and args.aligner_python)
+        audit["alignment_enabled"] = align_on
         step = "ASR（随后词级对齐）" if align_on else "ASR"
         _progress(vid, f"分块完成：{len(chunks)} 块 → 开始{step}…")
 
         # Phase 1: ASR every chunk on the vocal stem.
-        asr_chunks = _asr_pass(processor, asr_model, chunks, args, stats, work, vocals, tight, total=len(chunks))
+        audit["chunks"] = chunks
+        save_checkpoint(audit, "ASR_STARTED")
+        asr_chunks = _asr_pass(
+            processor, asr_model, chunks, args, stats, work, vocals, tight, total=len(chunks), audit=audit
+        )
 
         # Phase 1.5 (optional recovery pass): speech that NO successful ASR
         # chunk covers (the permissive VAD missed it, or its chunk came back
@@ -642,6 +748,8 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                         "start": round(max(0.0, s - 0.3), 3),
                         "end": round(min(duration, e + 0.3), 3),
                         "reason": "recovered",
+                        "pass": "recovered",
+                        "asr_status": "pending",
                         "segments": 0,
                         "speaker": None,
                     }
@@ -652,14 +760,26 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                     _chunk_log(f"CHUNK {c['idx'] + 1:03d}", "RECOVER", f"candidate {c['start']:.2f}-{c['end']:.2f}")
                 stats["chunk_recovered"] += len(extra)
                 chunks = chunks + extra
+                audit["chunks"] = chunks
                 asr_chunks += _asr_pass(
-                    processor, asr_model, extra, args, stats, work, vocals, tight, total=len(chunks)
+                    processor, asr_model, extra, args, stats, work, vocals, tight, total=len(chunks), audit=audit
                 )
+        audit["vad"]["recovery"] = recovery
 
         # Phase 2+3, pipelined per chunk: align (one subprocess, results
         # streamed per chunk) -> quality gate -> cue split. Rejected
         # alignments fall back to proportional cue times with a logged reason.
-        align_results = _align_stream(args, work, asr_chunks, vid, vocals, duration) if align_on else {}
+        align_results = (
+            _align_stream(args, work, asr_chunks, vid, vocals, min(duration, vocal_info.duration), audit=audit)
+            if align_on
+            else {}
+        )
+        # Keep even rejected/failed results. Checkpoints are raw, not the
+        # repaired word list the cue splitter receives.
+        for c in asr_chunks:
+            entry = audit_chunk(audit, c["idx"])
+            entry["raw_alignment"] = copy.deepcopy(align_results.get(c["idx"]))
+        save_checkpoint(audit, "ALIGNMENT_COMPLETE")
 
         segments: list[dict] = []
         dropped: list[dict] = []  # hallucination-filtered cues, kept for auditing
@@ -690,6 +810,20 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             else:
                 stats["align_fallback_DISABLED"] += 1
 
+            entry = audit_chunk(audit, c["idx"])
+            if align_on:
+                entry["alignment_gate"] = {
+                    "ok": check.ok,
+                    "reason": check.reason,
+                    "coverage": check.coverage,
+                    "detail": check.detail,
+                }
+            else:
+                entry["alignment_gate"] = {"ok": False, "reason": "DISABLED"}
+            entry["repaired_words"] = copy.deepcopy(words)
+            raw_words = (align_results.get(c["idx"]) or {}).get("words") or []
+            timing_repaired = bool(words is not None and words != [tuple(w) for w in raw_words])
+
             # Speech baseline for cue timing + the no-speech audit: tight, but
             # RECOVERED chunks use the (lower-threshold) recovery pass — their
             # weak speech is invisible to the tight pass, so auditing them
@@ -708,6 +842,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 # silence), with hard breaks at inter-utterance gaps.
                 speech=[(s, e) for s, e in cov_intervals if e > c["start"] and s < c["end"]],
             )
+            entry["cues_before_filter"] = copy.deepcopy(cues)
             # Drop cues covering (almost) no speech under the baseline VAD pass:
             # hallucinated text on music/silence, or words the aligner locked
             # onto the wrong utterance. Real dialogue is essentially never
@@ -749,6 +884,9 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                     "chunk": c["idx"],
                     "chunk_reason": c["reason"],
                     "time_source": "word_timed" if words else "proportional",
+                    "word_timing_repaired": timing_repaired,
+                    "cue_before_overlap": {"start": cue["start"], "end": cue["end"]},
+                    "pass": c["pass"],
                     "align_fallback": None if words else (check.reason if align_on else "DISABLED"),
                     "speech_cov": round(speech_coverage(cue["start"], cue["end"], tight), 3),
                     "repeat_tail_cut": bool(c.get("repeat_tail_cut")),
@@ -759,7 +897,12 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # window is padded beyond it) — resolve tiny residual cross-chunk
         # overlaps. This is LAST-RESORT insurance only; the quality gate
         # above rejects the badly-shifted alignments it used to "repair".
+        audit["segments_before_overlap"] = copy.deepcopy(segments)
         segments = resolve_overlaps(segments)
+        for seg in segments:
+            before = seg["diag"]["cue_before_overlap"]
+            seg["diag"]["overlap_changed"] = before["start"] != seg["start"] or before["end"] != seg["end"]
+        audit["segments_after_overlap"] = copy.deepcopy(segments)
 
         # Speech the subtitles never covered (ASR dropped it, or its cues were
         # rejected/filtered away) — surfaced in the SUMMARY and handed to the
@@ -778,11 +921,17 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 kind = "instrumental" if "instrument" in stem.stem.lower() else "other"
                 shutil.copy2(stem, keep_dir / f"{job['video_id']}.{kind}{stem.suffix}")
 
+        audit["dropped"] = copy.deepcopy(dropped)
+        audit["uncovered"] = uncovered
+        audit["stats"] = dict(stats)
+        save_checkpoint(audit, "WORKER_COMPLETE")
+
     return {
         "text": "".join(s["text"] for s in segments),
         "segments": segments,
         "duration_sec": round(duration, 3),
-        "vocals_path": str(vocals_out) if vocals_out else None,
+        "vocals_path": str(vocals_snapshot or vocals_out) if (vocals_snapshot or vocals_out) else None,
+        "timing_audit": audit,
         "dropped": dropped,
         "uncovered": [[round(s, 3), round(e, 3)] for s, e in uncovered],
         # SUMMARY counters as data (the .review.json meta.summary); the
@@ -1030,6 +1179,14 @@ def main() -> int:
             results.append({"video_id": vid, "ok": True, **out})
         except Exception as e:
             traceback.print_exc()
+            audit_path = Path(job["timing_audit_path"]) if job.get("timing_audit_path") else None
+            if audit_path is not None and audit_path.exists():
+                try:
+                    partial = json.loads(audit_path.read_text(encoding="utf-8"))
+                    partial["worker_error"] = str(e)
+                    save_checkpoint(partial, "WORKER_FAILED")
+                except Exception as checkpoint_error:
+                    _warn(f"failed to record worker failure: {checkpoint_error}")
             results.append({"video_id": vid, "ok": False, "error": str(e)})
 
     _emit(results)

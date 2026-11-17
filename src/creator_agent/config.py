@@ -99,11 +99,9 @@ class JaAsrSettings(BaseModel):
     # 「うんうんうん」-style back-channels at normal speed are kept. 0 = old
     # behavior (every repeat tail is cut).
     repeat_tail_max_cps: float = 0.0
-    # .srt-only display-time polish (transcript.json keeps real speech times).
-    # All 0 = off. min_display stretches too-short cues for readability;
-    # lead/tail add pre/post margins — keep them 0 when boundary_check is on
-    # (it already adds lead_in/tail_out when snapping; enabling both would
-    # double the margin).
+    # .srt-only display margins; transcript stores pre-display cue times,
+    # while the timing checkpoint separately preserves raw aligner words.
+    # Minimum duration never overrides media end or the next cue.
     srt_min_display_sec: float = 0.0
     srt_lead_in_sec: float = 0.0
     srt_tail_sec: float = 0.0
@@ -117,15 +115,14 @@ class JaAsrSettings(BaseModel):
     # word may spill outside its chunk) and the word-coverage floor.
     align_pad_sec: float = 0.3
     align_min_coverage: float = 0.5
-    # Boundary check against the ORIGINAL video+audio (post-ASR, main env):
-    # snap cue edges to true silences (ffmpeg silencedetect on the vocal stem)
-    # and flag suspects into <stem>.check.txt. The .srt stays clean.
+    # Boundary diagnostics against the complete media. Silencedetect NEVER
+    # moves cue times in ja-asr. Legacy snap parameters stay for compatibility.
     boundary_check: bool = True
-    boundary_snap_sec: float = 0.5  # max distance a cue edge may move to reach silence
+    boundary_snap_sec: float = 0.5  # legacy explicit-snap window (unused by diagnostic-only ja-asr)
     boundary_silence_db: float = -35.0  # silencedetect noise floor
     boundary_min_silence_sec: float = 0.12  # silencedetect min silence duration
-    boundary_lead_in_sec: float = 0.08  # subtitle appears this far before speech onset
-    boundary_tail_sec: float = 0.10  # ... and lingers this far after speech offset
+    boundary_lead_in_sec: float = 0.08  # legacy explicit-snap margin, not a measured onset
+    boundary_tail_sec: float = 0.10  # legacy explicit-snap margin, not a measured offset
     # <stem>.review.<timestamp>.json: srt-aligned cues + pipeline diagnostics
     # + empty question/expected fields to annotate while listening (see
     # docs/subtitle-issue-template.md). Every run writes a NEW timestamped

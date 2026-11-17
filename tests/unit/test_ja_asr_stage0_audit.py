@@ -1,10 +1,7 @@
-"""Stage 0 characterization, not subtitle-quality acceptance.
+"""Historical stage-0 characterizations plus stage-1 timing regressions.
 
-These tests reproduce the audited behavior WITHOUT loading models or changing
-production code. Each tmp_path retains the synthetic input/output in case.json;
-scripts/audit_ja_asr_stage0.py keeps those directories under a unique run ID.
-A passing test means the issue was reproduced, not that the requirement is met.
-Replace the relevant characterization with a regression when its stage is fixed.
+Fixed cases assert the new contract; stored stage-0 output files are unchanged.
+These tests are not subtitle-quality acceptance and never load models.
 """
 
 from __future__ import annotations
@@ -40,7 +37,7 @@ def _record(tmp_path, case_id, *, requirement, evidence, inputs, observed, requi
     (tmp_path / "case.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def test_stage0_boundary_overwrites_word_timing_before_export(tmp_path):
+def test_stage1_boundary_preserves_word_timing_before_export(tmp_path):
     settings = JaAsrSettings(boundary_check=True, review_json=True)
     transcriber = JaTranscriber(settings)
     result = {
@@ -75,15 +72,16 @@ def test_stage0_boundary_overwrites_word_timing_before_export(tmp_path):
         observed=observed,
         requirement_met=result["segments"][0]["start"] == before["segments"][0]["start"],
     )
-    assert result["segments"][0]["start"] == 1.16
-    assert transcript["segments"][0]["start"] == 1.16
-    assert review["cues"][0]["speech_start"] == 1.16
+    assert result["segments"][0]["start"] == 1.35
+    assert transcript["segments"][0]["start"] == 1.35
+    assert review["cues"][0]["speech_start"] == 1.35
+    assert review["cues"][0]["diag"]["boundary"] == "diagnostic_only"
     assert review["cues"][0]["diag"]["time_source"] == "word_timed"
     assert "flags" not in review["cues"][0]["diag"]
     assert "diag" not in transcript["segments"][0]
 
 
-def test_stage0_boundary_min_duration_creates_end_overlap(tmp_path):
+def test_stage1_boundary_min_duration_does_not_create_overlap(tmp_path):
     cues = [{"start": 9.5, "end": 9.9, "text": "はい"}, {"start": 9.95, "end": 10.0, "text": "うん"}]
     refined, flags = boundary_check.refine_cues(cues, [], audio_duration=10.0)
     overlap = refined[0]["end"] - refined[1]["start"]
@@ -96,9 +94,9 @@ def test_stage0_boundary_min_duration_creates_end_overlap(tmp_path):
         observed={"cues": refined, "flags": flags, "overlap_sec": overlap},
         requirement_met=overlap <= 0,
     )
-    assert refined[1]["start"] == 9.8
-    assert overlap == pytest.approx(0.1)
-    assert flags == []
+    assert refined == cues
+    assert overlap < 0
+    assert flags[0]["reasons"] == [boundary_check.SHORT_CUE]
 
 
 def test_stage0_optional_sidecars_can_describe_previous_run(tmp_path):
@@ -242,7 +240,7 @@ def test_stage0_semantic_short_lines_are_not_length_filtered(tmp_path):
     assert all(text in srt for text in texts)
 
 
-def test_stage0_repeat_tail_changes_text_before_alignment_without_raw_field(tmp_path):
+def test_stage1_repeat_tail_retains_original_asr_text(tmp_path):
     raw_text = "うんうんうん"
     chunk = {"idx": 0, "start": 1.0, "end": 4.0, "reason": "normal", "speaker": None}
     args = SimpleNamespace(language="Japanese", max_new_tokens=1024, repeat_tail_max_cps=0.0)
@@ -263,11 +261,11 @@ def test_stage0_repeat_tail_changes_text_before_alignment_without_raw_field(tmp_
         requirement_met=chunks[0].get("raw_text") == raw_text,
     )
     assert chunks[0]["text"] == "うん"
-    assert "raw_text" not in chunks[0]
+    assert chunks[0]["raw_text"] == raw_text
     assert stats["asr_repeat_cut"] == 1
 
 
-def test_stage0_display_minimum_can_exceed_media_limit(tmp_path):
+def test_stage1_display_minimum_respects_media_limit(tmp_path):
     cues = [{"start": 9.98, "end": 10.0, "text": "はい"}]
     displayed = finalize_for_srt(cues, min_display_sec=0.7, limit=10.0)
     _record(
@@ -279,7 +277,8 @@ def test_stage0_display_minimum_can_exceed_media_limit(tmp_path):
         observed={"displayed_cues": displayed, "source_cues_after": cues},
         requirement_met=displayed[0]["end"] <= 10.0,
     )
-    assert displayed[0]["end"] == 10.03
+    assert displayed[0]["end"] == 10.0
+    assert displayed[0]["diag"]["display_timing"]["flags"] == ["MIN_DISPLAY_UNSATISFIED"]
     assert cues[0]["end"] == 10.0
 
 

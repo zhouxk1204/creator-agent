@@ -1,6 +1,15 @@
 # 04_ja_asr 日文 ASR 管线实现详解
 
 本文档描述 `04_ja_asr.bat` 背后六步管线的完整实现，供核对与调试用。
+
+**阶段1时间轴改动（代码已实现，实际音频验收尚未运行）：** 打开本次输出中的
+`<视频名>.alignment.<run_id>.srt` 检查原始对齐，配合同次
+`<视频名>.vocals.<run_id>.wav` 或原视频听看。它使用原始首词/末词时间和实际对齐输入，
+不经过质量门修复、字幕切分、过滤或静音吸附；最终 `<视频名>.srt` 仍单独输出。
+`<视频名>.asr.raw.<run_id>.txt` 保留完整识别原文，`.timing.<run_id>.json` 保留原始局部/全局词时间、
+采样窗口、修复词和最终字幕时间。异常和对齐失败会记录，比例估算不会冒充原始对齐。
+每次保存独立运行编号的音频/人声和结果，不删除工作目录。现有模型与参数不变，
+**silencedetect 现在只诊断，不再移动时间**；下文旧调参经验不能替代本次实际音频验证。
 源码位置：`src/creator_agent/asr/`（主流程）、`src/creator_agent/cli/main.py`（`ja-asr` 命令）、
 `src/creator_agent/config.py`（`JaAsrSettings`）。
 
@@ -25,8 +34,8 @@
              │     ├─ 对齐质量门 → cue 切分 → 幻觉 cue 过滤（被丢 cue 收集进结果）
              │     └─ 打印 ===ASR_RESULTS_BEGIN=== JSON ===ASR_RESULTS_END===
              │           （ok 结果含 segments + dropped + uncovered 字段）
-             ├─ boundary_check（主环境）   ffprobe + silencedetect 边界吸附
-             └─ 写 .srt / .txt / .transcript.json / .check.txt / .dropped.txt
+             ├─ boundary_check（主环境）   ffprobe + silencedetect 只诊断、不改时间
+             └─ 写原始对齐检查 + 最终 .srt / .txt / .transcript.json / .check.txt / .dropped.txt
 ```
 
 **为什么要三个 env：**
@@ -209,20 +218,16 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 2. **`detect_silences`**：ffmpeg `silencedetect=noise=-35dB:d=0.12` 跑在 **vocal stem** 上
    （伴奏里的音乐可能掩盖停顿；vocal 不可用时回退到混音 WAV）→ 真实静音区间。
    结尾没收到 `silence_end` 的开口静音在 duration 处闭合。
-3. **`refine_cues`**（纯函数，逐边独立）：
-   - cue 边落在静音 (s,e) 内 → 吸附到语音边缘：start → e − lead_in(0.08s)，
-     end → s + tail_out(0.10s)。移动量 ≤ snap_window(0.5s) 算**可信修正**（不记可疑）；
-     深静音里吸附距离超窗 → 保留原时间并记 `START_IN_SILENCE` / `END_IN_SILENCE`。
-   - cue 边落在语音中间是**正常**的（句内标点切分），只在 snap_window 内有静音边时顺手抛光，
-     从不记可疑。
-   - 语音覆盖率 < 0.3 → `NO_SPEECH`（幻觉/错对齐）。
-   - end 超视频时长（容差 0.05s）→ `EXCEEDS_VIDEO`（clamp）。
-   - 最后重排为单调、不重叠、≥0.2s。
+3. **`refine_cues`**（默认只诊断）：
+   - 保留传入的cue时间，不吸附、不扩展最短时长、不按静音修复重叠。
+   - 标记 `START_IN_SILENCE` / `END_IN_SILENCE` / `NO_SPEECH`，这些仅是检测参考，不能证明幻觉。
+   - 越界、无效范围、重叠、过短cue分别标记，原值保留，不为了满足0.2秒向前挪时间。
+   - 旧吸附函数分支只接受显式 `snap_to_silence=True`；当前 `ja-asr` 不调用该分支。
 4. 报告写 `<stem>.check.txt`；**.srt 本身保持干净**（要导入剪映核对时间轴）。
    边界检查失败只跳过该视频（保留原 segments），绝不让视频失败。
-5. 随后 `_write_outputs` 写产物：`.srt` 过 `finalize_for_srt`（配了才变），worker 结果里的
-   `dropped` → `.dropped.txt`，`uncovered` 已并入上面的 check 报告（`[UNRECOVERED_SPEECH]`）。
-   注意：**边界检查关闭时没有 .check.txt**，uncovered 清单只出现在 SUMMARY 日志里。
+5. 随后 `_write_outputs` 写原始对齐检查产物与最终字幕：`.srt` 可调整显示余量，
+   媒体结束/下一条cue的硬边界始终优先；不能满足最短显示时长则标记，不再强行扩展越界。
+   `dropped` → `.dropped.txt`，`uncovered` 并入check报告。即使检查关闭，完整raw/最终时间仍在timing JSON。
 
 ---
 
@@ -232,10 +237,19 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 
 ```
 <out_dir>/<stem>/
-├── <stem>.srt              # 日文字幕（干净，导入剪映核对时间轴；可配显示时间 polish）
+├── <stem>.srt              # 最终日文字幕（不等于原始对齐）
+├── <stem>.alignment.<run>.srt       # 原始对齐检查：每chunk首词起点/末词终点
+├── <stem>.alignment.words.<run>.srt # 原始词级检查；异常原值留在JSON
+├── <stem>.alignment.check.<run>.txt # 省略原因、原始重叠、文本变化等提示
+├── <stem>.asr.raw.<run>.txt # 完整ASR原文，区分initial/recovered
+├── <stem>.timing.<run>.json # 原始/修复/最终时间、窗口、逐块检查点与诊断
+├── <stem>.audio.<run>.wav   # 本次完整输入音频快照
+├── <stem>.vocals.<run>.wav  # 本次人声快照；只有这份人声进入VAD/ASR/对齐
+├── <stem>.final.<run>.srt   # 与原始检查对应的最终SRT归档
+├── <stem>.transcript.<run>.json # 本次最终cue转录归档
 ├── <stem>.txt              # 一段一行（带 話者X 前缀），方便阅读/diff
-├── <stem>.transcript.json  # Transcript 模型全量（含 segments 真实语音时间）
-├── <stem>.check.txt        # 边界检查报告（吸附数、可疑 cue、UNRECOVERED_SPEECH 清单）
+├── <stem>.transcript.json  # 最终cue时间，不冒充原始词时间
+├── <stem>.check.txt        # 边界诊断报告（不改时刻）
 ├── <stem>.dropped.txt      # 被幻觉过滤丢弃的 cue（仅当有丢弃时生成）
 └── <stem>.review.<时间戳>.json  # 听片标注文件：cue（id 与 srt 序号一致）+ 诊断 + question/expected
 ```
@@ -249,10 +263,10 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 对照最新 .srt 时取时间戳最新的那份。`meta.overrides` 记录当次运行的调参值，
 不同实验的结果不会搞混。
 
-**SRT 显示时间 polish**（`finalize_for_srt`，只作用在 .srt 上，transcript.json/.txt 保持
-真实语音时间）：`srt_min_display_sec` 把过短的 cue 拉到可读时长（不越过下一条 cue 起点 −20ms、
-不越媒体时长）；`srt_lead_in_sec`/`srt_tail_sec` 加提前/延后余量——边界检查开启时这两个
-**保持 0**（吸附已含 lead_in/tail_out，再开会重复加）。三项全 0 = 关闭（旧行为）。
+**SRT显示余量**只作用于最终字幕，原始对齐检查不参与。transcript保留显示优化前的cue时间，
+原始模型时间以timing JSON为准。最短显示时长不能突破媒体/下一条cue；无法满足时会留诊断。
+`boundary_check` 现在不再加提前/延后余量，相关旧参数保留兼容但不参与ja-asr改时刻。
+三项显示参数保持现有值，不为此次修复调参；即使全0也会保护最终SRT媒体边界，原值保留在JSON。
 
 `ja_asr.work_dir` 配置后，中间产物持久保留（默认 `C:\test\temps\_work`）：
 
@@ -275,12 +289,8 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 baseline。`--config <文件>` 可指定其他实验配置；无法识别的键会打印警告并忽略。
 CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 
-> 所有实验开关（`vad_threshold`/`recover_missed`/`repeat_tail_max_cps`/`srt_*`）默认保持
-> **旧行为**——不改配置跑出的结果与改动前逐字节一致，方便和 baseline 目录逐项对比。
-> 建议一次只开一项：① `vad_threshold: 0.35` → ② `recover_missed: true` →
-> ③ `repeat_tail_max_cps: 12.0` → ④ `srt_min_display_sec: 0.7`。每项重点看 SUMMARY 的
-> `speech not subtitled` 总时长、`dropped (no speech)` 数量、`chunk_recovered` 条数，
-> 以及 `.dropped.txt` 里被丢的是不是真台词。
+> 阶段1保持所有模型与配置参数值，只修复时间处理和增加原始证据，不保证最终字幕与旧版逐字节相同。
+> 原始对齐与最终字幕单独归档供同样本对比；未运行真实音频验收，历史调参经验不能作为本轮自动调参依据。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -303,14 +313,14 @@ CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 | `recover_missed` / `recover_min_sec` | true / 0.4 | 补漏 pass 开关；短于此的漏检区间不补 |
 | `recover_vad_threshold` | 0.35 | 补漏**检测**阈值（独立于主分块阈值）：调低找回弱/远语音行；补漏 chunk 的时间轴回退 + 幻觉过滤同用此阈值 |
 | `repeat_tail_max_cps` | 0.0 | >0 启用语速判据（建议试 12.0）：字/秒 ≤ 此值的真实重复（「うんうん」）不砍；0 = 一律砍 |
-| `srt_min_display_sec` / `srt_lead_in_sec` / `srt_tail_sec` | 0.0 / 0.0 / 0.0 | .srt 显示时间 polish。边界检查开启时 lead/tail 保持 0 避免重复加余量 |
+| `srt_min_display_sec` / `srt_lead_in_sec` / `srt_tail_sec` | 0.0 / 0.0 / 0.0 | 最终SRT显示余量；硬边界优先；原始对齐检查不使用 |
 | `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 3.0 / 8.0 / 15.0 | 分块目标区间 + 硬上限 |
 | `asr_max_new_tokens` | 1024 | ASR 生成上限 |
 | `align_pad_sec` / `align_min_coverage` | 0.3 / 0.5 | 对齐窗口 padding（也是词允许越界的最远距离）/ 质量门覆盖率下限 |
-| `boundary_check` | true | 边界检查总开关 |
-| `boundary_snap_sec` | 0.5 | cue 边允许移动去够静音的最大距离 |
+| `boundary_check` | true | 边界诊断开关，ja-asr不吸附时间 |
+| `boundary_snap_sec` | 0.5 | 旧显式吸附分支参数；ja-asr诊断模式不使用 |
 | `boundary_silence_db` / `boundary_min_silence_sec` | -35.0 / 0.12 | silencedetect 噪声门限 / 最短静音 |
-| `boundary_lead_in_sec` / `boundary_tail_sec` | 0.08 / 0.10 | 字幕比语音早出现/晚消失的余量 |
+| `boundary_lead_in_sec` / `boundary_tail_sec` | 0.08 / 0.10 | 旧显式吸附余量；ja-asr不使用，也不是真实发音边界 |
 | `verbose` | false | worker 调试日志（原始 VAD 段、词时间、cue 明细） |
 
 ---

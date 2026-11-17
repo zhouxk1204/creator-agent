@@ -9,14 +9,10 @@ main env with no heavy deps (ffmpeg/ffprobe only):
    means ffmpeg truncated the audio and the whole timeline is short).
 2. ``detect_silences`` — ffmpeg ``silencedetect`` over the vocal stem (falls
    back to the extracted mix) to get true silence intervals.
-3. ``refine_cues`` — pure function: cue edges that sit inside a silence (or
-   within ``snap_window`` of a silence edge) are snapped to the speech
-   onset/offset (start = onset - lead_in, end = offset + tail_out); edges
-   landing mid-speech are normal (cues split at punctuation inside an
-   utterance) and left alone. Suspicious cases are flagged for human review:
-   ``START_IN_SILENCE`` / ``END_IN_SILENCE`` (edge deep inside a silence),
-   ``NO_SPEECH`` (cue covers almost no speech), ``EXCEEDS_VIDEO`` (clamped to
-   the video duration).
+3. ``refine_cues`` — diagnose cue ranges without changing their times by
+   default. Silencedetect is a reference, not ForcedAligner or a pronunciation
+   boundary. Legacy silence snapping is an explicit function-only opt-in.
+   Suspect ranges are retained and flagged for review.
 
 The .srt itself stays clean (it is imported into 剪映 for eyeballing); flags
 go to a separate ``<stem>.check.txt`` report written by the caller.
@@ -25,6 +21,7 @@ go to a separate ``<stem>.check.txt`` report written by the caller.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -34,13 +31,14 @@ from creator_agent.asr.audio_extractor import find_ffmpeg
 
 logger = logging.getLogger(__name__)
 
-# Flag reasons (stable strings — they appear in logs and the .check.txt report).
-# A snap that succeeds within snap_window is a TRUSTED correction, not a
-# suspect — flags are reserved for cases the check could not confidently fix.
-START_IN_SILENCE = "START_IN_SILENCE"  # cue starts deep inside a silence (couldn't snap to the onset)
-END_IN_SILENCE = "END_IN_SILENCE"  # cue ends deep inside a silence (subtitle hangs over silence)
-NO_SPEECH = "NO_SPEECH"  # cue covers almost no speech at all (hallucination / misalignment)
-EXCEEDS_VIDEO = "EXCEEDS_VIDEO"  # cue extends past the video duration (clamped)
+# Flag reasons are diagnostic strings, not proof of a hallucination.
+START_IN_SILENCE = "START_IN_SILENCE"
+END_IN_SILENCE = "END_IN_SILENCE"
+NO_SPEECH = "NO_SPEECH"
+EXCEEDS_VIDEO = "EXCEEDS_VIDEO"
+INVALID_CUE_TIMING = "INVALID_CUE_TIMING"
+CUE_OVERLAP = "CUE_OVERLAP"
+SHORT_CUE = "SHORT_CUE"
 AUDIO_VIDEO_MISMATCH = "AUDIO_VIDEO_MISMATCH"  # extracted audio shorter than the video (truncated?)
 
 _AV_MISMATCH_SEC = 1.0  # audio shorter than video by more than this -> AUDIO_VIDEO_MISMATCH
@@ -159,8 +157,10 @@ def refine_cues(
     lead_in: float = 0.08,
     tail_out: float = 0.10,
     min_dur: float = 0.2,
+    *,
+    snap_to_silence: bool = False,
 ) -> tuple[list[dict], list[dict]]:
-    """Snap cue edges to nearby silence-implied speech edges; flag suspects.
+    """Diagnose cue edges; keep their values unless legacy snapping is explicit.
 
     ``cues`` = ``[{"start", "end", "text", ...}, ...]`` (absolute seconds, time
     order); extra keys (e.g. ``speaker``) are preserved. Returns ``(refined,
@@ -168,6 +168,10 @@ def refine_cues(
     suspicious cues, plus a single ``{"index": None, ...}`` entry when the
     extracted audio is shorter than the video (AUDIO_VIDEO_MISMATCH).
 
+    Default: flags are measured on the input cues. No clamping, minimum
+    duration expansion, silence snapping, or overlap repair is performed.
+
+    With ``snap_to_silence=True`` only, the legacy rules below apply:
     Snapping rules (per edge, independent) — a cue edge landing mid-speech is
     NORMAL (cues split at punctuation inside an utterance), so mid-speech
     edges are only polished when a silence edge lies within ``snap_window``,
@@ -201,6 +205,33 @@ def refine_cues(
                 f"than video {video_duration:.3f}s — extraction may be truncated",
             }
         )
+
+    if not snap_to_silence:
+        prev_end = 0.0
+        for i, cue in enumerate(cues):
+            start, end = float(cue["start"]), float(cue["end"])
+            reasons, detail = [], []
+            if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                reasons.append(INVALID_CUE_TIMING)
+                detail.append(f"invalid original range {start!r}-{end!r}; kept unchanged")
+            else:
+                if _silence_containing(silences, start):
+                    reasons.append(START_IN_SILENCE)
+                if _silence_containing(silences, end):
+                    reasons.append(END_IN_SILENCE)
+                if _speech_coverage(start, end, silences) < _MIN_SPEECH_COV:
+                    reasons.append(NO_SPEECH)
+                if end - start < min_dur:
+                    reasons.append(SHORT_CUE)
+                if start < prev_end - 1e-3:
+                    reasons.append(CUE_OVERLAP)
+                prev_end = max(prev_end, end)
+            if video_duration is not None and end > video_duration + _EXCEEDS_TOLERANCE:
+                reasons.append(EXCEEDS_VIDEO)
+                detail.append(f"original end {end:.3f}s past video {video_duration:.3f}s; kept unchanged")
+            if reasons:
+                flags.append({"index": i, "reasons": sorted(set(reasons)), "detail": "; ".join(detail)})
+        return [dict(c) for c in cues], flags
 
     def snap_edge(t: float, is_start: bool) -> tuple[float, str | None, str]:
         """Returns (new_t, flag_reason|None, detail)."""
@@ -262,11 +293,15 @@ def refine_cues(
     # Re-enforce monotonic, non-overlapping, non-empty ranges (snapping two
     # adjacent cues into the same gap could otherwise make them collide).
     prev_end = 0.0
-    for cue in refined:
-        cue["start"] = max(cue["start"], prev_end)
-        cue["end"] = max(cue["end"], cue["start"] + min_dur)
-        cue["end"] = min(cue["end"], limit)
-        cue["start"] = min(cue["start"], max(0.0, cue["end"] - min_dur))
+    for idx, cue in enumerate(refined):
+        cue["start"] = min(max(cue["start"], prev_end), limit)
+        cue["end"] = min(max(cue["end"], cue["start"] + min_dur), limit)
+        if cue["end"] - cue["start"] < min_dur - 1e-9:
+            existing = next((f for f in flags if f["index"] == idx), None)
+            if existing is None:
+                flags.append({"index": idx, "reasons": [SHORT_CUE], "detail": "media limit prevents min_dur"})
+            else:
+                existing["reasons"] = sorted(set(existing["reasons"] + [SHORT_CUE]))
         prev_end = cue["end"]
     return refined, flags
 
@@ -297,7 +332,8 @@ def format_check_report(
         f"边界检查报告: {stem}",
         f"video duration : {video_dur}",
         f"audio duration : {ts(audio_duration)}",
-        f"cues           : {cue_count}（吸附调整 {snapped_count} 条，可疑 {suspect} 条）",
+        f"cues           : {cue_count}（时间改动 {snapped_count} 条，可疑 {suspect} 条）",
+        "mode           : diagnostic only in ja-asr; silence is not a forced-alignment boundary",
         "",
     ]
     video_flags = [f for f in flags if f["index"] is None]
@@ -316,5 +352,5 @@ def format_check_report(
         for s, e in uncovered:
             lines.append(f"[UNRECOVERED_SPEECH] {ts(float(s))} --> {ts(float(e))} ({float(e) - float(s):.1f}s)")
     if not flags and not uncovered:
-        lines.append("所有 cue 边界均落在静音附近，无可疑项。")
+        lines.append("无可疑项：未发现上述诊断异常；不代表原始对齐或识别已通过人工验收。")
     return "\n".join(lines) + "\n"

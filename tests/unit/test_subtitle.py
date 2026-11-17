@@ -125,3 +125,31 @@ def test_finalize_for_srt_lead_tail_and_limit():
     # Extra keys survive.
     out = finalize_for_srt([{"start": 1.0, "end": 2.0, "text": "t", "speaker": "話者A"}], tail_sec=0.1)
     assert out[0]["speaker"] == "話者A"
+
+
+def test_finalize_short_last_cue_stays_inside_media_and_records_unmet_minimum():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    original = [_cue(9.98, 10.0, "はい")]
+    out = finalize_for_srt(original, min_display_sec=0.7, limit=10.0)
+    assert (out[0]["start"], out[0]["end"]) == (9.98, 10.0)
+    assert "MIN_DISPLAY_UNSATISFIED" in out[0]["diag"]["display_timing"]["flags"]
+    assert original == [_cue(9.98, 10.0, "はい")]
+
+
+def test_finalize_close_cues_never_overlap_to_satisfy_minimum():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    out = finalize_for_srt([_cue(1.0, 1.01), _cue(1.03, 1.2)], min_display_sec=0.7)
+    assert out[0]["end"] <= out[1]["start"]
+    assert out[0]["end"] < 1.05
+
+
+def test_finalize_media_clamp_is_display_only_even_with_margins_off():
+    from creator_agent.asr.subtitle import finalize_for_srt
+
+    original = [_cue(9.5, 10.3)]
+    out = finalize_for_srt(original, limit=10.0)
+    assert out[0]["end"] == 10.0
+    assert original[0]["end"] == 10.3
+    assert out[0]["diag"]["display_timing"]["source_end"] == 10.3

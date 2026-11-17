@@ -46,14 +46,14 @@ def _reasons(flags, idx):
 
 def test_snap_start_inside_silence_moves_to_onset():
     # cue starts mid-silence -> start snaps to silence_end - lead_in.
-    cues, flags = refine_cues([_cue(5.7, 8.0)], [(5.5, 6.0)], audio_duration=10.0, lead_in=0.1)
+    cues, flags = refine_cues([_cue(5.7, 8.0)], [(5.5, 6.0)], audio_duration=10.0, lead_in=0.1, snap_to_silence=True)
     assert cues[0]["start"] == 5.9  # 6.0 - 0.1
     assert not any(f["index"] == 0 for f in flags)
 
 
 def test_snap_end_inside_silence_pulls_back_to_offset():
     # cue ends mid-silence -> end snaps to silence_start + tail_out.
-    cues, flags = refine_cues([_cue(1.3, 5.8)], [(5.5, 6.0)], audio_duration=10.0, tail_out=0.1)
+    cues, flags = refine_cues([_cue(1.3, 5.8)], [(5.5, 6.0)], audio_duration=10.0, tail_out=0.1, snap_to_silence=True)
     assert cues[0]["end"] == 5.6  # 5.5 + 0.1
     assert not any(f["index"] == 0 for f in flags)
 
@@ -61,13 +61,13 @@ def test_snap_end_inside_silence_pulls_back_to_offset():
 def test_mid_speech_start_polished_to_nearby_onset():
     # cue starts just after the real onset (mid-speech) -> snaps back to
     # silence_end - lead_in; mid-speech edges are never flagged.
-    cues, flags = refine_cues([_cue(1.35, 5.2)], [(0.0, 1.24)], audio_duration=10.0, lead_in=0.1)
+    cues, flags = refine_cues([_cue(1.35, 5.2)], [(0.0, 1.24)], audio_duration=10.0, lead_in=0.1, snap_to_silence=True)
     assert cues[0]["start"] == 1.14  # 1.24 - 0.1
     assert not any(f["index"] == 0 for f in flags)
 
 
 def test_mid_speech_end_extended_to_nearby_offset():
-    cues, flags = refine_cues([_cue(1.3, 5.3)], [(5.5, 6.0)], audio_duration=10.0, tail_out=0.1)
+    cues, flags = refine_cues([_cue(1.3, 5.3)], [(5.5, 6.0)], audio_duration=10.0, tail_out=0.1, snap_to_silence=True)
     assert cues[0]["end"] == 5.6  # 5.5 + 0.1
     # a successful snap within the window is a trusted correction — no flag
     assert not any(f["index"] == 0 for f in flags)
@@ -99,7 +99,9 @@ def test_end_deep_in_silence_kept_and_flagged():
 def test_large_snap_within_window_trusted_not_flagged():
     # start sits mid-silence, 0.5s before its end; window 0.8 -> snaps to the
     # onset. A snap that succeeds within the window is trusted — no flag.
-    cues, flags = refine_cues([_cue(5.7, 8.0)], [(5.5, 6.3)], audio_duration=10.0, snap_window=0.8, lead_in=0.1)
+    cues, flags = refine_cues(
+        [_cue(5.7, 8.0)], [(5.5, 6.3)], audio_duration=10.0, snap_window=0.8, lead_in=0.1, snap_to_silence=True
+    )
     assert cues[0]["start"] == 6.2
     assert not any(f["index"] == 0 for f in flags)
 
@@ -111,7 +113,9 @@ def test_no_speech_flagged():
 
 
 def test_exceeds_video_clamped_and_flagged():
-    cues, flags = refine_cues([_cue(8.0, 10.5)], [], audio_duration=11.0, video_duration=10.0, tail_out=0.0)
+    cues, flags = refine_cues(
+        [_cue(8.0, 10.5)], [], audio_duration=11.0, video_duration=10.0, tail_out=0.0, snap_to_silence=True
+    )
     assert cues[0]["end"] <= 10.0
     assert EXCEEDS_VIDEO in _reasons(flags, 0)
 
@@ -126,7 +130,7 @@ def test_no_overlap_after_snap():
     # Two cues snap into the same gap; they must not overlap afterwards.
     silences = [(5.0, 6.0)]
     cues = [_cue(4.9, 5.5, "a"), _cue(5.6, 8.0, "b")]
-    refined, _ = refine_cues(cues, silences, audio_duration=10.0, lead_in=0.1, tail_out=0.1)
+    refined, _ = refine_cues(cues, silences, audio_duration=10.0, lead_in=0.1, tail_out=0.1, snap_to_silence=True)
     assert refined[0]["end"] <= refined[1]["start"]
     for c in refined:
         assert c["end"] > c["start"]
@@ -150,3 +154,30 @@ def test_format_check_report_uncovered():
     # No flags AND no uncovered -> clean message (unchanged old behavior).
     report = format_check_report("ep1", 100.0, 100.0, 10, 3, [], [])
     assert "无可疑项" in report and "UNRECOVERED" not in report
+
+
+def test_default_diagnostic_keeps_short_cues_and_flags_instead_of_snapping():
+    from creator_agent.asr.boundary_check import SHORT_CUE
+
+    original = [_cue(1.35, 2.0), _cue(9.95, 10.0, "うん")]
+    refined, flags = refine_cues(original, [(0.0, 1.24)], audio_duration=10.0)
+    assert refined == original
+    assert SHORT_CUE in _reasons(flags, 1)
+
+
+def test_default_diagnostic_preserves_invalid_ranges():
+    from creator_agent.asr.boundary_check import CUE_OVERLAP, INVALID_CUE_TIMING
+
+    original = [_cue(1.0, 2.0), _cue(1.5, 3.0), _cue(4.0, 4.0)]
+    refined, flags = refine_cues(original, [], audio_duration=5.0)
+    assert refined == original
+    assert CUE_OVERLAP in _reasons(flags, 1)
+    assert INVALID_CUE_TIMING in _reasons(flags, 2)
+
+
+def test_legacy_snap_minimum_does_not_move_start_back_at_media_end():
+    original = [_cue(9.5, 9.9), _cue(9.95, 10.0)]
+    refined, _ = refine_cues(original, [], audio_duration=10.0, snap_to_silence=True)
+    assert refined[1]["start"] == 9.95
+    assert refined[1]["end"] == 10.0
+    assert refined[0]["end"] <= refined[1]["start"]

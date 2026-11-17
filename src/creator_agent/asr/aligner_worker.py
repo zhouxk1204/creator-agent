@@ -77,17 +77,23 @@ def _load_aligner(model_id: str, device: str):
     return Qwen3ForcedAligner.from_pretrained(model_id, dtype=dtype, device_map=device)
 
 
-def _align_one(aligner, job: dict, language: str) -> list | None:
-    """Word-level [(text, start, end)] in ABSOLUTE seconds (chunk_start added).
-
-    Returns None on empty/failed alignment — caller degrades that chunk to
-    proportional timing. Times from qwen_asr are relative to the chunk.
-    """
+def _align_details(aligner, job: dict, language: str) -> dict:
+    """Keep local model values as well as global values; add the sample offset once."""
     res = aligner.align(audio=job["wav"], text=job["text"], language=language)
-    items = res[0]
+    local = [(w.text, float(w.start_time), float(w.end_time)) for w in res[0]]
     off = float(job["chunk_start"])
-    words = [(w.text, float(w.start_time) + off, float(w.end_time) + off) for w in items]
-    return words or None
+    words = [(text, start + off, end + off) for text, start, end in local]
+    return {
+        "words": words or None,
+        "local_words": local,
+        "offset_sec": off,
+        "window": job.get("window"),
+    }
+
+
+def _align_one(aligner, job: dict, language: str) -> list | None:
+    """Backward-compatible word list in absolute seconds (no timing repairs)."""
+    return _align_details(aligner, job, language)["words"]
 
 
 def main() -> int:
@@ -109,7 +115,20 @@ def main() -> int:
         _progress("ForcedAligner 加载完成")
     except Exception as e:  # model load failure -> all chunks degrade, still emit JSON
         traceback.print_exc()
-        _emit([{"chunk_id": j["chunk_id"], "ok": False, "words": None, "error": f"model load: {e}"} for j in jobs])
+        failed = [
+            {
+                "chunk_id": j["chunk_id"],
+                "ok": False,
+                "words": None,
+                "local_words": None,
+                "window": j.get("window"),
+                "error": f"model load: {e}",
+            }
+            for j in jobs
+        ]
+        for rec in failed:
+            print(_CHUNK_MARKER + json.dumps(rec, ensure_ascii=False), flush=True)
+        _emit(failed)
         return 0
 
     results: list[dict] = []
@@ -117,14 +136,22 @@ def main() -> int:
     for i, job in enumerate(jobs):
         t0 = time.monotonic()
         try:
-            words = _align_one(aligner, job, args.language)
+            details = _align_details(aligner, job, args.language)
+            words = details["words"]
             if words is None:
                 _warn(f"chunk {job['chunk_id']}: no words aligned; proportional timing")
-            rec = {"chunk_id": job["chunk_id"], "ok": words is not None, "words": words}
+            rec = {"chunk_id": job["chunk_id"], "ok": words is not None, **details}
             _progress(f"  对齐 {i + 1}/{n}（{time.monotonic() - t0:.1f}s）：{len(words) if words else 0} 词")
         except Exception as e:
             _warn(f"chunk {job['chunk_id']} align failed: {e}")
-            rec = {"chunk_id": job["chunk_id"], "ok": False, "words": None, "error": str(e)}
+            rec = {
+                "chunk_id": job["chunk_id"],
+                "ok": False,
+                "words": None,
+                "local_words": None,
+                "window": job.get("window"),
+                "error": str(e),
+            }
         results.append(rec)
         # Stream this chunk's result immediately: the caller quality-checks
         # and cue-splits per chunk as the pipeline advances.

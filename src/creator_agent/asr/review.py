@@ -78,11 +78,15 @@ def build_review(
     srt_dicts: list[dict],
     dropped: list[dict],
     uncovered: list,
+    run_id: str | None = None,
+    timing_audit_path: str | None = None,
 ) -> dict:
     """Assemble the review structure.
 
-    ``segments`` = real speech times (post boundary check); ``srt_dicts`` =
-    the same cues after .srt display polish, same order — the two are zipped.
+    ``segments`` = post-split/overlap cue times, NOT raw ForcedAligner words;
+    the legacy ``speech_start/end`` fields retain that meaning. ``srt_dicts`` =
+    the same cues after display bounds/margins, same order. Raw measurements
+    live in the separately linked timing checkpoint.
     ``id`` matches the .srt cue number exactly (write_srt numbers only cues
     with non-empty text, sequentially), so "cue #N in 剪映" == "id N here".
     """
@@ -91,6 +95,8 @@ def build_review(
         if not str(disp.get("text", "")).strip():
             continue  # write_srt skips these; keep ids aligned
         diag = dict(seg.get("diag") or {})
+        if (disp.get("diag") or {}).get("display_timing"):
+            diag["display_timing"] = disp["diag"]["display_timing"]
         diag.setdefault("boundary", None)
         cues.append(
             {
@@ -113,6 +119,9 @@ def build_review(
             "model": model,
             "overrides": overrides,
             "summary": stats or {},
+            "run_id": run_id,
+            "timing_audit_path": timing_audit_path,
+            "speech_fields_meaning": "postprocessed cue times, not raw aligner measurements",
         },
         "cues": cues,
         "dropped": [

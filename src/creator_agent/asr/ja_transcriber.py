@@ -14,6 +14,7 @@ batch, so pass all files in one call.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -27,6 +28,7 @@ from typing import TYPE_CHECKING
 from creator_agent.asr import boundary_check, review
 from creator_agent.asr.audio_extractor import extract_audio
 from creator_agent.asr.subtitle import finalize_for_srt, write_srt
+from creator_agent.asr.timing_audit import inspection_cues, new_run_id, raw_asr_text, save_checkpoint
 from creator_agent.models.transcript import Transcript, TranscriptSegment
 
 if TYPE_CHECKING:
@@ -120,7 +122,18 @@ class JaTranscriber:
                 try:
                     apath = audio_dir / f"{vid}.wav"
                     extract_audio(vpath, apath, self._settings.ffmpeg_path, force=force)
-                    jobs.append({"video_id": vid, "audio_path": str(apath)})
+                    run_id = new_run_id()
+                    target = Path(out_dir) / vpath.stem if out_dir else vpath.parent
+                    target.mkdir(parents=True, exist_ok=True)
+                    jobs.append(
+                        {
+                            "video_id": vid,
+                            "audio_path": str(apath),
+                            "run_id": run_id,
+                            "source_video": str(vpath.resolve()),
+                            "timing_audit_path": str((target / f"{vpath.stem}.timing.{run_id}.json").resolve()),
+                        }
+                    )
                     extracted.append((vpath, vid))
                 except Exception as e:  # one bad video must not block the rest
                     logger.warning("Audio extraction failed for %s: %s", vpath, e)
@@ -133,9 +146,8 @@ class JaTranscriber:
             # 2. Invoke the worker (models load once for the whole batch).
             results = self._run_worker(jobs, out_dir)
 
-            # 2.5 Boundary check against the ORIGINAL video+audio: snap cue
-            # edges to true silences and flag suspects. Must run here, before
-            # the temp audio dir is cleaned up below.
+            # 2.5 Diagnose the existing cue times against the complete media.
+            # Never substitute silencedetect edges for aligner measurements.
             self._check_boundaries(results, extracted, audio_dir)
         finally:
             if tmp is not None:
@@ -155,6 +167,13 @@ class JaTranscriber:
                 transcribed += 1
                 logger.info("JA ASR done for %s (%d segments).", vpath.name, len(r.get("segments") or []))
             except Exception as e:
+                audit = r.get("timing_audit")
+                if audit:
+                    audit["output_error"] = str(e)
+                    try:
+                        save_checkpoint(audit, "OUTPUT_FAILED")
+                    except Exception:
+                        logger.exception("Failed to preserve output failure for %s", vpath)
                 failed.append((vpath.name, str(e)))
                 logger.exception("Failed to persist transcript for %s", vpath)
 
@@ -168,12 +187,10 @@ class JaTranscriber:
         extracted: list[tuple[Path, str]],
         audio_dir: Path,
     ) -> None:
-        """Snap cue edges to true silences (original video+audio boundary check).
+        """Attach silence diagnostics without replacing measured cue times.
 
-        Mutates each ok result in place: ``segments`` are replaced by the
-        refined cues and a ``boundary_report`` string is attached for
-        ``_write_outputs``. Failures only skip the check for that video
-        (original segments kept) — they never fail the video.
+        Failures skip only this check. Original segments and the status/error
+        remain available in the timing checkpoint for that run.
         """
         s = self._settings
         if not getattr(s, "boundary_check", False):
@@ -184,6 +201,11 @@ class JaTranscriber:
             if not r.get("ok"):
                 continue
             segments = r.get("segments") or []
+            r["boundary_diagnostics"] = {
+                "status": "STARTED" if segments else "NO_CUES",
+                "mode": "diagnostic_only",
+                "input_segments": copy.deepcopy(segments),
+            }
             if not segments:
                 continue
             try:
@@ -212,38 +234,38 @@ class JaTranscriber:
                     snap_window=s.boundary_snap_sec,
                     lead_in=s.boundary_lead_in_sec,
                     tail_out=s.boundary_tail_sec,
+                    snap_to_silence=False,
                 )
-                snapped = sum(
-                    1
-                    for old, new in zip(segments, refined)
-                    if abs(old["start"] - new["start"]) > 1e-3 or abs(old["end"] - new["end"]) > 1e-3
-                )
-                # Merge the boundary outcome into each cue's diag (review.json):
-                # which edges snapped, plus any suspect-flag reasons.
                 flag_by_idx = {f["index"]: f["reasons"] for f in flags if f["index"] is not None}
-                for i, (old, new) in enumerate(zip(segments, refined)):
-                    diag = new.setdefault("diag", {})
-                    actions = []
-                    if abs(old["start"] - new["start"]) > 1e-3:
-                        actions.append("snapped_start")
-                    if abs(old["end"] - new["end"]) > 1e-3:
-                        actions.append("snapped_end")
-                    diag["boundary"] = "+".join(actions) if actions else None
+                for i, new in enumerate(refined):
+                    diag = dict(new.get("diag") or {})
+                    diag["boundary"] = "diagnostic_only"
                     if i in flag_by_idx:
-                        diag["flags"] = flag_by_idx[i]
+                        diag["flags"] = sorted(set(diag.get("flags", []) + flag_by_idx[i]))
+                    new["diag"] = diag
                 r["segments"] = refined
+                r["boundary_diagnostics"].update(
+                    {
+                        "status": "COMPLETE",
+                        "audio_path": str(audio_path),
+                        "silences": silences,
+                        "video_duration": video_duration,
+                        "audio_duration": audio_duration,
+                        "flags": flags,
+                    }
+                )
                 suspect = sum(1 for f in flags if f["index"] is not None)
                 r["boundary_report"] = boundary_check.format_check_report(
                     vid,
                     video_duration,
                     audio_duration,
                     len(refined),
-                    snapped,
+                    0,
                     flags,
                     refined,
                     uncovered=r.get("uncovered"),
                 )
-                _progress(f"边界检查 {vid}：{len(refined)} 条（吸附 {snapped}，可疑 {suspect}）")
+                _progress(f"边界诊断 {vid}：{len(refined)} 条（保留原时间，可疑 {suspect}）")
                 if suspect:
                     for f in flags:
                         if f["index"] is not None:
@@ -253,6 +275,7 @@ class JaTranscriber:
                                 f"{cue['start']:.2f}-{cue['end']:.2f} {f['detail']}"
                             )
             except Exception as e:  # keep the original segments on any failure
+                r["boundary_diagnostics"].update({"status": "FAILED", "error": str(e)})
                 logger.warning("Boundary check failed for %s: %s", vpath, e)
                 _progress(f"  ! 边界检查跳过（{vpath.name}: {e}）")
 
@@ -378,6 +401,11 @@ class JaTranscriber:
         target_dir = Path(out_dir) / vpath.stem if out_dir else vpath.parent
         target_dir.mkdir(parents=True, exist_ok=True)
         stem = vpath.stem
+        audit = r.get("timing_audit")
+        if audit:
+            audit["boundary_check"] = copy.deepcopy(r.get("boundary_diagnostics") or {"status": "DISABLED"})
+            audit["final_segments"] = copy.deepcopy(r.get("segments") or [])
+            self._write_inspection_outputs(target_dir, stem, audit)
 
         segs = [TranscriptSegment(**s) for s in (r.get("segments") or [])]
         transcript = Transcript(
@@ -393,9 +421,8 @@ class JaTranscriber:
         # Segmented text: one segment per line for easy reading / diffing.
         lines = [f"{s.speaker}: {s.text}" if s.speaker else s.text for s in segs if s.text.strip()]
         (target_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        # The .srt gets display-time polish (min display duration / lead/tail
-        # margins) when configured; transcript.json + .txt keep the real
-        # speech times untouched.
+        # Display changes are recorded separately; the transcript's cue times
+        # are post-split times, not a replacement for raw aligner words.
         st = self._settings
         srt_dicts = finalize_for_srt(
             [dict(s) for s in (r.get("segments") or [])],
@@ -405,6 +432,13 @@ class JaTranscriber:
             limit=r.get("duration_sec"),
         )
         write_srt([TranscriptSegment(**s) for s in srt_dicts], target_dir / f"{stem}.srt")
+        if audit:
+            run_id = audit["run_id"]
+            write_srt([TranscriptSegment(**s) for s in srt_dicts], target_dir / f"{stem}.final.{run_id}.srt")
+            (target_dir / f"{stem}.transcript.{run_id}.json").write_text(
+                transcript.model_dump_json(indent=2), encoding="utf-8"
+            )
+            audit["final_srt_cues"] = copy.deepcopy(srt_dicts)
         # Hallucination-filtered cues, so "was the drop a hallucination or a
         # real line?" is answerable after the run.
         dropped = r.get("dropped") or []
@@ -433,9 +467,45 @@ class JaTranscriber:
                 srt_dicts=srt_dicts,
                 dropped=dropped,
                 uncovered=r.get("uncovered") or [],
+                run_id=audit.get("run_id") if audit else None,
+                timing_audit_path=audit.get("checkpoint_path") if audit else None,
             )
             out = review.write_review(target_dir, stem, rv)
             _progress(f"review 文件已生成：{out.name}")
+        if audit:
+            save_checkpoint(audit, "OUTPUT_COMPLETE")
+
+    @staticmethod
+    def _write_inspection_outputs(target_dir: Path, stem: str, audit: dict) -> None:
+        if not audit.get("run_id"):
+            audit["run_id"] = new_run_id()
+        run_id = audit["run_id"]
+        if not audit.get("checkpoint_path"):
+            audit["checkpoint_path"] = str(target_dir / f"{stem}.timing.{run_id}.json")
+        chunks, words, warnings = inspection_cues(audit)
+        audit["inspection"] = {
+            "time_source": "raw_forced_aligner; ungated; no proportional substitutes",
+            "chunk_cues": chunks,
+            "word_cues": words,
+            "warnings": warnings,
+        }
+        # Persist raw data BEFORE any playable export: unrenderable times are
+        # retained here even if an SRT renderer/player cannot show them.
+        save_checkpoint(audit, "INSPECTION_READY")
+        (target_dir / f"{stem}.asr.raw.{run_id}.txt").write_text(raw_asr_text(audit), encoding="utf-8")
+        readable = target_dir / f"{stem}.alignment.{run_id}.srt"
+        write_srt([TranscriptSegment(**c) for c in chunks], readable)
+        write_srt([TranscriptSegment(**c) for c in words], target_dir / f"{stem}.alignment.words.{run_id}.srt")
+        lines = [
+            "原始对齐检查：不是最终排版字幕。每条使用原始首词起点/末词终点，文字为实际对齐输入。",
+            f"run_id: {run_id}",
+            f"readable cues: {len(chunks)}; word cues: {len(words)}; warnings: {len(warnings)}",
+            "异常时间未拉伸或删除原始记录；不能播放的范围只从检查SRT省略，详见timing JSON。",
+            "比例回退不进入原始对齐检查SRT。检查SRT为空不代表没有对白。",
+        ]
+        lines.extend(str(w) for w in warnings)
+        (target_dir / f"{stem}.alignment.check.{run_id}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _progress(f"原始对齐检查：{readable.name}（{len(chunks)} 条，{len(warnings)} 项需查看记录）")
 
     @staticmethod
     def _unique_id(stem: str, used: set[str]) -> str:

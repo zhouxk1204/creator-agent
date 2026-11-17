@@ -31,8 +31,8 @@ rem   2. separate vocals     BS-RoFormer (audio-separator)
 rem   3. recognize Japanese  Qwen3-ASR-1.7B (JA-Anime-Galgame fine-tune) over VAD speech chunks
 rem   4. word-level align    Qwen3-ForcedAligner (separate conda env subprocess)
 rem   5. boundary check      vs original video+audio: ffprobe duration check,
-rem                          cue start/end snapped to real silence, suspicious
-rem                          boundaries written to <video>.check.txt
+rem                          diagnostic only; cue timestamps are not snapped.
+rem                          Suspects are written to <video>.check.txt.
 rem   6. write Japanese SRT  <video>.srt (kept clean; import into JianYing
 rem                          to check the timeline)
 rem
@@ -68,8 +68,10 @@ echo.
 if "%~1"=="" (
     echo  Double-click = ASR + boundary check for every video in C:\test\temps\
     echo  Outputs      -^> Desktop\ja_asr_^<timestamp^>\  ^(this run: %OUTDIR%^)
-    echo    ^<name^>.srt        Japanese subtitles ^(import into JianYing to check the timeline^)
-    echo    ^<name^>.check.txt  suspicious-boundary report
+    echo    ^<name^>.alignment.^<run^>.srt  Raw alignment inspection ^(open this first^)
+    echo    ^<name^>.srt        Final Japanese subtitles
+    echo    ^<name^>.check.txt  diagnostic-boundary report
+    echo    ^<name^>.timing.^<run^>.json    Raw ASR and local/global word times
     echo  Intermediates ^(mix + vocals + instrumental^) kept in C:\test\temps\_work.
     echo  Already-done videos are skipped automatically.
     echo  ^(Add --translate yourself if you also want .zh.srt.^)
@@ -82,7 +84,7 @@ set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
 if not "%RC%"=="0" echo  FAILED ^(exit code %RC%^) - see the error above.
-if "%RC%"=="0" echo  Done! Import the .srt into JianYing to check the timeline.
+if "%RC%"=="0" echo  Done! Open the .alignment.^<run^>.srt first to inspect raw alignment.
 echo ========================================
 pause >nul
 exit /b %RC%

@@ -6,6 +6,7 @@ both the pipeline and standalone tools.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -78,30 +79,59 @@ def finalize_for_srt(
     the real speech times). Pure function over cue dicts ({"start", "end", ...},
     time order); extra keys (text, speaker) are preserved.
 
-    - ``lead_in_sec`` / ``tail_sec``: show each cue a bit earlier / longer.
-      Keep these 0 when the boundary check already snapped edges with its own
-      lead_in/tail_out margins — enabling both would double the margin.
-    - ``min_display_sec``: stretch cues too short to read.
-    Every cue still ends before the next cue's (adjusted) start minus 20ms,
-    and is clamped to ``limit`` (media duration) when given. All-zero params
-    return the input unchanged (identity = old behavior).
+    - ``lead_in_sec`` / ``tail_sec``: show each cue a bit earlier / longer;
+      these are display margins, not measured speech boundaries.
+    - ``min_display_sec``: stretch cues only within the available display
+      budget. Media end and the next cue always win over minimum duration.
+    No original cue is mutated. Display changes and unmet durations are
+    recorded in ``diag.display_timing``. With no margins and no required
+    bounds corrections, return the input unchanged.
     """
-    if not cues or (min_display_sec <= 0 and lead_in_sec <= 0 and tail_sec <= 0):
+    if not cues:
+        return cues
+    enabled = min_display_sec > 0 or lead_in_sec > 0 or tail_sec > 0
+    if not enabled and limit is None:
         return cues
     starts = [max(0.0, float(c["start"]) - lead_in_sec) for c in cues]
+    if limit is not None:
+        starts = [min(s, max(0.0, limit)) for s in starts]
     out: list[dict] = []
+    changed = False
     for i, c in enumerate(cues):
+        original_start, original_end = float(c["start"]), float(c["end"])
+        if not math.isfinite(original_start) or not math.isfinite(original_end):
+            raise ValueError(f"Non-finite cue timing at index {i}; original values remain in the timing checkpoint")
         s = starts[i]
-        e = float(c["end"]) + tail_sec
-        if min_display_sec > 0 and e - s < min_display_sec:
-            e = s + min_display_sec
+        e = original_end + tail_sec
+        if enabled:
+            e = max(e, s + max(min_display_sec, 0.05))
+        ceiling = max(0.0, limit) if limit is not None else float("inf")
         if i + 1 < len(cues):
-            e = min(e, starts[i + 1] - 0.02)
-        if limit is not None:
-            e = min(e, limit)
-        e = max(e, s + 0.05)
-        out.append({**c, "start": round(s, 3), "end": round(e, 3)})
-    return out
+            next_start = starts[i + 1]
+            gap = 0.02 if enabled and next_start - s >= 0.02 else 0.0
+            ceiling = min(ceiling, next_start - gap)
+        reasons = []
+        if ceiling < s:
+            raise ValueError(f"Invalid cue order at index {i}; original values remain in the timing checkpoint")
+        e = min(max(e, s), ceiling)
+        if e - s < min_display_sec - 1e-9:
+            reasons.append("MIN_DISPLAY_UNSATISFIED")
+        if e <= s:
+            reasons.append("NO_DISPLAY_BUDGET")
+        new = {**c, "start": round(s, 3), "end": round(e, 3)}
+        if new["start"] != original_start or new["end"] != original_end or reasons:
+            diag = dict(c.get("diag") or {})
+            diag["display_timing"] = {
+                "source_start": original_start,
+                "source_end": original_end,
+                "final_start": new["start"],
+                "final_end": new["end"],
+                "flags": reasons,
+            }
+            new["diag"] = diag
+            changed = True
+        out.append(new)
+    return out if changed else cues
 
 
 def write_srt(segments: list[TranscriptSegment], path: Path) -> Path:
