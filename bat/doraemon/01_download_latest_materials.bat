@@ -3,6 +3,12 @@ setlocal DisableDelayedExpansion
 chcp 65001 >nul
 REM Video stages enabled by default; set to 0 for materials-only mode.
 set "DOWNLOAD_VIDEO=1"
+REM Upscale (3/3) is OFF for now: split clips are kept for checking the ends.
+REM Set back to 1 to run Real-ESRGAN again (0 = download + split only).
+set "UPSCALE_VIDEO=0"
+REM Splitting (2/3) locates each story end with the reference card stills
+REM assets\end1.jpg / end2.jpg first (prints the similarity and cuts on the
+REM matched frame), and only falls back to black frames; --no-end-ref disables it.
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
     echo.
@@ -15,11 +21,13 @@ call .venv\Scripts\activate.bat >nul 2>&1
 echo ========================================
 echo   Doraemon latest-episode materials
 if "%DOWNLOAD_VIDEO%"=="0" echo   materials only ^(video disabled^)
-if not "%DOWNLOAD_VIDEO%"=="0" echo   TVer -^> split -^> upscale ^+ parallel materials
+if not "%DOWNLOAD_VIDEO%"=="0" if "%UPSCALE_VIDEO%"=="0" echo   TVer -^> split ^(upscale OFF^) ^+ parallel materials
+if not "%DOWNLOAD_VIDEO%"=="0" if not "%UPSCALE_VIDEO%"=="0" echo   TVer -^> split -^> upscale ^+ parallel materials
 echo ========================================
 echo.
 echo  Enter = resume unfinished task, otherwise latest aired episode.
 echo  DOWNLOAD_VIDEO=%DOWNLOAD_VIDEO% ^(0 = materials only, 1 = full pipeline^)
+echo  UPSCALE_VIDEO=%UPSCALE_VIDEO% ^(0 = split clips only, 1 = also Real-ESRGAN^)
 echo  Or type an episode number for story info only.
 echo  --latest = start latest instead of resuming a saved task.
 echo  Synopsis translation runs later in 06_correct_subtitles.bat.

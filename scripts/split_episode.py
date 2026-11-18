@@ -48,6 +48,21 @@ This tool finds those cards WITHOUT OCR/AI, purely from vision statistics:
      MM:SS / HH:MM:SS / seconds) instead of just y/N. END rows in the contact
      sheet show the last visible frame before the aligned black run
      (end_XX.jpg too).
+  9b. The reference card WINS over black whenever it matches: the card that
+     FOLLOWS each story is the same every week, so it doubles as a reference
+     still — assets/end1.jpg is the 次回予告 card that opens right after story
+     #1, assets/end2.jpg the ED's 原作 credit card after story #2. The tail of
+     that story (END_REF_SEARCH_BACK seconds) is scanned frame by frame for the
+     first frame matching the reference at --end-ref-sim (default 0.96; real
+     hand-overs measure 0.98+), the matched similarity is printed, and the cut
+     goes ON that frame so the frame before it (the story's real last picture)
+     ends the episode. A story ends where that card begins, whereas black only
+     sees a gap — which can also be a short black flash inside the story (a
+     942 run cut 34s early that way). Black is the fallback when the story has
+     no reference or nothing matches; --no-end-ref disables the reference.
+     END rows for a reference-located story show the card itself (the
+     operator's still) plus its similarity, so the cut can be eyeballed
+     against the reference.
  10. Cut with ffmpeg (frame-accurate re-encode by default; --copy for fast
      keyframe-aligned stream copy). The re-encode uses a GPU encoder
      (nvenc/qsv/amf/videotoolbox) when one actually works on this machine —
@@ -159,6 +174,24 @@ END_TAIL_HINT_MIN = 120.0
 END_TAIL_HINT_MAX = 135.0
 END_TAIL_CUT_SIM_MAX = 0.80
 
+# --- end fallback: reference end stills (step 9b) ----------------------------
+# Some episodes hand the last story frame straight to the next card with no
+# black run to snap to (hard cut, or a gap shorter than END_BLACK_MIN_RUN), so
+# step 9 finds nothing and the boundary would keep the following interstitial.
+# The hand-over card is identical every week, so a still of it marks the story
+# end just as well: assets/end1.jpg is the 次回予告 card that opens right after
+# story #1, assets/end2.jpg the ED's 原作 credit card that opens right after
+# story #2. The cut goes ON the matching frame, which leaves the story's real
+# last picture (the frame before it) as the episode's final frame.
+END_REF_DIR = Path(__file__).resolve().parents[1] / "assets"
+END_REF_NAME = re.compile(r"end(\d+)\.(?:jpe?g|png)$", re.IGNORECASE)
+# Real hand-overs measure ~0.985+; an ordinary bright/bluish scene peaks around
+# 0.95, so the threshold sits clear of both.
+END_REF_MIN_SIM = 0.96
+END_REF_HOLD = 0.2  # the card is a still: the match must survive this long
+END_REF_HOLD_SLACK = 0.02  # dips tolerated while the card's own text animates in
+END_REF_SEARCH_BACK = 210.0  # scan this much story tail before the boundary
+
 
 # --- anomaly gate for --confirm-anomaly --------------------------------------
 # A normal broadcast episode: 2 title cards (2 stories), every story end
@@ -198,6 +231,22 @@ class Candidate:
         if self.abrupt_end:
             s *= 1.1
         return s
+
+
+@dataclass
+class EndRefResult:
+    """Where a reference end still was found in a story tail (step 9b).
+
+    ``hit_frame`` is the first frame at or above the similarity threshold that
+    survives the hold — the story's cut point. ``best_*`` is the window's peak,
+    so a near miss (0.95 vs the 0.96 threshold) can be told apart from "the
+    card is not in this window at all" when reporting.
+    """
+
+    hit_frame: int | None = None
+    hit_sim: float = 0.0
+    best_frame: int | None = None
+    best_sim: float = 0.0
 
 
 def fmt_time(t: float) -> str:
@@ -565,37 +614,211 @@ def _has_content_after(run_end: int, window_end: int, gap_f: int) -> bool:
     return gap_f == 0 or window_end - run_end >= gap_f
 
 
-def adjust_episode_ends(video: Path, fps: float, episodes: list[dict]) -> None:
-    """Snap each episode's end to the nearest black frame (step 9). Mutates ``episodes``:
-    sets ``end`` (seconds) and ``end_frame`` (exact black-run start index, used
-    for the end preview so no float-rounding can shift it off by a frame)."""
+def _frame_sig(frame: np.ndarray) -> np.ndarray:
+    """Tiny grayscale signature every frame comparison is made on."""
+    return cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), SIG_SIZE, interpolation=cv2.INTER_AREA)
+
+
+def read_image_sig(image: Path) -> np.ndarray | None:
+    """Signature of a still on disk, or ``None`` when it cannot be decoded.
+
+    ``cv2.imread`` returns None for non-ASCII paths on Windows, so the bytes go
+    through ``imdecode`` instead (the repo lives under user folders that may not
+    be plain ASCII).
+    """
+    try:
+        data = np.frombuffer(image.read_bytes(), dtype=np.uint8)
+    except OSError:
+        return None
+    gray = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        return None
+    return cv2.resize(gray, SIG_SIZE, interpolation=cv2.INTER_AREA)
+
+
+def load_end_refs(directory: Path) -> list[tuple[str, np.ndarray] | None]:
+    """Reference end stills ``end1.jpg`` / ``end2.jpg`` ... mapped to stories.
+
+    Entry ``i`` is the card that follows story ``i+1`` (``end1.jpg`` after story
+    #1, ``end2.jpg`` after story #2 ...); ``None`` means that story has no
+    reference and the fallback is skipped for it.
+    """
+    found: dict[int, Path] = {}
+    if directory.is_dir():
+        for image in directory.iterdir():
+            match = END_REF_NAME.match(image.name)
+            if match and image.is_file():
+                found[int(match.group(1))] = image
+    if not found:
+        return []
+    refs: list[tuple[str, np.ndarray] | None] = [None] * max(found)
+    for index, image in sorted(found.items()):
+        sig = read_image_sig(image)
+        if sig is None:
+            print(f"  ⚠️ 无法读取参考结尾图 {image}")
+        else:
+            refs[index - 1] = (image.name, sig)
+    return refs
+
+
+def find_end_ref_frame(
+    cap: cv2.VideoCapture,
+    fps: float,
+    t0: float,
+    t1: float,
+    ref_sig: np.ndarray,
+    min_sim: float = END_REF_MIN_SIM,
+) -> EndRefResult:
+    """Scan [t0, t1] for the reference end still (step 9b).
+
+    The reference is the card that opens right after the story, so the first
+    frame that matches it is the cut point and the frame before it becomes the
+    story's last picture.
+
+    Every frame is compared — the hand-over card's own picture changes within a
+    few frames (the 次回予告 thumbnail and the ED text fade in), so the match is
+    only this strong on its first frames and a coarser sampling could step over
+    them. The window is one story tail, so the full decode stays affordable.
+    """
+    result = EndRefResult()
+    f0 = max(0, int(round(t0 * fps)))
+    f1 = int(t1 * fps)
+    if f1 <= f0:
+        return result
+    cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
+    for f in range(f0, f1 + 1):
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        sim = similarity(ref_sig, _frame_sig(frame))
+        if result.best_frame is None or sim > result.best_sim:
+            result.best_frame, result.best_sim = f, sim
+        if sim < min_sim:
+            continue
+        if _ref_holds(cap, fps, f, ref_sig, min_sim):
+            result.hit_frame, result.hit_sim = f, sim
+            break
+        # the hold probe read ahead, so the sequential scan must be pulled back
+        # to the frame right after this one before continuing
+        cap.set(cv2.CAP_PROP_POS_FRAMES, f + 1)
+    return result
+
+
+def _ref_holds(cap: cv2.VideoCapture, fps: float, frame_no: int, ref_sig: np.ndarray, min_sim: float) -> bool:
+    """True when the reference still stays on screen after ``frame_no``.
+
+    A single bright/flat frame can brush past the threshold by accident; the
+    hand-over card is a static still held for seconds, so the match has to
+    survive END_REF_HOLD. Its own text/thumbnail animates in, hence the slack.
+    """
+    hold_f = max(2, int(round(END_REF_HOLD * fps)))
+    floor = min_sim - END_REF_HOLD_SLACK
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no + 1)
+    seen = 0
+    for _ in range(hold_f):
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        seen += 1
+        if similarity(ref_sig, _frame_sig(frame)) < floor:
+            return False
+    return seen >= hold_f // 2
+
+
+def _snap_to_end_ref(
+    cap: cv2.VideoCapture,
+    fps: float,
+    ep: dict,
+    ref: tuple[str, np.ndarray],
+    ref_sim: float,
+) -> tuple[int, float, str] | None:
+    """``(frame, similarity, ref name)`` for the reference card, printing both."""
+    name, ref_sig = ref
+    t0 = max(ep["start"] + STORY_MIN_MINUTES * 60.0, ep["end"] - END_REF_SEARCH_BACK)
+    found = find_end_ref_frame(cap, fps, t0, ep["end"], ref_sig, ref_sim)
+    if found.hit_frame is None:
+        best = (
+            f"{fmt_time(found.best_frame / fps)} 相似度 {found.best_sim:.4f}"
+            if found.best_frame is not None
+            else "窗口为空"
+        )
+        print(f"  {ep['name']} 参考图 {name} 未命中(阈值 {ref_sim:.2f})，窗口最高: {best}")
+        return None
+    print(
+        f"  {ep['name']} 参考图 {name} 命中帧 {fmt_time(found.hit_frame / fps)} "
+        f"相似度 {found.hit_sim:.4f} -> 以该帧切分, 前一帧为最后一帧"
+    )
+    return found.hit_frame, found.hit_sim, name
+
+
+def _snap_to_end_black(cap: cv2.VideoCapture, fps: float, ep: dict, last: bool) -> int | None:
+    """Step-9 black-run sweep (the guarded window, then the card-adjacent one)."""
+    if last:
+        t0, t1 = ep["end"] - END_BLACK_BEFORE_END_MAX, ep["end"] - END_BLACK_BEFORE_END_MIN
+        return find_black_run_end(cap, fps, t0, t1)
+    t0 = ep["start"] + STORY_MIN_MINUTES * 60.0
+    black_f = find_black_run_end(cap, fps, t0, ep["end"] - END_BLACK_BEFORE_CARD_MIN)
+    if black_f is not None:
+        return black_f
+    # packed stories: nothing in the guarded window, so the end black sits right
+    # before the card. Take the last run that is followed by real content
+    # (skips the card transition-in).
+    black_f = find_black_run_end(cap, fps, t0, ep["end"], gap_after=END_BLACK_FALLBACK_GAP)
+    if black_f is not None:
+        print(f"  {ep['name']} 结尾黑帧位于下一张标题卡的紧前方，已改用后备窗口对齐")
+    return black_f
+
+
+def adjust_episode_ends(
+    video: Path,
+    fps: float,
+    episodes: list[dict],
+    end_refs: list[tuple[str, np.ndarray] | None] | None = None,
+    ref_sim: float = END_REF_MIN_SIM,
+) -> None:
+    """Locate each episode's end (step 9/9b). Mutates ``episodes``: sets ``end``
+    (seconds), ``end_frame`` (exact boundary frame index, used for the end
+    preview so no float-rounding can shift it off by a frame), and the
+    ``end_source`` / ``end_ref`` / ``end_sim`` fields the preview and the log
+    report.
+
+    The reference card wins whenever it matches: a story ends where that card
+    begins, while the black heuristic only sees a black gap — which can also be
+    a short black flash INSIDE the story (the 942 case, 34s too early). Black
+    stays as the fallback when the story has no reference or nothing matches.
+    """
     cap = open_capture(video)
     try:
         for i, ep in enumerate(episodes):
-            if i < len(episodes) - 1:
-                t0 = ep["start"] + STORY_MIN_MINUTES * 60.0
-                t1 = ep["end"] - END_BLACK_BEFORE_CARD_MIN
-                black_f = find_black_run_end(cap, fps, t0, t1)
-                if black_f is None:
-                    # packed stories: nothing in the guarded window, so the end
-                    # black sits right before the card. Take the last run that
-                    # is followed by real content (skips the card transition-in).
-                    black_f = find_black_run_end(cap, fps, t0, ep["end"], gap_after=END_BLACK_FALLBACK_GAP)
-                    if black_f is not None:
-                        print(f"  {ep['name']} 结尾黑帧位于下一张标题卡的紧前方，已改用后备窗口对齐")
-            else:
-                t0, t1 = ep["end"] - END_BLACK_BEFORE_END_MAX, ep["end"] - END_BLACK_BEFORE_END_MIN
-                black_f = find_black_run_end(cap, fps, t0, t1)
-            if black_f is None:
-                print(f"  {ep['name']} 结尾窗口内未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
+            last = i == len(episodes) - 1
+            ref = end_refs[i] if end_refs and i < len(end_refs) else None
+            boundary_f: int | None = None
+            if ref is not None:
+                hit = _snap_to_end_ref(cap, fps, ep, ref, ref_sim)
+                if hit is not None:
+                    boundary_f, sim, name = hit
+                    ep["end_source"] = "ref"
+                    ep["end_ref"] = name
+                    ep["end_sim"] = round(sim, 4)
+            if boundary_f is None:
+                boundary_f = _snap_to_end_black(cap, fps, ep, last)
+                if boundary_f is not None:
+                    ep["end_source"] = "black"
+            if boundary_f is None:
+                print(f"  {ep['name']} 未命中参考结尾图也未找到黑帧，保持原结尾 {fmt_time(ep['end'])}")
                 continue
-            black = black_f / fps
-            if black <= ep["start"] + 1.0:
-                print(f"  {ep['name']} 黑帧异常(早于故事起点)，保持原结尾 {fmt_time(ep['end'])}")
-            elif black < ep["end"] - 0.05:
-                print(f"  结尾黑帧对齐 {ep['name']}: {fmt_time(ep['end'])} -> {fmt_time(black)}")
-                ep["end"] = round(black, 3)
-                ep["end_frame"] = black_f
+            boundary = boundary_f / fps
+            if boundary <= ep["start"] + 1.0:
+                print(f"  {ep['name']} 结尾异常(早于故事起点)，保持原结尾 {fmt_time(ep['end'])}")
+                ep.pop("end_source", None)
+                continue
+            if abs(boundary - ep["end"]) > 0.05:
+                # the reference can sit slightly past the plain boundary
+                # (--keep-intro layouts) and black can sit before it; both are
+                # the story's real hand-over, so the cut follows the located frame
+                print(f"  结尾落点 {ep['name']}: {fmt_time(ep['end'])} -> {fmt_time(boundary)}")
+                ep["end"] = round(boundary, 3)
+            ep["end_frame"] = boundary_f
     finally:
         cap.release()
 
@@ -670,7 +893,10 @@ def split_anomalies(split_cards: list[Candidate], episodes: list[dict]) -> list[
         issues.append(f"标题卡数量异常: {len(split_cards)} 个 (通常为 {EXPECTED_TITLE_CARDS} 个)")
     missing_end = [ep["name"] for ep in episodes if "end_frame" not in ep]
     if missing_end:
-        issues.append(f"尾帧数量异常: {len(missing_end)}/{len(episodes)} 集结尾未对齐到黑帧 ({', '.join(missing_end)})")
+        issues.append(
+            f"尾帧数量异常: {len(missing_end)}/{len(episodes)} 集结尾未对齐到黑帧或参考结尾图 "
+            f"({', '.join(missing_end)})"
+        )
     for ep in episodes:
         minutes = (ep["end"] - ep["start"]) / 60.0
         if not (STORY_MIN_MINUTES <= minutes <= STORY_MAX_MINUTES):
@@ -764,8 +990,12 @@ def episode_names(stem: str, n: int) -> list[str]:
 
 def _labelled_thumb(frame: np.ndarray, label: str) -> np.ndarray:
     thumb = cv2.resize(frame, (320, 180))
-    bar = np.full((28, 320, 3), 32, np.uint8)
-    cv2.putText(bar, label, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+    # 0.45 fits ~40 chars in 320px; a reference end label uses "\n" for its
+    # second line so the similarity and the time are not clipped off the edge
+    lines = label.split("\n")
+    bar = np.full((28 * len(lines), 320, 3), 32, np.uint8)
+    for i, line in enumerate(lines):
+        cv2.putText(bar, line, (6, 20 + 28 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
     return np.vstack([thumb, bar])
 
 
@@ -800,9 +1030,11 @@ def save_preview(
 ) -> None:
     """Contact sheet of candidate title cards (+ episode end frames when given).
 
-    End thumbs show the LAST NON-BLACK frame of each story: the frame right
-    before the black run the end was snapped to (or the last frame before the
-    plain boundary when no black run was found).
+    An end located by the reference card shows THAT card frame (the operator
+    supplied still, ``end_XX.jpg`` in assets) plus its similarity, so the cut
+    can be eyeballed against the reference. A black-located end shows the last
+    non-black frame before the black run (the plain boundary when no black run
+    was found).
     """
     preview_dir.mkdir(parents=True, exist_ok=True)
     cap = open_capture(video)
@@ -818,19 +1050,37 @@ def save_preview(
     n_ends = 0
     if episodes:
         for i, ep in enumerate(episodes, 1):
-            # the frame right BEFORE the black run = the story's last content
-            # frame; end_frame is the exact index (no float-rounding drift),
-            # falling back to the plain boundary when no black run was found
-            frame_no = ep.get("end_frame", int(ep["end"] * fps)) - 1
-            frame = _end_preview_frame(cap, fps, max(0, frame_no))
-            if frame is None:
+            if ep.get("end_source") == "ref":
+                # the reference card itself = the expected hand-over still
+                ok, frame = read_frame_at(cap, ep.get("end_frame", int(ep["end"] * fps)))
+                label = (
+                    f"END {ep['name']}: ref {ep.get('end_ref', '?')}\n"
+                    f"sim {ep.get('end_sim', 0):.4f} @ {fmt_time(ep['end'])}"
+                )
+            else:
+                # the frame right BEFORE the boundary = the story's last content
+                # frame; end_frame is the exact index (no float-rounding drift),
+                # falling back to the plain boundary when nothing was located
+                frame_no = ep.get("end_frame", int(ep["end"] * fps)) - 1
+                frame = _end_preview_frame(cap, fps, max(0, frame_no))
+                ok = frame is not None
+                label = f"END {ep['name']}: last frame @ {fmt_time(ep['end'])}"
+            if not ok or frame is None:
                 continue
             cv2.imwrite(str(preview_dir / f"end_{i:02d}.jpg"), frame)
-            label = f"END {ep['name']}: last frame @ {fmt_time(ep['end'])}"
             thumbs.append(_labelled_thumb(frame, label))
             n_ends += 1
     cap.release()
     if thumbs:
+        # a two-line label makes a taller bar; pad shorter thumbs at the bottom
+        # so the grid stacks (rows keep their own height)
+        height = max(t.shape[0] for t in thumbs)
+        thumbs = [
+            t
+            if t.shape[0] == height
+            else np.vstack([t, np.full((height - t.shape[0], t.shape[1], 3), 32, np.uint8)])
+            for t in thumbs
+        ]
         cols = min(3, len(thumbs))
         rows_n = math.ceil(len(thumbs) / cols)
         blank = np.full_like(thumbs[0], 16)
@@ -955,7 +1205,13 @@ def existing_split(out_dir: Path, stem: str) -> list[Path] | None:
 
 
 def cut_episodes(
-    video: Path, episodes: list[dict], out_dir: Path, copy: bool, force_cpu: bool = False, force: bool = False
+    video: Path,
+    episodes: list[dict],
+    out_dir: Path,
+    copy: bool,
+    force_cpu: bool = False,
+    force: bool = False,
+    fps: float | None = None,
 ) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -970,11 +1226,19 @@ def cut_episodes(
         if not force and out.is_file() and out.stat().st_size >= MIN_CLIP_BYTES:
             print(f"  跳过 {ep['name']}: 已存在 {out.name} (--force 重切)")
             continue
+        length = ep["end"] - ep["start"]
+        if fps:
+            # The boundary frame is the hand-over card (or the black run's first
+            # frame) and must NOT survive: a -t that lands exactly on a frame
+            # time keeps that frame, so story #1 ended on one frame of the
+            # 次回予告 card. One frame of margin makes the last frame the story's
+            # real last picture.
+            length = max(0.0, length - 1.0 / fps)
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ep['start']:.3f}", "-i", str(video)]
         if copy:
-            cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", "-c", "copy"]
+            cmd += ["-t", f"{length:.3f}", "-c", "copy"]
         else:
-            cmd += ["-t", f"{ep['end'] - ep['start']:.3f}", *vargs, "-c:a", "aac", "-b:a", "192k"]
+            cmd += ["-t", f"{length:.3f}", *vargs, "-c:a", "aac", "-b:a", "192k"]
         cmd += [str(out)]
         print(f"  切割 {ep['name']}: {fmt_time(ep['start'])} -> {fmt_time(ep['end'])}")
         subprocess.run(cmd, check=True)
@@ -1018,6 +1282,23 @@ def main() -> int:
         "--force",
         action="store_true",
         help="即使 <输出目录>/<文件名>_split.json 与所有片段都已存在也重新检测并重切 (默认跳过已完成的分割)",
+    )
+    p.add_argument(
+        "--end-ref-dir",
+        type=Path,
+        default=END_REF_DIR,
+        help=f"结尾参考图目录, 其中的 end1.jpg / end2.jpg ... 对应第 1 / 2 ... 集的结尾卡 (默认 {END_REF_DIR})",
+    )
+    p.add_argument(
+        "--end-ref-sim",
+        type=float,
+        default=END_REF_MIN_SIM,
+        help=f"帧与参考结尾图的最低相似度, 低于它就不算命中 (默认 {END_REF_MIN_SIM})",
+    )
+    p.add_argument(
+        "--no-end-ref",
+        action="store_true",
+        help="关闭参考结尾图, 只用黑帧对齐结尾 (参考图命中的时间优先于黑帧, 本参数可退回旧行为)",
     )
     args = p.parse_args()
 
@@ -1077,8 +1358,16 @@ def main() -> int:
     names = episode_names(args.video.stem, n_ep)
     episodes = [{"name": names[i], "start": round(bounds[i], 3), "end": round(bounds[i + 1], 3)} for i in range(n_ep)]
 
-    print("\n结尾黑帧对齐:")
-    adjust_episode_ends(args.video, fps, episodes)
+    print("\n结尾对齐 (参考图优先, 未命中再按黑帧):")
+    end_refs: list[tuple[str, np.ndarray] | None] = []
+    if not args.no_end_ref:
+        end_refs = load_end_refs(args.end_ref_dir)
+        if any(end_refs):
+            listing = ", ".join(f"第{i + 1}集={ref[0]}" for i, ref in enumerate(end_refs) if ref)
+            print(f"  参考结尾图: {listing} (阈值 {args.end_ref_sim:.2f})")
+        else:
+            print(f"  ⚠️ {args.end_ref_dir} 下没有可用的 end1.jpg / end2.jpg, 只用黑帧对齐")
+    adjust_episode_ends(args.video, fps, episodes, end_refs or None, args.end_ref_sim)
 
     print("\n建议分割方案:")
     for ep in episodes:
@@ -1117,11 +1406,16 @@ def main() -> int:
         print("预览模式, 未切割。确认候选无误后去掉 --preview 重新运行。")
         return 0
 
+    # Cut mode: refresh the preview so the contact sheet on disk always matches
+    # what is actually cut (END rows show the reference card for a ref-located
+    # end), not a stale 3-candidate sheet from an earlier preview run.
+    preview_dir = args.output_dir / "preview"
+    save_preview(args.video, fps, cards, preview_dir, episodes)
+
     if n_ep > 3 and not (args.confirm or args.confirm_anomaly):
         # Refusing to cut without evidence is only useful if the user can
-        # inspect the candidates NOW — detection takes minutes, so save the
-        # preview frames here instead of making them re-run with --preview.
-        save_preview(args.video, fps, cards, args.output_dir / "preview", episodes)
+        # inspect the candidates NOW — detection takes minutes, so the preview
+        # frames are already saved above instead of making them re-run.
         print("⚠️ 集数超过 3, 很可能是误检。已跳过切割。")
         print(f"   请查看 {args.output_dir / 'preview'}/ 下的候选预览图确认。")
         print("   确认确实有多故事后，用 --episodes N 指定集数重跑切割。")
@@ -1148,8 +1442,6 @@ def main() -> int:
             print("         若那就是 ED 起点, 可在下面的确认里直接输入该时间作为最后一集的结尾。")
 
     if args.confirm or issues:
-        preview_dir = args.output_dir / "preview"
-        save_preview(args.video, fps, cards, preview_dir, episodes)
         _open_in_shell(preview_dir / "contact_sheet.jpg")
         while True:
             try:
@@ -1179,7 +1471,7 @@ def main() -> int:
             print(f"已取消。候选预览图在 {preview_dir}/，调整后重跑即可。")
             return 2
 
-    cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu, force=args.force)
+    cut_episodes(args.video, episodes, args.output_dir, args.copy, force_cpu=args.cpu, force=args.force, fps=fps)
     print("完成。")
     return 0
 

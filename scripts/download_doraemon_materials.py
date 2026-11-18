@@ -21,6 +21,9 @@ UPSCALE_PYTHON = Path(r"C:\Users\34696\miniconda3\envs\upscale\python.exe")
 STATE_NAME = "pipeline_state.json"
 PENDING_MARKER = ".last_doraemon_pipeline"
 PENDING_STATUSES = {"running", "failed", "interrupted", "cancelled"}
+# Launchers export UPSCALE_VIDEO=0 to stop after the split: checking the story
+# ends, editing clips by hand, or a machine without the Real-ESRGAN env.
+UPSCALE_ENABLED = os.environ.get("UPSCALE_VIDEO", "1").strip() != "0"
 
 
 def _atomic_text(path: Path, text: str) -> None:
@@ -123,6 +126,10 @@ def _video_pipeline(episode: str, airdate: str, materials: Path) -> int:
         ),
     ]
     for stage, description, script, args, python in steps:
+        if stage == "upscale" and not UPSCALE_ENABLED:
+            logger.event("[SKIP] UPSCALE_VIDEO=0 - keeping the split clips; Real-ESRGAN not run")
+            logger.event(f"[HINT] Split clips: {materials} (*_1.mp4, *_2.mp4); set UPSCALE_VIDEO=1 to upscale later")
+            continue
         _save_state(materials, episode, airdate, stage, "running")
         logger.event(f"[STAGE START] {description}")
         started = time.monotonic()
@@ -154,8 +161,12 @@ def _video_pipeline(episode: str, airdate: str, materials: Path) -> int:
             _save_state(materials, episode, airdate, stage, "interrupted" if rc == 130 else "failed")
             logger.event("[RESUME] Completed files are retained. Reopen the same bat to retry this episode.")
             return rc
-    _save_state(materials, episode, airdate, "materials", "running")
-    logger.event("[COMPLETE] Video pipeline finished; materials branch still needs to finish")
+    if UPSCALE_ENABLED:
+        _save_state(materials, episode, airdate, "materials", "running")
+        logger.event("[COMPLETE] Video pipeline finished; materials branch still needs to finish")
+    else:
+        _save_state(materials, episode, airdate, "split", "completed")
+        logger.event("[COMPLETE] Video pipeline ended after split (UPSCALE_VIDEO=0)")
     return 0
 
 
