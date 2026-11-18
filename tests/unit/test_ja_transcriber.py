@@ -198,6 +198,21 @@ def test_scan_videos_finds_only_video_exts(tmp_path):
     assert scan_videos(tmp_path / "missing") == []
 
 
+def test_ja_asr_cli_scans_explicit_input_dir(tmp_path):
+    from typer.testing import CliRunner
+
+    from creator_agent.cli.main import app
+
+    result = CliRunner().invoke(
+        app,
+        ["ja-asr", "--input-dir", str(tmp_path), "--out-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"Scanning {tmp_path} ..." in result.output
+    assert f"No videos found. Drop video files into {tmp_path} and re-run." in result.output
+
+
 def test_split_pending_by_existing_srt(tmp_path):
     from creator_agent.asr.ja_transcriber import split_pending
 

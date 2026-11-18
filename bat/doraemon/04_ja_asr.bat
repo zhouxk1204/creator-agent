@@ -1,4 +1,5 @@
 @echo off
+setlocal DisableDelayedExpansion
 chcp 65001 >nul
 call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 (
@@ -9,16 +10,41 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 
-rem --- Output location: Desktop, one timestamped subfolder per run. ----------
-rem A caller-supplied --out-dir still wins (we only inject ours when absent).
-for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%I"
-set "OUTDIR=%USERPROFILE%\Desktop\ja_asr_%STAMP%"
-set "ARGS=%*"
-echo %* | findstr /i /c:"--out-dir" >nul
-if errorlevel 1 (
-    set "ARGS=--out-dir "%OUTDIR%" %*"
-    mkdir "%OUTDIR%" 2>nul
+rem --- Default input/output: the latest Doraemon materials folder. ----------
+rem Explicit video arguments, --input-dir, and --out-dir/-o override defaults.
+set "MATERIALS_STATE=%REPO_ROOT%\logs\.last_doraemon_materials"
+if not exist "%MATERIALS_STATE%" (
+    echo Missing materials state: "%MATERIALS_STATE%"
+    echo Run the latest-episode materials launcher first.
+    pause >nul
+    exit /b 1
 )
+set "MATERIALS_DIR="
+set /p "MATERIALS_DIR="<"%MATERIALS_STATE%"
+if not defined MATERIALS_DIR (
+    echo Materials state is empty: "%MATERIALS_STATE%"
+    pause >nul
+    exit /b 1
+)
+if not exist "%MATERIALS_DIR%\" (
+    echo Materials folder not found: "%MATERIALS_DIR%"
+    pause >nul
+    exit /b 1
+)
+
+set "OUTDIR=%MATERIALS_DIR%"
+set "ARGS=%*"
+set "HAS_INPUT_DIR="
+set "HAS_OUT_DIR="
+if not "%~1"=="" (
+    for %%A in (%*) do (
+        if /i "%%~A"=="--input-dir" set "HAS_INPUT_DIR=1"
+        if /i "%%~A"=="--out-dir" set "HAS_OUT_DIR=1"
+        if /i "%%~A"=="-o" set "HAS_OUT_DIR=1"
+    )
+)
+if not defined HAS_INPUT_DIR set "ARGS=--input-dir "%MATERIALS_DIR%" %ARGS%"
+if not defined HAS_OUT_DIR set "ARGS=%ARGS% --out-dir "%OUTDIR%""
 
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. cmd.exe mis-parses multibyte characters
@@ -36,17 +62,15 @@ rem                          Suspects are written to <video>.check.txt.
 rem   6. write Japanese SRT  <video>.srt (kept clean; import into JianYing
 rem                          to check the timeline)
 rem
-rem Double-click (no args) = process every video in ja_asr.input_dir
-rem (C:\test\temps): ASR + boundary check only, producing Japanese SRTs.
-rem Output goes to a NEW timestamped folder on the Desktop each run
-rem (Desktop\ja_asr_yyyyMMdd-HHmmss\<name>\<name>.srt), so runs never
-rem overwrite each other - handy for comparing tuning experiments.
+rem Double-click (no args) = recursively process every video in the folder
+rem recorded by logs\.last_doraemon_materials. The same folder is the output
+rem root, with one <name> subfolder per video.
 rem Pass your own args to override, e.g.:
 rem   04_ja_asr.bat video.mp4                  only this video
 rem   04_ja_asr.bat video.mp4 --force          ignore existing SRT/audio cache
 rem   04_ja_asr.bat video.mp4 --translate      also translate to .zh.srt
 rem   04_ja_asr.bat video.mp4 --translate --burn   then burn into .zh.mp4
-rem   04_ja_asr.bat video.mp4 --out-dir D:\somewhere   bypass the Desktop default
+rem   04_ja_asr.bat video.mp4 --out-dir D:\somewhere   override the saved output folder
 rem
 rem Tuning: config\settings.validate.yaml (auto-loaded when present) overrides
 rem ONLY the ja_asr section of config\settings.yaml - edit one line, rerun with
@@ -66,8 +90,7 @@ echo   + boundary check vs original video/audio
 echo ========================================
 echo.
 if "%~1"=="" (
-    echo  Double-click = ASR + boundary check for every video in C:\test\temps\
-    echo  Outputs      -^> Desktop\ja_asr_^<timestamp^>\  ^(this run: %OUTDIR%^)
+    echo  Input/output -^> %MATERIALS_DIR%
     echo    ^<name^>.alignment.^<run^>.srt  Raw alignment inspection ^(open this first^)
     echo    ^<name^>.srt        Final Japanese subtitles
     echo    ^<name^>.check.txt  diagnostic-boundary report

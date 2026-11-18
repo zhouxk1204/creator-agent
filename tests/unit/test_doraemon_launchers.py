@@ -20,6 +20,23 @@ def test_batch_video_stages_are_enabled_with_materials_only_guard():
     assert guard < script.index("scripts\\split_episode.py") < script.index('call "%~dp0run_upscale.bat"')
 
 
+def test_ja_asr_uses_last_materials_folder_for_input_and_output():
+    data = (ROOT / "bat/doraemon/04_ja_asr.bat").read_bytes()
+    assert b"\n" not in data.replace(b"\r\n", b"")
+    script = data.decode("ascii").replace("\r\n", "\n")
+
+    state = 'set "MATERIALS_STATE=%REPO_ROOT%\\logs\\.last_doraemon_materials"'
+    load = 'set /p "MATERIALS_DIR="<"%MATERIALS_STATE%"'
+    input_default = 'if not defined HAS_INPUT_DIR set "ARGS=--input-dir "%MATERIALS_DIR%" %ARGS%"'
+    output_default = 'if not defined HAS_OUT_DIR set "ARGS=%ARGS% --out-dir "%OUTDIR%""'
+
+    assert script.index(state) < script.index(load) < script.index(input_default)
+    assert script.index(input_default) < script.index(output_default)
+    assert 'set "OUTDIR=%MATERIALS_DIR%"' in script
+    assert "Get-Date -Format" not in script
+    assert "Desktop\\ja_asr_" not in script
+
+
 @pytest.mark.parametrize("download_video", [0, 1])
 def test_shell_materials_only_toggle(tmp_path, download_video):
     repo = tmp_path / "repo"
