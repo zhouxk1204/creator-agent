@@ -550,7 +550,7 @@ def test_publisher_imports_without_site_packages():
     assert "--story" in result.stdout
 
 
-@pytest.mark.parametrize("name", ["doraemon/publish", "publish_dual"])
+@pytest.mark.parametrize("name", ["doraemon/03_publish", "publish_dual"])
 def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
     path = Path(__file__).resolve().parents[2] / "bat" / f"{name}.bat"
     raw = path.read_bytes()
@@ -564,7 +564,7 @@ def test_publish_launchers_use_python_prompts_and_forward_arguments(name):
 
 
 def test_bilibili_launcher_prepares_covers_then_publishes_every_b_export():
-    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
     bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
     assert bilibili.index("make_bilibili_covers.py") < bilibili.index('publish_dual.py" %*')
     assert "--b --only bilibili" in bilibili
@@ -574,7 +574,7 @@ def test_bilibili_launcher_prepares_covers_then_publishes_every_b_export():
 def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
     # Covers first (both orientations, so the metadata paths exist), then one
     # upload per 剪映 _dy export.
-    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
     douyin = text.split("\n:douyin\n", 1)[1].split("\n:done\n", 1)[0]
     assert douyin.index("make_douyin_covers.py") < douyin.index("publish_dual.py")
     assert "--dy-only" in douyin
@@ -584,7 +584,7 @@ def test_douyin_launcher_makes_covers_then_publishes_every_dy_export():
 
 def test_merged_launcher_bootstraps_from_parent_and_selects_platform():
     root = Path(__file__).resolve().parents[2]
-    text = (root / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    text = (root / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
     assert 'call "%~dp0..\\_bootstrap.bat"' in text
     assert 'set "PLATFORM=both"' in text
     assert 'if /i "%~1"=="--only"' in text
@@ -597,7 +597,7 @@ def test_merged_launcher_bootstraps_from_parent_and_selects_platform():
 
 
 def test_merged_launcher_stops_on_failure_or_cancellation():
-    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/publish.bat").read_text(encoding="ascii")
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
     bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
     assert 'set "RC=%ERRORLEVEL%"\nif not "%RC%"=="0" goto :done' in bilibili
     assert text.count("if errorlevel 1 goto :fail") == 3

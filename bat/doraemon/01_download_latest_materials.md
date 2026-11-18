@@ -1,6 +1,6 @@
-# 最新话 Doraemon 素材下载完整流程
+# 01_download_latest_materials.bat — 最新话 Doraemon 素材下载完整流程
 
-本文档说明 [`最新话doraemon素材下载.bat`](./最新话doraemon素材下载.bat) 当前实际执行的完整流程，包括运行模式、每一步的输入与输出、状态文件、外部依赖、失败行为，以及可供后续评估的优化点。
+本文档说明 [`01_download_latest_materials.bat`](./01_download_latest_materials.bat) 当前实际执行的完整流程，包括运行模式、每一步的输入与输出、状态文件、外部依赖、失败行为，以及可供后续评估的优化点。
 
 > 本文描述的是 **Windows `.bat` 主流程**。macOS/Linux 的 `.sh` 不是完全等价实现，差异见文末。
 
@@ -17,7 +17,7 @@ macOS/Linux `.sh` 仍为 `DOWNLOAD_VIDEO=0`，默认只抓资料，不下载或�
 - 保留目录内已有的视频，不删除、不重新处理。
 
 设为 `DOWNLOAD_VIDEO=1` 即启用该启动器支持的视频流程；`.sh` 与 `.bat` 的流程差异见文末。
-`.md` 是说明文件，实际运行入口为同名 `.bat` / `.sh`。
+`.md` 是说明文件；Windows 运行 `01_download_latest_materials.bat`，macOS/Linux 运行 `最新话doraemon素材下载.sh`。
 
 ## 1. 这个启动器负责什么
 
@@ -54,7 +54,7 @@ Real-ESRGAN 2× 超分，输出到 C:\test
 运行方式：
 
 ```bat
-bat\doraemon\最新话doraemon素材下载.bat
+bat\doraemon\01_download_latest_materials.bat
 ```
 
 出现提示后直接按回车：
@@ -78,7 +78,7 @@ Episode number (e.g. 934, Enter = latest aired):
 运行方式：
 
 ```bat
-bat\doraemon\最新话doraemon素材下载.bat 941
+bat\doraemon\01_download_latest_materials.bat 941
 ```
 
 也可以双击后输入 `941`。
@@ -768,7 +768,7 @@ C:\test\
 
 | 文件 | 职责 |
 | --- | --- |
-| `bat/doraemon/最新话doraemon素材下载.bat` | Windows 主控流程 |
+| `bat/doraemon/01_download_latest_materials.bat` | Windows 主控流程 |
 | `bat/doraemon/最新话doraemon素材下载.sh` | macOS/Linux 简化流程 |
 | `scripts/fetch_doraemon.py` | TV Asahi 资料、封面、简介抓取 |
 | `scripts/translate_doraemon.py` | 日文标题/简介翻译与标签生成 |

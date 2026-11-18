@@ -50,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--dy-only",
         action="store_true",
-        help="只处理已经有剪映导出（<故事>_dy/<故事>_dy.mp4）的故事，配合 bat/doraemon/publish.bat 用",
+        help="只处理已经有剪映导出（<故事>_dy/<故事>_dy.mp4）的故事，配合 bat/doraemon/03_publish.bat 用",
     )
     parser.add_argument(
         "--covers", default="portrait,landscape", help="要生成的封面，逗号分隔：portrait,landscape（默认两个都做）"
@@ -58,7 +58,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="已有封面也重新生成并覆盖路径")
     parser.add_argument("--dry-run", action="store_true", help="只打印将要生成什么，不动剪映也不写文件")
     parser.add_argument("--ask", "--prompt-target", action="store_true", help="强制询问素材目录")
-    # publish.bat forwards the same arguments to covers and the publisher.
+    # 03_publish.bat forwards the same arguments to covers and the publisher.
     parser.add_argument("--dy", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--only", choices=["douyin", "bilibili"], help=argparse.SUPPRESS)

@@ -186,7 +186,7 @@ class PublishJob:
             if not douyin.get("cover_portrait_path") or not douyin.get("cover_landscape_path"):
                 raise MetadataError(
                     f"{story_id} 的抖音横竖封面还没生成：先跑 scripts/make_douyin_covers.py "
-                    "（bat/doraemon/publish.bat 的抖音封面步骤会自动做）"
+                    "（bat/doraemon/03_publish.bat 的抖音封面步骤会自动做）"
                 )
             self.cover_douyin_portrait = required_asset(self.path, douyin["cover_portrait_path"], COVER_EXTS)
             self.cover_douyin_landscape = required_asset(self.path, douyin["cover_landscape_path"], COVER_EXTS)

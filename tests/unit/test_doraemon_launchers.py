@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_batch_video_stages_are_enabled_with_materials_only_guard():
-    data = (ROOT / "bat/doraemon/最新话doraemon素材下载.bat").read_bytes()
+    data = (ROOT / "bat/doraemon/01_download_latest_materials.bat").read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
     assert 'set "DOWNLOAD_VIDEO=1"' in script

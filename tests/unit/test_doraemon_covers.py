@@ -87,7 +87,7 @@ def test_cover_title_returns_chinese_title(tmp_path):
 
 
 def test_dy_only_skips_stories_without_a_jianying_export(tmp_path, monkeypatch, capsys):
-    # publish.bat only renders covers for what it can actually publish,
+    # 03_publish.bat only renders covers for what it can actually publish,
     # otherwise every run would pay a JianYing render for a story with no _dy
     # export yet.
     path = make_metadata(tmp_path)

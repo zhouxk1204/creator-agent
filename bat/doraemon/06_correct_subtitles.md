@@ -299,7 +299,7 @@ bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
 - 想临时挑一次：加 `--ask`（旧名 `--prompt-target`），会显示上次的目录，回车接受或粘贴新路径。
 - 只在两种情况下才会真的问你：`logs` 里没有记录（会用 `logs/.last_fetched` 推桌面目录），或者记录的目录已经被删掉/移走。
 
-`最新话doraemon素材下载.bat` / `.sh` 在完整模式创建素材目录后，将其绝对路径写入 `logs/.last_doraemon_materials`，
+`01_download_latest_materials.bat` / `最新话doraemon素材下载.sh` 在完整模式创建素材目录后，将其绝对路径写入 `logs/.last_doraemon_materials`，
 **每次执行都会刷新**（所以每周跑完素材下载，当天再跑 06 就是零输入）；只查询指定集号的简介不会覆盖该记录。
 该记录是本机状态，不随 Git 同步。
 

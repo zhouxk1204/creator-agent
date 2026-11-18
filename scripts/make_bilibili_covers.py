@@ -65,7 +65,7 @@ def main() -> int:
     parser.add_argument("dir", nargs="?", help="素材目录或 metadata.json；默认使用上次素材目录")
     parser.add_argument("--story", help="只处理故事标识，如 942_1")
     parser.add_argument("--ask", "--prompt-target", action="store_true", help="强制询问素材目录")
-    # bat/doraemon/publish.bat forwards its arguments to both steps. Consume the
+    # bat/doraemon/03_publish.bat forwards its arguments to both steps. Consume the
     # publisher-only options here; --dry-run still prepares this local asset,
     # but the second step will not log in or upload anything.
     parser.add_argument("--dy", action="store_true", help=argparse.SUPPRESS)

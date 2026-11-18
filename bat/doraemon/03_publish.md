@@ -1,6 +1,6 @@
-# publish.bat — 哆啦A梦 B 站 / 抖音统一发布入口
+# 03_publish.bat — 哆啦A梦 B 站 / 抖音统一发布入口
 
-双击 `bat\doraemon\publish.bat`，默认先发布 B 站，再发布抖音。直接使用
+双击 `bat\doraemon\03_publish.bat`，默认先发布 B 站，再发布抖音。直接使用
 `logs\.last_doraemon_materials` 记录的素材目录；每个平台上传前都要输入 `Y` 确认。
 原来的 `bat\publish_bilibili.bat`、`bat\publish_douyin.bat` 已合并到这里。
 
@@ -16,18 +16,18 @@
 
 ```bat
 rem 默认两个平台，先 B 站后抖音
-bat\doraemon\publish.bat
+bat\doraemon\03_publish.bat
 
 rem 只发布一个平台
-bat\doraemon\publish.bat --only bilibili
-bat\doraemon\publish.bat --only douyin
+bat\doraemon\03_publish.bat --only bilibili
+bat\doraemon\03_publish.bat --only douyin
 
 rem 指定素材目录，只发布一个故事
-bat\doraemon\publish.bat "%USERPROFILE%\Desktop\doraemon_942" --story 942_1
+bat\doraemon\03_publish.bat "%USERPROFILE%\Desktop\doraemon_942" --story 942_1
 
 rem 先校验，不登录、不上传
-bat\doraemon\publish.bat --dry-run
-bat\doraemon\publish.bat --only douyin --story 942_1 --dry-run
+bat\doraemon\03_publish.bat --dry-run
+bat\doraemon\03_publish.bat --only douyin --story 942_1 --dry-run
 ```
 
 默认双平台模式需要两边的成品视频；只准备好一个平台时使用 `--only`。

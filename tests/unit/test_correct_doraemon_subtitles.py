@@ -330,7 +330,12 @@ def test_explicit_target_overrides_saved_materials(correction_run, materials_log
 def test_materials_launchers_record_folder_before_download():
     root = Path(__file__).resolve().parents[2]
     for suffix, separator in (("bat", "\\"), ("sh", "/")):
-        launcher = root / "bat" / "doraemon" / f"最新话doraemon素材下载.{suffix}"
+        launcher = (
+            root
+            / "bat"
+            / "doraemon"
+            / ("01_download_latest_materials.bat" if suffix == "bat" else "最新话doraemon素材下载.sh")
+        )
         data = launcher.read_bytes()
         if suffix == "bat":
             assert b"\n" not in data.replace(b"\r\n", b"")
@@ -372,7 +377,13 @@ def test_correction_launcher_is_ascii_only():
 def test_materials_launchers_do_not_invoke_translation():
     root = Path(__file__).resolve().parents[2]
     for suffix in ("bat", "sh"):
-        script = (root / "bat" / "doraemon" / f"最新话doraemon素材下载.{suffix}").read_text(encoding="utf-8")
+        launcher = (
+            root
+            / "bat"
+            / "doraemon"
+            / ("01_download_latest_materials.bat" if suffix == "bat" else "最新话doraemon素材下载.sh")
+        )
+        script = launcher.read_text(encoding="utf-8")
         assert "scripts\\translate_doraemon.py" not in script
         assert "scripts/translate_doraemon.py" not in script
         assert "ensure_server" not in script and "stop_server" not in script
