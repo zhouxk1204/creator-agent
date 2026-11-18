@@ -348,9 +348,9 @@ def test_materials_launchers_record_folder_before_download():
             driver = (root / "scripts/download_doraemon_materials.py").read_text(encoding="utf-8")
             latest = driver.split("def latest_materials", 1)[1]
             assert latest.index("materials.mkdir") < latest.index("_save_materials_dir(materials)")
-            assert latest.index("_save_materials_dir(materials)") < latest.index("subprocess.Popen")
-            assert latest.index("subprocess.Popen") < latest.index("rc = _video_pipeline(episode, airdate, materials)")
-            assert "os.replace(temp, state)" in driver
+            assert latest.index("_save_materials_dir(materials)") < latest.index("LoggedProcess(")
+            assert latest.index("LoggedProcess(") < latest.index("rc = _video_pipeline(episode, airdate, materials)")
+            assert "os.replace(temp, path)" in driver
         else:
             assert script.index("mkdir") < marker < script.index(f"scripts{separator}download_tver.py")
             assert 'mv -f "$MATERIALS_TMP" "$MATERIALS_STATE"' in script

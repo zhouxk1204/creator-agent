@@ -26,7 +26,7 @@ def setup(tmp_path, monkeypatch):
 def fake_commands(monkeypatch, output, *, failure_stage=None):
     calls = []
 
-    def run(command, log_file, cwd=None):
+    def run(command, log_file, cwd=None, **kwargs):
         calls.append(command)
         stage = (len(calls) - 1) % 3 + 1
         if stage == 1:
@@ -105,11 +105,11 @@ def test_one_failed_video_does_not_block_the_second(setup, monkeypatch):
     calls = fake_commands(monkeypatch, output)
     real_run = tool.run
 
-    def fail_first(command, log_file, cwd=None):
+    def fail_first(command, log_file, cwd=None, **kwargs):
         if command[-1] == output / "941_1_4K.part.mp4":
-            real_run(command, log_file, cwd)
+            real_run(command, log_file, cwd, **kwargs)
             raise subprocess.CalledProcessError(1, command)
-        real_run(command, log_file, cwd)
+        real_run(command, log_file, cwd, **kwargs)
 
     monkeypatch.setattr(tool, "run", fail_first)
     assert tool.main([*(str(video) for video in videos), "--output-dir", str(output)]) == 1
@@ -150,3 +150,90 @@ def test_frame_directory_creation_failure_still_cleans_workspace(setup, monkeypa
     monkeypatch.setattr(Path, "mkdir", mkdir)
     assert tool.main([str(videos[0]), "--output-dir", str(output)]) == 1
     assert not (output / ".upscale_tmp").exists()
+
+
+@pytest.mark.parametrize("stage", [1, 2, 3])
+def test_interrupt_then_resume_skips_finished_video_and_restarts_frames(setup, monkeypatch, stage):
+    output, videos = setup
+    complete = output / "941_1_4K.mp4"
+    complete.write_bytes(b"completed video")
+    calls = fake_commands(monkeypatch, output)
+    fake_run = tool.run
+
+    def interrupt(command, log_file, cwd=None, **kwargs):
+        fake_run(command, log_file, cwd, **kwargs)
+        if len(calls) == stage:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(tool, "run", interrupt)
+    argv = [*(str(video) for video in videos), "--output-dir", str(output)]
+    assert tool.main(argv) == 130
+    assert complete.read_bytes() == b"completed video"
+    assert not (output / "941_2_4K.mp4").exists()
+    assert not (output / ".upscale_tmp").exists()
+    assert not list(output.glob("*.part.mp4"))
+
+    # Also simulate debris from closing the terminal without a graceful interrupt.
+    frames = output / ".upscale_tmp/941_2/out_frames"
+    frames.mkdir(parents=True)
+    (frames / "stale.jpg").write_bytes(b"unfinished frame")
+    (output / "941_2_4K.part.mp4").write_bytes(b"unfinished encoding")
+    resumed = fake_commands(monkeypatch, output)
+    fake_run = tool.run
+
+    def restart(command, log_file, cwd=None, **kwargs):
+        if not resumed:
+            assert "941_2" in str(command[-1])
+            assert "in_frames" in str(command[-1])
+            assert not (frames / "stale.jpg").exists()
+            assert not (output / "941_2_4K.part.mp4").exists()
+        fake_run(command, log_file, cwd, **kwargs)
+
+    monkeypatch.setattr(tool, "run", restart)
+    assert tool.main(argv) == 0
+    assert len(resumed) == 3
+    assert complete.read_bytes() == b"completed video"
+    assert (output / "941_2_4K.mp4").read_bytes() == b"upscaled video"
+    assert all(video.read_bytes() == b"original" for video in videos)
+    text = (output / "run_log.txt").read_text(encoding="utf-8")
+    assert text.count("Real-ESRGAN RUN START") == 2
+    assert "[INTERRUPTED]" in text
+    assert "[SKIP]" in text
+
+
+def test_all_completed_videos_skip_without_gpu_dependencies(setup, monkeypatch):
+    output, videos = setup
+    for video in videos:
+        (output / f"{video.stem}_4K.mp4").write_bytes(b"complete")
+    check = Mock(side_effect=RuntimeError("GPU unavailable"))
+    monkeypatch.setattr(tool, "check_setup", check)
+    run = Mock()
+    monkeypatch.setattr(tool, "run", run)
+    assert tool.main([*(str(video) for video in videos), "--output-dir", str(output)]) == 0
+    check.assert_not_called()
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize("missing_stage", [1, 2, 3])
+def test_success_exit_without_complete_artifacts_is_not_a_checkpoint(setup, monkeypatch, missing_stage):
+    output, videos = setup
+    previous = output / "941_1_4K.mp4"
+    previous.write_bytes(b"previous good output")
+    calls = fake_commands(monkeypatch, output)
+    fake_run = tool.run
+
+    def missing(command, log_file, cwd=None, **kwargs):
+        fake_run(command, log_file, cwd, **kwargs)
+        if len(calls) == missing_stage:
+            if missing_stage == 1:
+                Path(command[-1]).with_name("frame_000001.jpg").unlink()
+            elif missing_stage == 2:
+                (Path(command[command.index("-o") + 1]) / "frame_000001_out.jpg").unlink()
+            else:
+                Path(command[-1]).write_bytes(b"")
+
+    monkeypatch.setattr(tool, "run", missing)
+    assert tool.main([str(videos[0]), "--output-dir", str(output), "--force"]) == 1
+    assert previous.read_bytes() == b"previous good output"
+    assert not (output / ".upscale_tmp").exists()
+    assert not list(output.glob("*.part.mp4"))

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import json
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -73,54 +73,70 @@ def test_real_subprocess_fetch_and_download_overlap(tmp_path, monkeypatch, mater
     assert "covers finished" in (materials / "materials_log.txt").read_text(encoding="utf-8")
     state = tmp_path / "logs/.last_doraemon_materials"
     assert state.read_text(encoding="utf-8").strip() == str(materials.resolve())
-    assert set(state.parent.iterdir()) == {state}
+    pending = tmp_path / "logs" / pipeline.PENDING_MARKER
+    assert pending.read_text(encoding="utf-8").strip() == str(materials.resolve())
+    assert set(state.parent.iterdir()) == {state, pending}
+    saved = json.loads((materials / pipeline.STATE_NAME).read_text(encoding="utf-8"))
+    assert saved["status"] == "completed"
+    assert saved["stage"] == "done"
 
 
 @pytest.mark.parametrize("video_rc", [0, 7])
 def test_fetch_failure_does_not_change_video_result(monkeypatch, materials, video_rc, capsys):
     proc = Mock()
     proc.wait.return_value = 3
-    popen = Mock(return_value=proc)
-    monkeypatch.setattr(pipeline.subprocess, "Popen", popen)
+    start = Mock(return_value=proc)
+    monkeypatch.setattr(pipeline, "LoggedProcess", start)
     video = Mock(return_value=video_rc)
     monkeypatch.setattr(pipeline, "_video_pipeline", video)
     assert pipeline.latest_materials() == video_rc
     video.assert_called_once_with("941", "2026-11-07", materials.resolve())
     proc.wait.assert_called_once_with()
     assert "Materials fetch failed" in capsys.readouterr().out
-    assert popen.call_args.kwargs["stdout"].closed
+    assert start.call_args.args[1].path == materials / "materials_log.txt"
 
 
 @pytest.mark.parametrize("video_rc", [0, 7])
-def test_log_open_failure_does_not_block_video(monkeypatch, materials, video_rc, capsys):
+def test_log_write_failure_does_not_block_video_or_console_fetch(monkeypatch, materials, video_rc, capsys):
     materials.mkdir(parents=True)
     (materials / "materials_log.txt").mkdir()
     video = Mock(return_value=video_rc)
     monkeypatch.setattr(pipeline, "_video_pipeline", video)
-    popen = Mock()
-    monkeypatch.setattr(pipeline.subprocess, "Popen", popen)
+    proc = Mock()
+    proc.wait.return_value = 0
+
+    def start(command, logger, **kwargs):
+        logger.event("materials progress is visible")
+        return proc
+
+    monkeypatch.setattr(pipeline, "LoggedProcess", start)
     assert pipeline.latest_materials() == video_rc
     video.assert_called_once_with("941", "2026-11-07", materials.resolve())
-    popen.assert_not_called()
-    assert "Cannot open materials log" in capsys.readouterr().out
+    proc.wait.assert_called_once_with()
+    output = capsys.readouterr().out
+    assert "Cannot write log" in output
+    assert "materials progress is visible" in output
 
 
 def test_fetch_start_failure_does_not_block_video(monkeypatch, materials, capsys):
-    monkeypatch.setattr(pipeline.subprocess, "Popen", Mock(side_effect=OSError("cannot start")))
+    monkeypatch.setattr(pipeline, "LoggedProcess", Mock(side_effect=OSError("cannot start")))
     video = Mock(return_value=0)
     monkeypatch.setattr(pipeline, "_video_pipeline", video)
     assert pipeline.latest_materials() == 0
     video.assert_called_once()
     assert "Cannot start materials fetch" in capsys.readouterr().out
+    saved = json.loads((materials / pipeline.STATE_NAME).read_text(encoding="utf-8"))
+    assert saved["status"] == "failed"
+    assert saved["stage"] == "materials"
 
 
-def test_video_exception_still_joins_fetch(monkeypatch, materials):
+def test_video_exception_stops_fetch(monkeypatch, materials):
     proc = Mock()
-    proc.wait.return_value = 0
-    monkeypatch.setattr(pipeline.subprocess, "Popen", Mock(return_value=proc))
+    monkeypatch.setattr(pipeline, "LoggedProcess", Mock(return_value=proc))
     monkeypatch.setattr(pipeline, "_video_pipeline", Mock(side_effect=OSError("video start failed")))
     assert pipeline.main([]) == 1
-    proc.wait.assert_called_once_with()
+    proc.stop.assert_called_once_with()
+    proc.wait.assert_not_called()
 
 
 def test_materials_only_mode_is_synchronous_and_keeps_existing_videos(monkeypatch, materials):
@@ -129,11 +145,11 @@ def test_materials_only_mode_is_synchronous_and_keeps_existing_videos(monkeypatc
     existing.write_bytes(b"existing video")
     run = Mock(return_value=4)
     monkeypatch.setattr(pipeline, "_run_script", run)
-    popen = Mock()
-    monkeypatch.setattr(pipeline.subprocess, "Popen", popen)
+    start = Mock()
+    monkeypatch.setattr(pipeline, "LoggedProcess", start)
     assert pipeline.latest_materials(download_video=False) == 4
-    run.assert_called_once_with("fetch_doraemon.py", "941")
-    popen.assert_not_called()
+    run.assert_called_once_with("fetch_doraemon.py", "941", log_file=materials / "materials_log.txt")
+    start.assert_not_called()
     assert existing.read_bytes() == b"existing video"
 
 
@@ -156,23 +172,24 @@ def test_video_pipeline_requires_both_story_clips(tmp_path, monkeypatch):
 
 def test_no_latest_episode_starts_neither_branch(monkeypatch, materials):
     monkeypatch.setattr(pipeline.fetch_doraemon, "_latest_item", lambda: None)
-    popen = Mock()
-    monkeypatch.setattr(pipeline.subprocess, "Popen", popen)
+    start = Mock()
+    monkeypatch.setattr(pipeline, "LoggedProcess", start)
     assert pipeline.latest_materials() == 1
-    popen.assert_not_called()
+    start.assert_not_called()
     assert not materials.exists()
 
 
 def test_run_script_uses_argument_list_for_paths_with_spaces(monkeypatch, tmp_path):
-    run = Mock(return_value=subprocess.CompletedProcess([], 0))
-    monkeypatch.setattr(pipeline.subprocess, "run", run)
+    run = Mock(return_value=0)
+    monkeypatch.setattr(pipeline, "run_logged", run)
     python = tmp_path / "upscale env/python.exe"
     assert pipeline._run_script("upscale_tool.py", "some video.mp4", "--output-dir", "素材 dir !", python=python) == 0
     assert run.call_args.args[0] == [
         str(python),
+        "-u",
         str(pipeline.ROOT / "scripts/upscale_tool.py"),
         "some video.mp4",
         "--output-dir",
         "素材 dir !",
     ]
-    assert run.call_args.kwargs == {"cwd": pipeline.ROOT, "check": False}
+    assert run.call_args.kwargs == {"cwd": pipeline.ROOT, "interactive": False}

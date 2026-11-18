@@ -22,6 +22,18 @@ def test_batch_video_stages_are_enabled_with_materials_only_guard():
     assert '"%UPSCALE_PYTHON%" "%UPSCALE_SCRIPT%" %*' in wrapper
 
 
+def test_batch_resume_and_latest_routing_initialize_result_before_jumping():
+    script = (ROOT / "bat/doraemon/01_download_latest_materials.bat").read_text(encoding="utf-8")
+    prompt = script.index('set /p ep="Episode number (Enter = resume/latest): "')
+    override = script.index('if "%ep%"=="--latest"')
+    jump = script.index("goto :latest")
+    assert script.index('set "RC=0"') < prompt < override < jump
+    assert script.index('set "MAT="') < jump
+    assert 'set "LATESTARG=--latest"' in script
+    assert "%VIDEOARG% %LATESTARG%" in script
+    assert "Enter = resume unfinished task" in script
+
+
 @pytest.mark.parametrize("download_video", [0, 1])
 def test_shell_materials_only_toggle(tmp_path, download_video):
     repo = tmp_path / "repo"
