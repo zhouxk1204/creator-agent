@@ -72,10 +72,10 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   - 输出 `output\スケスケ望遠鏡でさがしもの.mp4` / `くしゃみに気をつけろ.mp4` / `<原名>_split.json`；`--copy` 快速模式（对齐关键帧，可能偏 1 秒级）
   - 漏检调 `--sim 0.997` / `--min-duration 4`，误检调 `--min-duration 6` / `--episodes 2`
 - **`04_ja_asr.bat`** —— 日语视频去背景音 + ASR + 说话人分离 + 词级对齐字幕 + 翻译（需要 creator-asr-ja 环境，见下文）：
-  - **双击运行 = 递归处理 `logs/.last_doraemon_materials` 记录目录里的所有视频**：输入目录和输出根目录都是该素材目录，每个视频的结果写入 `<素材目录>\<名字>\`（各步已完成会自动跳过）
-  - 默认只做日文 ASR；加 `--translate` 生成中文 `.zh.srt`，再加 `--burn` 烧录 `.zh.mp4`；翻译服务会在 ASR 完成后自动按需启停
-  - 或 `bat\doraemon\04_ja_asr.bat video.mp4`（仅 ASR）/ `... --burn`（额外烧录 `.zh.mp4`），也可把 mp4 拖到 bat 上
-  - 输出 `<名字>.txt` / `<名字>.srt` / `<名字>.zh.srt` / `<名字>.transcript.json`
+  - **双击运行 = 读取 `logs/.last_doraemon_materials`**：该记录中的素材目录同时作为输入和输出根目录，扫描其中所有视频，并把每个视频的 ASR 结果写到 `<素材目录>/<名字>/`；已有结果自动跳过
+  - 默认只做 ASR 和边界审计；需要中文时自行加 `--translate`，烧录再加 `--burn`
+  - 或 `bat\doraemon\04_ja_asr.bat video.mp4` 只处理指定视频；`--input-dir` / `--out-dir` 可覆盖本次目录
+  - 输出 `<名字>.alignment.<run>.srt` / `<名字>.timing.<run>.json` / `<名字>.txt` / `<名字>.srt` / `<名字>.transcript.json` 等审计与最终产物
 - **`05_learn_corrections.bat`** —— 二次学习：扫描 `subtitle-project/episodes/` 下各剧集的
   `01_original_ja.srt` + `02_ai_zh.srt` + `03_final_zh.srt`，分析 AI 翻译 vs 人工修正的差异，
   沉淀到 `knowledge/` 知识库并生成 `reports/`；之后的翻译自动注入相关知识（需翻译服务在跑）

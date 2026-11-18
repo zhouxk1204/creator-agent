@@ -198,19 +198,34 @@ def test_scan_videos_finds_only_video_exts(tmp_path):
     assert scan_videos(tmp_path / "missing") == []
 
 
-def test_ja_asr_cli_scans_explicit_input_dir(tmp_path):
+def test_ja_asr_cli_uses_last_explicit_input_and_output_dirs(tmp_path):
     from typer.testing import CliRunner
 
     from creator_agent.cli.main import app
 
+    default_dir = tmp_path / "default"
+    override_dir = tmp_path / "override"
+    default_dir.mkdir()
+    override_dir.mkdir()
     result = CliRunner().invoke(
         app,
-        ["ja-asr", "--input-dir", str(tmp_path), "--out-dir", str(tmp_path)],
+        [
+            "ja-asr",
+            "--input-dir",
+            str(default_dir),
+            "--out-dir",
+            str(default_dir),
+            "--input-dir",
+            str(override_dir),
+            "--out-dir",
+            str(override_dir),
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert f"Scanning {tmp_path} ..." in result.output
-    assert f"No videos found. Drop video files into {tmp_path} and re-run." in result.output
+    assert f"Output dir: {override_dir}" in result.output
+    assert f"Scanning {override_dir} ..." in result.output
+    assert f"No videos found. Drop video files into {override_dir} and re-run." in result.output
 
 
 def test_split_pending_by_existing_srt(tmp_path):

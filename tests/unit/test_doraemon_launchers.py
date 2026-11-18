@@ -20,23 +20,6 @@ def test_batch_video_stages_are_enabled_with_materials_only_guard():
     assert guard < script.index("scripts\\split_episode.py") < script.index('call "%~dp0run_upscale.bat"')
 
 
-def test_ja_asr_uses_last_materials_folder_for_input_and_output():
-    data = (ROOT / "bat/doraemon/04_ja_asr.bat").read_bytes()
-    assert b"\n" not in data.replace(b"\r\n", b"")
-    script = data.decode("ascii").replace("\r\n", "\n")
-
-    state = 'set "MATERIALS_STATE=%REPO_ROOT%\\logs\\.last_doraemon_materials"'
-    load = 'set /p "MATERIALS_DIR="<"%MATERIALS_STATE%"'
-    input_default = 'if not defined HAS_INPUT_DIR set "ARGS=--input-dir "%MATERIALS_DIR%" %ARGS%"'
-    output_default = 'if not defined HAS_OUT_DIR set "ARGS=%ARGS% --out-dir "%OUTDIR%""'
-
-    assert script.index(state) < script.index(load) < script.index(input_default)
-    assert script.index(input_default) < script.index(output_default)
-    assert 'set "OUTDIR=%MATERIALS_DIR%"' in script
-    assert "Get-Date -Format" not in script
-    assert "Desktop\\ja_asr_" not in script
-
-
 @pytest.mark.parametrize("download_video", [0, 1])
 def test_shell_materials_only_toggle(tmp_path, download_video):
     repo = tmp_path / "repo"
@@ -97,3 +80,19 @@ def test_shell_materials_only_toggle(tmp_path, download_video):
         assert result.returncode == 42
         assert len(commands) == 2
         assert "scripts/download_tver.py" in commands[1]
+
+
+def test_ja_asr_launcher_uses_saved_materials_for_input_and_output():
+    data = (ROOT / "bat/doraemon/04_ja_asr.bat").read_bytes()
+    assert b"\n" not in data.replace(b"\r\n", b"")
+    script = data.decode("ascii").replace("\r\n", "\n")
+
+    marker = script.index(r"logs\.last_doraemon_materials")
+    missing_guard = script.index('if not exist "%MATERIALS_STATE%"')
+    empty_guard = script.index("if not defined MATERIALS_DIR")
+    directory_guard = script.index('if not exist "%MATERIALS_DIR%\\"')
+    command = script.index('ja-asr --input-dir "%MATERIALS_DIR%" --out-dir "%MATERIALS_DIR%" %*')
+
+    assert marker < missing_guard < empty_guard < directory_guard < command
+    assert r"Desktop\ja_asr_" not in script
+    assert r"C:\test\temps" not in script

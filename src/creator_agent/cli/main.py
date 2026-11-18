@@ -472,7 +472,7 @@ def ja_asr(
         None, help="Video paths / globs. Omit to scan --input-dir or ja_asr.input_dir."
     ),
     input_dir: str | None = typer.Option(
-        None, "--input-dir", help="Directory to scan recursively (default: ja_asr.input_dir)."
+        None, "--input-dir", help="Input directory to scan when no video paths are given (default: ja_asr.input_dir)."
     ),
     out_dir: str | None = typer.Option(None, "--out-dir", "-o", help="Output dir (default: ja_asr.out_dir)."),
     language: str | None = typer.Option(None, "--language", "-l", help="ASR language (default: config, Japanese)."),
@@ -516,12 +516,12 @@ def ja_asr(
             else:
                 typer.echo(f"  ! not found: {arg}")
     else:
-        scan_dir = Path(input_dir) if input_dir else Path(ja.input_dir)
-        scan_dir.mkdir(parents=True, exist_ok=True)
-        paths = scan_videos(scan_dir)
-        typer.echo(f"Scanning {scan_dir} ...")
+        source_dir = Path(input_dir) if input_dir else Path(ja.input_dir)
+        source_dir.mkdir(parents=True, exist_ok=True)
+        paths = scan_videos(source_dir)
+        typer.echo(f"Scanning {source_dir} ...")
         if not paths:
-            typer.echo(f"No videos found. Drop video files into {scan_dir} and re-run.")
+            typer.echo(f"No videos found. Drop video files into {source_dir} and re-run.")
             return
 
     if force:

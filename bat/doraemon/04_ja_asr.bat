@@ -10,41 +10,30 @@ if errorlevel 1 (
 )
 call .venv\Scripts\activate.bat >nul 2>&1
 
-rem --- Default input/output: the latest Doraemon materials folder. ----------
-rem Explicit video arguments, --input-dir, and --out-dir/-o override defaults.
+rem --- Default input and output: the last downloaded materials folder. --------
+rem Explicit video paths, --input-dir, and --out-dir later in %* still win.
 set "MATERIALS_STATE=%REPO_ROOT%\logs\.last_doraemon_materials"
 if not exist "%MATERIALS_STATE%" (
-    echo Missing materials state: "%MATERIALS_STATE%"
-    echo Run the latest-episode materials launcher first.
+    echo.
+    echo [X] Saved materials folder not found: "%MATERIALS_STATE%"
+    echo     Run the latest-materials downloader first.
     pause >nul
     exit /b 1
 )
 set "MATERIALS_DIR="
-set /p "MATERIALS_DIR="<"%MATERIALS_STATE%"
+for /f "usebackq delims=" %%I in ("%MATERIALS_STATE%") do if not defined MATERIALS_DIR set "MATERIALS_DIR=%%I"
 if not defined MATERIALS_DIR (
-    echo Materials state is empty: "%MATERIALS_STATE%"
+    echo.
+    echo [X] Saved materials folder is empty: "%MATERIALS_STATE%"
     pause >nul
     exit /b 1
 )
 if not exist "%MATERIALS_DIR%\" (
-    echo Materials folder not found: "%MATERIALS_DIR%"
+    echo.
+    echo [X] Saved materials folder no longer exists: "%MATERIALS_DIR%"
     pause >nul
     exit /b 1
 )
-
-set "OUTDIR=%MATERIALS_DIR%"
-set "ARGS=%*"
-set "HAS_INPUT_DIR="
-set "HAS_OUT_DIR="
-if not "%~1"=="" (
-    for %%A in (%*) do (
-        if /i "%%~A"=="--input-dir" set "HAS_INPUT_DIR=1"
-        if /i "%%~A"=="--out-dir" set "HAS_OUT_DIR=1"
-        if /i "%%~A"=="-o" set "HAS_OUT_DIR=1"
-    )
-)
-if not defined HAS_INPUT_DIR set "ARGS=--input-dir "%MATERIALS_DIR%" %ARGS%"
-if not defined HAS_OUT_DIR set "ARGS=%ARGS% --out-dir "%OUTDIR%""
 
 rem ---------------------------------------------------------------------------
 rem NOTE: keep this file ASCII-only. cmd.exe mis-parses multibyte characters
@@ -62,15 +51,15 @@ rem                          Suspects are written to <video>.check.txt.
 rem   6. write Japanese SRT  <video>.srt (kept clean; import into JianYing
 rem                          to check the timeline)
 rem
-rem Double-click (no args) = recursively process every video in the folder
-rem recorded by logs\.last_doraemon_materials. The same folder is the output
-rem root, with one <name> subfolder per video.
+rem Double-click (no args) = process every video in the folder saved in
+rem logs\.last_doraemon_materials. Input and output roots are that same folder;
+rem each video's files go into <materials>\<name>\.
 rem Pass your own args to override, e.g.:
 rem   04_ja_asr.bat video.mp4                  only this video
 rem   04_ja_asr.bat video.mp4 --force          ignore existing SRT/audio cache
 rem   04_ja_asr.bat video.mp4 --translate      also translate to .zh.srt
 rem   04_ja_asr.bat video.mp4 --translate --burn   then burn into .zh.mp4
-rem   04_ja_asr.bat video.mp4 --out-dir D:\somewhere   override the saved output folder
+rem   04_ja_asr.bat --input-dir D:\videos --out-dir D:\results
 rem
 rem Tuning: config\settings.validate.yaml (auto-loaded when present) overrides
 rem ONLY the ja_asr section of config\settings.yaml - edit one line, rerun with
@@ -90,19 +79,21 @@ echo   + boundary check vs original video/audio
 echo ========================================
 echo.
 if "%~1"=="" (
-    echo  Input/output -^> %MATERIALS_DIR%
-    echo    ^<name^>.alignment.^<run^>.srt  Raw alignment inspection ^(open this first^)
-    echo    ^<name^>.srt        Final Japanese subtitles
-    echo    ^<name^>.check.txt  diagnostic-boundary report
-    echo    ^<name^>.timing.^<run^>.json    Raw ASR and local/global word times
-    echo  Intermediates ^(mix + vocals + instrumental^) kept in C:\test\temps\_work.
+    echo  Double-click = ASR + boundary check for every video in:
+    echo    %MATERIALS_DIR%
+    echo  Input/output root: the saved materials folder above.
+    echo    ^<name^>\^<name^>.alignment.^<run^>.srt  Raw alignment inspection ^(open this first^)
+    echo    ^<name^>\^<name^>.srt        Final Japanese subtitles
+    echo    ^<name^>\^<name^>.check.txt  diagnostic-boundary report
+    echo    ^<name^>\^<name^>.timing.^<run^>.json    Raw ASR and local/global word times
     echo  Already-done videos are skipped automatically.
     echo  ^(Add --translate yourself if you also want .zh.srt.^)
 ) else (
-    echo  Running: ja-asr %ARGS%
+    echo  Saved materials folder: %MATERIALS_DIR%
+    echo  Running: ja-asr %*
 )
 echo.
-"%PY%" -m creator_agent.cli.main ja-asr %ARGS%
+"%PY%" -m creator_agent.cli.main ja-asr --input-dir "%MATERIALS_DIR%" --out-dir "%MATERIALS_DIR%" %*
 set "RC=%ERRORLEVEL%"
 echo.
 echo ========================================
