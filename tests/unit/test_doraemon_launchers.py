@@ -14,10 +14,12 @@ def test_batch_video_stages_are_enabled_with_materials_only_guard():
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
     assert 'set "DOWNLOAD_VIDEO=1"' in script
-    guard = script.index('if "%DOWNLOAD_VIDEO%"=="0" (')
-    assert script.index("os.replace(temp, target)") < guard < script.index("scripts\\download_tver.py")
-    assert script.index("goto :done", guard) < script.index("scripts\\download_tver.py")
-    assert guard < script.index("scripts\\split_episode.py") < script.index('call "%~dp0run_upscale.bat"')
+    guard = script.index('if "%DOWNLOAD_VIDEO%"=="0" set "VIDEOARG=--no-video"')
+    assert guard < script.index('"%PY%" scripts\\download_doraemon_materials.py %VIDEOARG%')
+    assert r"logs\.last_doraemon_materials" in script
+    assert "copy /Y" not in script and r"C:\test" not in script
+    wrapper = (ROOT / "bat/doraemon/run_upscale.bat").read_text(encoding="utf-8")
+    assert '"%UPSCALE_PYTHON%" "%UPSCALE_SCRIPT%" %*' in wrapper
 
 
 @pytest.mark.parametrize("download_video", [0, 1])

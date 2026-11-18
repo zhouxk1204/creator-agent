@@ -16,5 +16,5 @@ if not exist "%UPSCALE_SCRIPT%" (
     exit /b 1
 )
 
-"%UPSCALE_PYTHON%" "%UPSCALE_SCRIPT%"
+"%UPSCALE_PYTHON%" "%UPSCALE_SCRIPT%" %*
 exit /b %ERRORLEVEL%

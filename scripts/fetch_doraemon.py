@@ -6,19 +6,21 @@ Takes an episode number (e.g. ``934`` or ``0934``), builds the URL
     ~/Desktop/doraemon_{ep}/        # ONE per-episode materials folder — the only
                                     # output (storage/doraemon is not written)
     ├── metadata.json   # episode, url, broadcast_date, stories[{title, synopsis, image_file, copyright}]
-    ├── {ep}_1.jpg, {ep}_2.jpg, ...   # per-story images ({ep} = unpadded episode number)
-    └── {ep}_{i}_4k.jpg              # optional ComfyUI-upscaled covers
+    └── {ep}_{i}_4k.jpg # ComfyUI cover when upscale succeeds; original is then removed
 
 Usage:
     uv run python scripts/fetch_doraemon.py 934
     uv run python scripts/fetch_doraemon.py --latest # fetch the latest episode
                                                      # already broadcast (<= today JST)
+    uv run python scripts/fetch_doraemon.py --resolve-latest
+                                                     # write latest episode/date state only
     uv run python scripts/fetch_doraemon.py --auto   # fetch every aired episode
                                                      # after the newest local one
 
-Reruns only fetch what is missing: an existing ``{ep}_{i}.jpg`` is not
-downloaded again and an existing ``{ep}_{i}_4k.jpg`` is not re-upscaled (ComfyUI
-is not even started when every cover is done). ``--force`` redoes both.
+Reruns only fetch what is missing. A successful ComfyUI upscale replaces the
+original cover: ``image_file`` points at ``{ep}_{i}_4k.*`` and the downloaded
+source image is removed. Existing upscaled covers are reused without downloading
+the source again. ``--force`` redoes both download and upscale.
 
 --latest resolves the episode number from the same index that renders the
 backnumber page (https://www.tv-asahi.co.jp/doraemon/story/bk/): the site's own
@@ -46,13 +48,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 
-from creator_agent.doraemon.metadata import save_sources
+from creator_agent.doraemon.metadata import get_story, save_sources, update_metadata
 
 BASE_URL = "https://www.tv-asahi.co.jp/doraemon/story/{ep}/"
 # Index behind the backnumber page (story/bk/): what its JS renders into the
@@ -247,6 +250,20 @@ def ensure_comfyui(client: httpx.Client, boot_timeout: int = 240) -> tuple[str |
     return None, None
 
 
+def _save_image(dest: Path, content: bytes) -> None:
+    if not content:
+        raise ValueError(f"Empty image response for {dest.name}")
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=dest.parent, delete=False) as handle:
+            temp = Path(handle.name)
+            handle.write(content)
+        os.replace(temp, dest)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
 def comfy_upscale(client: httpx.Client, base_url: str, img_path: Path, dest: Path, timeout: int = 300) -> bool:
     """Run img_path through the user's doraemonn_cover workflow -> dest.
 
@@ -284,13 +301,23 @@ def comfy_upscale(client: httpx.Client, base_url: str, img_path: Path, dest: Pat
                         },
                     )
                     view.raise_for_status()
-                    dest.write_bytes(view.content)
+                    _save_image(dest, view.content)
                     return True
             return False  # finished but produced no image
     except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
         print(f"  cover(4k) : upscale failed ({exc})")
         return False
     return False  # timed out
+
+
+def _promote_cover(metadata_path: Path, story_id: str, source: Path, upscaled: Path) -> None:
+    """Point metadata at a completed upscale before removing its source image."""
+
+    def apply(data: dict) -> None:
+        get_story(data, story_id)["image_file"] = upscaled.name
+
+    update_metadata(metadata_path, apply)
+    source.unlink(missing_ok=True)
 
 
 def fetch_one(episode: str) -> int:
@@ -319,6 +346,8 @@ def fetch_one(episode: str) -> int:
         # (storage/doraemon is no longer written).
         desk_dir = desktop_episode_dir(episode)
         desk_dir.mkdir(parents=True, exist_ok=True)
+        ep_short = str(int(episode))
+        covers: list[tuple[int, Path, Path, bool]] = []
 
         for i, story in enumerate(data["stories"], 1):
             src = story.pop("image")
@@ -326,35 +355,49 @@ def fetch_one(episode: str) -> int:
                 continue
             img_url = src if src.startswith("http") else f"https://www.tv-asahi.co.jp{src}"
             ext = Path(img_url.split("?")[0]).suffix or ".jpg"
-            img_path = desk_dir / f"{int(episode)}_{i}{ext}"
-            if not FORCE and img_path.is_file() and img_path.stat().st_size > 0:
-                print(f"  image     : {img_path}  (已存在, 跳过下载)")
+            img_path = desk_dir / f"{ep_short}_{i}{ext}"
+            upscaled_path = desk_dir / f"{ep_short}_{i}_4k{ext}"
+            upscaled_ready = (
+                not FORCE
+                and upscaled_path.is_file()
+                and upscaled_path.stat().st_size > 0
+                and (not img_path.is_file() or img_path.stat().st_mtime_ns <= upscaled_path.stat().st_mtime_ns)
+            )
+            if upscaled_ready:
+                story["image_file"] = upscaled_path.name
+                print(f"  cover(4k) : {upscaled_path}  (已存在, 跳过下载)")
             else:
-                img_path.write_bytes(client.get(img_url).content)
-                print(f"  image     : {img_path}")
-            story["image_file"] = img_path.name
+                if not FORCE and img_path.is_file() and img_path.stat().st_size > 0:
+                    print(f"  image     : {img_path}  (已存在, 跳过下载)")
+                else:
+                    image = client.get(img_url)
+                    image.raise_for_status()
+                    _save_image(img_path, image.content)
+                    print(f"  image     : {img_path}")
+                story["image_file"] = img_path.name
+            covers.append((i, img_path, upscaled_path, upscaled_ready))
 
         broadcast_date = data["broadcast_date"]
-        data = save_sources(desk_dir / "metadata.json", data)
+        metadata_path = desk_dir / "metadata.json"
+        data = save_sources(metadata_path, data)
         print(f"  desktop   : {desk_dir}")
 
-        ep_short = str(int(episode))
-        covers = [
-            (i, desk_dir / story["image_file"], desk_dir / f"{ep_short}_{i}_4k{Path(story['image_file']).suffix}")
-            for i, story in enumerate(data["stories"], 1)
-            if story.get("image_file")
-        ]
-        # ComfyUI takes ~30-60s to boot, so only start it when a cover is
-        # actually missing — a rerun with all covers done costs nothing.
-        pending = [(i, s, d) for i, s, d in covers if FORCE or not (d.is_file() and d.stat().st_size > 0)]
+        # Persist the replacement path before removing any source images.
+        for _, src_img, _, upscaled_ready in covers:
+            if upscaled_ready:
+                src_img.unlink(missing_ok=True)
+
+        pending = [(i, s, d) for i, s, d, ready in covers if not ready]
         if not pending:
             print("  cover(4k) : 已存在, 跳过 (未启动 ComfyUI)")
         else:
             comfy_url, comfy_proc = ensure_comfyui(client)
             try:
-                for _, src_img, dst_4k in pending:
+                for i, src_img, dst_4k in pending:
                     if comfy_url and comfy_upscale(client, comfy_url, src_img, dst_4k):
-                        print(f"  cover(4k) : {dst_4k}")
+                        _promote_cover(metadata_path, f"{ep_short}_{i}", src_img, dst_4k)
+                        get_story(data, f"{ep_short}_{i}")["image_file"] = dst_4k.name
+                        print(f"  cover(4k) : {dst_4k}  (原图已删除)")
                     else:
                         if not comfy_url:
                             print("  cover(4k) : ComfyUI unavailable - using original instead")
@@ -368,15 +411,8 @@ def fetch_one(episode: str) -> int:
     for story in data["stories"]:
         print(f"  story     : {story['title']}  ({len(story['synopsis'])} chars)")
     print(f"\nSaved to: {desk_dir.resolve()}")
-    # Remember what we fetched so callers that passed --latest can chain the
-    # translation step on the resolved number, and the download step on the
-    # broadcast date.
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    (STATE_DIR / FETCHED_STATE_NAME).write_text(f"{int(ep)}\n", encoding="utf-8")
-    date_m = BROADCAST_DATE_RE.search(broadcast_date)
-    if date_m:
-        iso = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
-        (STATE_DIR / FETCHED_DATE_STATE_NAME).write_text(iso + "\n", encoding="utf-8")
+    # Remember what we fetched so callers can chain later stages.
+    _write_fetched_state(ep, broadcast_date)
     return 0
 
 
@@ -393,6 +429,34 @@ FETCHED_STATE_NAME = ".last_fetched"
 # Its broadcast date in ISO form (2026-10-17); read by the materials-pipeline
 # launcher to pick the matching TVer episode (--broadcast-date).
 FETCHED_DATE_STATE_NAME = ".last_fetched_date"
+
+
+def _write_fetched_state(episode: str, broadcast_date: str) -> None:
+    """Write each state marker atomically and clear an unparseable date."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    episode_path = STATE_DIR / FETCHED_STATE_NAME
+    date_path = STATE_DIR / FETCHED_DATE_STATE_NAME
+    episode_tmp = episode_path.with_name(f"{episode_path.name}.tmp")
+    date_tmp = date_path.with_name(f"{date_path.name}.tmp")
+
+    episode_tmp.write_text(f"{int(episode)}\n", encoding="utf-8")
+    os.replace(episode_tmp, episode_path)
+
+    iso = None
+    date_m = BROADCAST_DATE_RE.search(broadcast_date)
+    if date_m:
+        iso = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
+    else:
+        try:
+            iso = date.fromisoformat(broadcast_date).isoformat()
+        except ValueError:
+            pass
+    if iso:
+        date_tmp.write_text(iso + "\n", encoding="utf-8")
+        os.replace(date_tmp, date_path)
+    else:
+        date_tmp.unlink(missing_ok=True)
+        date_path.unlink(missing_ok=True)
 
 
 def resolve_latest_episode(client: httpx.Client) -> dict | None:
@@ -419,9 +483,24 @@ def resolve_latest_episode(client: httpx.Client) -> dict | None:
     return max(aired, key=lambda pair: pair[0])[1]
 
 
-def latest_fetch() -> int:
+def _latest_item() -> dict | None:
     with httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=30) as client:
-        item = resolve_latest_episode(client)
+        return resolve_latest_episode(client)
+
+
+def resolve_latest_state() -> int:
+    """Resolve only the latest episode so independent branches can start together."""
+    item = _latest_item()
+    if item is None:
+        print("No already-broadcast episode found in the story index.")
+        return 1
+    _write_fetched_state(item["id"], item["date"])
+    print(f"Latest broadcast: episode {int(item['id'])} (aired {item['date']} JST)")
+    return 0
+
+
+def latest_fetch() -> int:
+    item = _latest_item()
     if item is None:
         print("No already-broadcast episode found in the story index.")
         return 1
@@ -494,10 +573,12 @@ def auto_fetch() -> int:
 if __name__ == "__main__":
     argv = [a for a in sys.argv[1:] if a != "--force"]
     if len(argv) != 1:
-        print("Usage: fetch_doraemon.py <episode_number|--latest|--auto> [--force]  (e.g. 934)")
+        print("Usage: fetch_doraemon.py <episode_number|--latest|--resolve-latest|--auto> [--force]  (e.g. 934)")
         sys.exit(2)
     if argv[0] == "--auto":
         sys.exit(auto_fetch())
+    if argv[0] == "--resolve-latest":
+        sys.exit(resolve_latest_state())
     if argv[0] == "--latest":
         sys.exit(latest_fetch())
     sys.exit(fetch_one(argv[0]))

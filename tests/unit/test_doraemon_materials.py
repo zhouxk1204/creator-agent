@@ -99,10 +99,8 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     assert fetch_doraemon.fetch_one("0941") == 0
 
     materials = tmp_path / "Desktop" / "doraemon_941"
-    expected_files = {"metadata.json", ".metadata.lock", "941_1.jpg"}
     cover = "941_1_4k.jpg" if cover_mode == "upscaled" else "941_1.jpg"
-    if cover_mode == "upscaled":
-        expected_files.add(cover)
+    expected_files = {"metadata.json", ".metadata.lock", cover}
     assert {p.name for p in materials.iterdir()} == expected_files
     metadata = json.loads((materials / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["schema_version"] == 2
@@ -110,9 +108,10 @@ def test_fetch_and_translate_use_only_desktop_materials(tmp_path, monkeypatch, c
     assert [story["story_id"] for story in metadata["stories"]] == ["941_1", "941_2"]
     assert all(story["zh"] is None for story in metadata["stories"])
     assert [story["title"] for story in metadata["stories"]] == ["ひみつ道具", "冒険"]
-    assert metadata["stories"][0]["image_file"] == "941_1.jpg"
+    assert metadata["stories"][0]["image_file"] == cover
     assert all("image" not in story for story in metadata["stories"])
-    assert (materials / "941_1.jpg").read_bytes() == b"original image"
+    assert (materials / cover).read_bytes() == (b"upscaled image" if cover_mode == "upscaled" else b"original image")
+    assert (materials / "941_1.jpg").exists() == (cover_mode != "upscaled")
     assert (tmp_path / "logs" / ".last_fetched").read_text().strip() == "941"
     assert (tmp_path / "logs" / ".last_fetched_date").read_text().strip() == "2026-11-07"
 

@@ -1,61 +1,41 @@
-"""Upscale every video in C:\\test\\temps with the local Real-ESRGAN setup.
+"""Upscale explicit story videos into their materials directory.
 
-The third-party engine, model, and dedicated conda environment stay in their
-existing locations; this script only owns the extract/upscale/rebuild workflow.
-It is called by bat/doraemon/run_upscale.bat and returns a non-zero exit code if
-any video fails, so callers can use it without an interactive pause.
-
-Reruns only do the missing work: a video whose ``<name>_4K.mp4`` already exists
-is skipped (``--force`` redoes it). The rebuild writes ``<name>_4K.part.mp4``
-first and renames it only after ffmpeg succeeds, so an interrupted run never
-leaves a truncated file that a later run would mistake for finished.
+The third-party Real-ESRGAN engine and model remain in their existing locations.
+Each input is processed sequentially in its own disposable workspace. A completed
+video is first encoded as ``<name>_4K.part.mp4`` and atomically promoted to
+``<name>_4K.mp4``; frame directories and partial output are removed after every
+video, including failures.
 """
 
+from __future__ import annotations
+
+import argparse
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-BASE_DIR = Path(r"C:\test")
-INPUT_DIR = BASE_DIR / "temps"
-IN_FRAMES = BASE_DIR / "in_frames"
-OUT_FRAMES = BASE_DIR / "out_frames"
-
 REALESRGAN_DIR = Path(r"C:\to4k\Real-ESRGAN")
-PYTHON_EXE = Path(r"C:\Users\34696\miniconda3\envs\upscale\python.exe")
+PYTHON_EXE = Path(sys.executable)
 FFMPEG_EXE = REALESRGAN_DIR / "ffmpeg.exe"
 INFERENCE_SCRIPT = REALESRGAN_DIR / "inference_realesrgan.py"
 MODEL_PATH = REALESRGAN_DIR / "weights/2x_AniScale2S_Compact_i8_60K.pth"
-LOG_FILE = BASE_DIR / "run_log.txt"
-
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi"}
-FORCE = "--force" in sys.argv[1:]
 
 
-def log(msg):
-    print(msg, flush=True)
-    with LOG_FILE.open("a", encoding="utf-8") as f:
-        f.write(msg + "\n")
+def log(message: str, log_file: Path) -> None:
+    print(message, flush=True)
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write(message + "\n")
 
 
-def run(cmd, cwd=None):
-    log(f"[CMD] {subprocess.list2cmdline([str(part) for part in cmd])}")
-    subprocess.run(cmd, cwd=cwd, check=True)
+def run(command: list[object], log_file: Path, cwd: Path | None = None) -> None:
+    log(f"[CMD] {subprocess.list2cmdline([str(part) for part in command])}", log_file)
+    subprocess.run(command, cwd=cwd, check=True)
 
 
-def clean_dirs():
-    for directory in (IN_FRAMES, OUT_FRAMES):
-        if directory.exists():
-            shutil.rmtree(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-
-
-def get_videos():
-    return sorted(path for path in INPUT_DIR.iterdir() if path.is_file() and path.suffix.lower() in VIDEO_EXTS)
-
-
-def check_setup():
+def check_setup() -> None:
     required = (
         ("upscale Python", PYTHON_EXE),
         ("Real-ESRGAN inference script", INFERENCE_SCRIPT),
@@ -67,20 +47,41 @@ def check_setup():
         raise RuntimeError("Missing upscale dependency:\n" + "\n".join(missing))
 
 
-def upscale(video):
-    name = video.stem
-    output = BASE_DIR / f"{name}_4K.mp4"
-    # Encode to a .part name and rename only on success: a killed run otherwise
-    # leaves a truncated mp4 that the skip check above would accept as done.
-    tmp_output = output.with_name(f"{output.stem}.part.mp4")
-    log(f"\n=== Processing: {name} ===")
+def _clean_workspace(workspace: Path, work_root: Path) -> None:
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    try:
+        work_root.rmdir()
+    except OSError:
+        pass
 
-    if output.exists() and not FORCE:
-        log(f"[SKIP] Output already exists: {output}")
+
+def upscale(
+    video: Path,
+    output_dir: Path,
+    work_root: Path,
+    log_file: Path,
+    *,
+    force: bool = False,
+) -> bool:
+    """Upscale one video and remove all of its temporary artifacts afterward."""
+    output = output_dir / f"{video.stem}_4K.mp4"
+    temp_output = output.with_name(f"{output.stem}.part.mp4")
+    workspace = work_root / video.stem
+    in_frames = workspace / "in_frames"
+    out_frames = workspace / "out_frames"
+    log(f"\n=== Processing: {video.name} ===", log_file)
+
+    if output.is_file() and output.stat().st_size > 0 and not force:
+        _clean_workspace(workspace, work_root)
+        temp_output.unlink(missing_ok=True)
+        log(f"[SKIP] Output already exists: {output}", log_file)
         return False
 
+    _clean_workspace(workspace, work_root)
     try:
-        clean_dirs()
+        in_frames.mkdir(parents=True)
+        out_frames.mkdir(parents=True)
         run(
             [
                 FFMPEG_EXE,
@@ -91,8 +92,9 @@ def upscale(video):
                 video,
                 "-q:v",
                 "2",
-                IN_FRAMES / "frame_%06d.jpg",
-            ]
+                in_frames / "frame_%06d.jpg",
+            ],
+            log_file,
         )
         run(
             [
@@ -103,9 +105,9 @@ def upscale(video):
                 "--model_path",
                 MODEL_PATH,
                 "-i",
-                IN_FRAMES,
+                in_frames,
                 "-o",
-                OUT_FRAMES,
+                out_frames,
                 "--outscale",
                 "2",
                 "--tile",
@@ -113,6 +115,7 @@ def upscale(video):
                 "-g",
                 "0",
             ],
+            log_file,
             cwd=REALESRGAN_DIR,
         )
         run(
@@ -122,7 +125,7 @@ def upscale(video):
                 "-r",
                 "30",
                 "-i",
-                OUT_FRAMES / "frame_%06d_out.jpg",
+                out_frames / "frame_%06d_out.jpg",
                 "-i",
                 video,
                 "-map",
@@ -141,52 +144,64 @@ def upscale(video):
                 "0",
                 "-pix_fmt",
                 "yuv420p",
-                tmp_output,
-            ]
+                temp_output,
+            ],
+            log_file,
         )
-        os.replace(tmp_output, output)
-        log(f"[SUCCESS] {output}")
+        os.replace(temp_output, output)
+        log(f"[SUCCESS] {output}", log_file)
+        return True
     finally:
-        clean_dirs()
-        if tmp_output.exists():  # aborted encode: never promote half a file
-            tmp_output.unlink(missing_ok=True)
-    return True
+        _clean_workspace(workspace, work_root)
+        temp_output.unlink(missing_ok=True)
 
 
-def main():
-    LOG_FILE.write_text("===== Real-ESRGAN Python Tool =====\n", encoding="utf-8")
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Upscale explicit videos into one output directory")
+    parser.add_argument("videos", nargs="+", type=Path, help="video files to upscale, in processing order")
+    parser.add_argument("--output-dir", type=Path, required=True, help="directory for *_4K.mp4 and run_log.txt")
+    parser.add_argument("--work-dir", type=Path, help="temporary workspace (default: OUTPUT/.upscale_tmp)")
+    parser.add_argument("--force", action="store_true", help="replace existing *_4K.mp4 files")
+    return parser
 
-    if not INPUT_DIR.is_dir():
-        log(f"[ERROR] Input directory does not exist: {INPUT_DIR}")
-        return 1
 
-    videos = get_videos()
-    if not videos:
-        log(f"[ERROR] No videos found in: {INPUT_DIR}")
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    output_dir = args.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_root = (args.work_dir or output_dir / ".upscale_tmp").expanduser().resolve()
+    log_file = output_dir / "run_log.txt"
+    log_file.write_text("===== Real-ESRGAN Python Tool =====\n", encoding="utf-8")
+
+    videos = [video.expanduser().resolve() for video in args.videos]
+    invalid = [video for video in videos if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS]
+    if invalid:
+        for video in invalid:
+            log(f"[ERROR] Input video missing or unsupported: {video}", log_file)
         return 1
 
     try:
         check_setup()
     except RuntimeError as exc:
-        log(f"[ERROR] {exc}")
+        log(f"[ERROR] {exc}", log_file)
         return 1
 
-    log(f"[INFO] Found {len(videos)} videos" + (" (--force: redo finished ones)" if FORCE else ""))
-    failed = []
+    log(f"[INFO] Processing {len(videos)} explicit video(s)" + (" (--force)" if args.force else ""), log_file)
+    failed: list[Path] = []
     done = 0
     for video in videos:
         try:
-            if upscale(video):
+            if upscale(video, output_dir, work_root, log_file, force=args.force):
                 done += 1
         except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             failed.append(video)
-            log(f"[ERROR] {video.name}: {exc}")
+            log(f"[ERROR] {video.name}: {exc}", log_file)
 
     if failed:
-        log(f"\n===== FAILED: {len(failed)} of {len(videos)} videos =====")
+        log(f"\n===== FAILED: {len(failed)} of {len(videos)} videos =====", log_file)
         return 1
 
-    log(f"\n===== ALL DONE ({done} upscaled, {len(videos) - done} already existed) =====")
+    log(f"\n===== ALL DONE ({done} upscaled, {len(videos) - done} already existed) =====", log_file)
     return 0
 
 

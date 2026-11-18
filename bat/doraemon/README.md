@@ -8,14 +8,14 @@ TVer 每周六 17:00（日本时间 = 北京时间 16:00）更新，19:00 跑留
 完整的执行顺序、输入/输出文件、目录树、失败策略和优化观察项见 [`01_download_latest_materials.md`](./01_download_latest_materials.md)。
 
 双击 `01_download_latest_materials.bat`，不输番号直接回车 = 最新已播出话全流程：
-**抓简介/封面 → TVer 下载（命名为 `<番号>.mp4`）→ 分割 → 将 `<番号>_1.mp4`、`<番号>_2.mp4` 复制到 `C:\test\temps` → Real-ESRGAN 超分**。
-所有素材汇总到桌面一个目录：`Desktop\doraemon_<番号>\`（metadata.json、封面、`<番号>.mp4`、分割片段 `<番号>_1.mp4` 等、`<番号>_split.json`、preview\）。日中标题/简介与发布标签统一存入 metadata v2，不再生成日中简介 Markdown。
+**解析最新已播出集号/日期 → TVer 下载（命名为 `<番号>.mp4`）→ 分割 → 在素材目录内对 `<番号>_1.mp4`、`<番号>_2.mp4` 依次执行 Real-ESRGAN 超分**；标题、简介、封面抓取和封面放大作为另一条分支并行执行，不阻塞视频主线。
+所有素材汇总到桌面一个目录：`Desktop\doraemon_<番号>\`（metadata.json、封面、`<番号>.mp4`、分割片段 `<番号>_1.mp4` 等、超分视频、`<番号>_split.json`、preview\）。封面放大成功后，metadata 的 `image_file` 改为放大图文件名，再删除原图；放大失败保留原图。日中标题/简介与发布标签统一存入 metadata v2，不再生成日中简介 Markdown。
 
 **当前默认设置：**Windows `.bat` 中 `DOWNLOAD_VIDEO=1`，直接回车运行完整视频流程；macOS/Linux `.sh` 中仍为 `DOWNLOAD_VIDEO=0`，默认只抓资料/封面并保存素材目录，跳过视频下载和分割，已有视频不动。将实际使用的启动器设为 `DOWNLOAD_VIDEO=0` 可切换为仅资料模式，设为 `1` 则启用视频流程。
-超分结果输出为 `C:\test\<番号>_1_4K.mp4` 和 `C:\test\<番号>_2_4K.mp4`，日志在 `C:\test\run_log.txt`；已存在的输出会跳过。此入口不启动或关闭翻译模型。
+超分结果输出为素材目录内的 `<番号>_1_4K.mp4` 和 `<番号>_2_4K.mp4`，日志为 `run_log.txt`；每段视频处理完成或失败后删除其临时帧和 `.part.mp4`，保留源视频。已存在的非空输出会跳过，`run_upscale.bat` 支持传入明确的视频路径、`--output-dir` 和 `--force`。资料分支日志为 `materials_log.txt`，其失败只提示警告，不改变视频主线结果；退出前等待资料分支结束。此入口不启动或关闭翻译模型。
 
 - 输入了番号 = 只抓该话日文简介和封面，**不翻译、不下载、不分割、不超分**。
-- TVer 下载按简介页的**放送日**匹配剧集（`--broadcast-date`），TVer 还没更新最新话时会在下载步停下并报错，不会把上一话错存成新番号。
+- TVer 下载按故事索引的**播出日**匹配剧集（`--broadcast-date`），TVer 还没更新最新话时会在下载步停下并报错，不会把上一话错存成新番号。
 - 标题/简介翻译与发布标签在 `06_correct_subtitles.bat` 内前置执行：按 `941_1_origin.srt` 匹配 metadata 的 `story_id`，更新同故事 `zh` 和 `publish`，后续字幕矫正和重翻再从 metadata 读取日中背景，共用一次模型启动。`02` 和下述每周定时任务的独立翻译也写入同一份 metadata。
 - `04` 双击读取 `logs/.last_doraemon_materials`，把其中记录的素材目录同时作为输入和输出根目录；每个视频的产物位于 `<素材目录>/<视频名>/`。要临时换目录可传 `--input-dir` / `--out-dir`。
 - `06` 双击**不需要输入路径**：直接用 `logs/.last_doraemon_materials`（上次素材下载刚刷新过）开始处理；要换目录就把路径当参数传，`--ask` 才临时询问。有效的中文翻译默认复用，`--refresh-translation` 才强制刷新；`--force` 仅允许覆盖已有字幕。
