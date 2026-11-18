@@ -2,6 +2,12 @@
 
 本文档描述 `04_ja_asr.bat` 背后六步管线的完整实现，供核对与调试用。
 
+双击启动器时，它读取 `logs/.last_doraemon_materials`：记录的素材目录同时作为
+`--input-dir` 和 `--out-dir`，不再扫描 `C:\test\temps`，也不再创建桌面时间戳输出目录。
+因此每个视频的结果写到 `<素材目录>/<视频名>/`。显式视频路径、`--input-dir` 或
+`--out-dir` 可覆盖本次运行；通用 `creator-agent ja-asr` 命令未传这些参数时仍使用
+`config/settings.yaml` 的 `ja_asr.input_dir` / `ja_asr.out_dir`。
+
 **阶段1时间轴改动（代码已实现，实际音频验收尚未运行）：** 打开本次输出中的
 `<视频名>.alignment.<run_id>.srt` 检查原始对齐，配合同次
 `<视频名>.vocals.<run_id>.wav` 或原视频听看。它使用原始首词/末词时间和实际对齐输入，
@@ -233,7 +239,8 @@ worker 只见过 vocal stem，从没人拿原始媒体校验它的时间轴—�
 
 ## 3. 产物布局
 
-输出目录 = `--out-dir` 或 `ja_asr.out_dir`（vault 的 episodes/）；每个视频一个子目录：
+双击 `04_ja_asr.bat` 时，输出根目录就是 `logs/.last_doraemon_materials` 记录的素材目录；
+每个视频一个子目录。直接运行 CLI 时，输出目录 = `--out-dir` 或 `ja_asr.out_dir`：
 
 ```
 <out_dir>/<stem>/
