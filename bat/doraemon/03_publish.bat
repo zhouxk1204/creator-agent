@@ -6,7 +6,7 @@ call "%~dp0..\_bootstrap.bat"
 if errorlevel 1 goto :fail
 
 rem ---------------------------------------------------------------------------
-rem NOTE: keep this file ASCII-only. Chinese usage docs: 03_publish.md.
+rem NOTE: keep this file ASCII-only. Chinese usage docs: bat\doraemon_legacy\03_publish.md.
 rem Default: Bilibili (_b videos + optimized 4K covers), then Douyin
 rem (_dy exports + portrait/landscape covers), with a separate upload confirmation.
 rem Uses logs\.last_doraemon_materials unless a materials path is supplied.

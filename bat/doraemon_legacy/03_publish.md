@@ -58,7 +58,7 @@ bat\doraemon\03_publish.bat --only douyin --story 942_1 --dry-run
 1. **生成横竖封面**：只给已经有 `_dy` 导出的故事生成
    `<故事>_douyin_portrait.jpg`（3:4）和 `<故事>_douyin_landscape.jpg`（4:3），
    并写回 `publish.douyin.cover_portrait_path`、`cover_landscape_path`。已有封面跳过；
-   如需强制重做，先单独运行 `bat\doraemon\07_make_covers.bat --force`。
+   如需强制重做，先单独运行 `bat\doraemon_legacy\07_make_covers.bat --force`。
 2. **批量上传**：把 `<故事>_dy\` 里的所有 `*_dy.mp4` 逐个发布。
    固定打开浏览器窗口，可查看上传、封面、自主声明和合集设置过程。
 

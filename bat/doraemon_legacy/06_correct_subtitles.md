@@ -282,14 +282,14 @@ metadata.json
 macOS / Linux：
 
 ```bash
-./bat/doraemon/06_correct_subtitles.sh ~/Desktop/doraemon_941
-./bat/doraemon/06_correct_subtitles.sh ~/Desktop/doraemon_941/941_1_origin.srt
+./bat/doraemon_legacy/06_correct_subtitles.sh ~/Desktop/doraemon_941
+./bat/doraemon_legacy/06_correct_subtitles.sh ~/Desktop/doraemon_941/941_1_origin.srt
 ```
 
 Windows：
 
 ```bat
-bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
+bat\doraemon_legacy\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
 ```
 
 双击 Windows `06_correct_subtitles.bat` 时，**不需要输入路径**：直接用 `logs/.last_doraemon_materials`
@@ -307,9 +307,9 @@ bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941"
 
 ```bat
 :: 覆盖字幕，复用当前有效的中文 metadata
-bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --force
+bat\doraemon_legacy\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --force
 :: 重新翻译 metadata，同时覆盖已有字幕
-bat\doraemon\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --force --refresh-translation
+bat\doraemon_legacy\06_correct_subtitles.bat "%USERPROFILE%\Desktop\doraemon_941" --force --refresh-translation
 ```
 
 发布时继续读取同一份 metadata。B站简介直接使用 `zh.synopsis` 并保留换行，封面取 `image_file`；抖音使用独立制作的两张封面及最多 5 个标签。最终视频路径默认预填为 `<story_id>_final.mp4`（如 `941_1_final.mp4`），剪映按此名称导出到素材目录；抖音封面路径仍在制作完成后填写。已有自定义视频路径保留，详见 [发布标准](../../docs/publish-package.md)。

@@ -30,7 +30,7 @@ echo  DOWNLOAD_VIDEO=%DOWNLOAD_VIDEO% ^(0 = materials only, 1 = full pipeline^)
 echo  UPSCALE_VIDEO=%UPSCALE_VIDEO% ^(0 = split clips only, 1 = also Real-ESRGAN^)
 echo  Or type an episode number for story info only.
 echo  --latest = start latest instead of resuming a saved task.
-echo  Synopsis translation runs later in 06_correct_subtitles.bat.
+echo  Synopsis translation runs later in bat\doraemon_legacy\06_correct_subtitles.bat.
 echo.
 set "ep=%~1"
 set "LATESTARG="

@@ -1,6 +1,6 @@
 # 01_download_latest_materials.bat — 最新话 Doraemon 素材下载
 
-本文对应 [Windows 启动器](./01_download_latest_materials.bat) 的实际流程。macOS/Linux 的 [最新话doraemon素材下载.sh](./最新话doraemon素材下载.sh) 仍是简化的串行流程，差异见文末。
+本文对应 [Windows 启动器](../doraemon/01_download_latest_materials.bat) 的实际流程。macOS/Linux 的 [最新话doraemon素材下载.sh](最新话doraemon素材下载.sh) 仍是简化的串行流程，差异见文末。
 
 ## 1. 主线与并行分支
 
@@ -43,7 +43,7 @@ TVer 下载整集                         抓取标题、日文简介、版权
 
 仅资料模式不会删除或重新处理目录中的已有视频。最新话模式会保存素材目录状态；指定集号查询模式不会覆盖 `logs/.last_doraemon_materials`。仅资料模式和指定集号模式的抓取失败仍返回非零退出码。
 
-本入口**不负责**日中标题/简介翻译、标签生成、日语 ASR、字幕矫正/重翻、剪映导出或视频发布。标题/简介翻译与标签生成移至 `06_correct_subtitles` 的字幕处理前置步骤，见 [06 使用说明](./06_correct_subtitles.md)。`02_fetch_doraemon` 和每周任务保留独立翻译能力。
+本入口**不负责**日中标题/简介翻译、标签生成、日语 ASR、字幕矫正/重翻、剪映导出或视频发布。标题/简介翻译与标签生成移至 `06_correct_subtitles` 的字幕处理前置步骤，见 [06 使用说明](06_correct_subtitles.md)。`02_fetch_doraemon` 和每周任务保留独立翻译能力。
 
 ## 3. 启动与依赖
 
@@ -186,7 +186,7 @@ yt-dlp 使用 8 个并行 HLS fragments，元数据/fragment 各重试 10 次，
 调度器用专用 conda Python 直接调用 `scripts/upscale_tool.py`，显式传入本集的两个视频和输出目录。也可单独运行包装器：
 
 ```bat
-bat\doraemon\run_upscale.bat ^
+bat\doraemon_legacy\run_upscale.bat ^
   "%USERPROFILE%\Desktop\doraemon_941\941_1.mp4" ^
   "%USERPROFILE%\Desktop\doraemon_941\941_2.mp4" ^
   --output-dir "%USERPROFILE%\Desktop\doraemon_941"
@@ -261,5 +261,5 @@ bat\doraemon\run_upscale.bat ^
 | `scripts/download_tver.py` | TVer 检索和下载 |
 | `scripts/split_episode.py` | 标题卡检测、异常确认、视频分割 |
 | `scripts/upscale_tool.py` | 显式视频超分、素材目录输出、逐段清理 |
-| `bat/doraemon/run_upscale.bat` | 专用超分环境包装器，转发参数 |
+| `bat/doraemon_legacy/run_upscale.bat` | 专用超分环境包装器，转发参数 |
 | `scripts/translate_doraemon.py` / `06_correct_subtitles` | 后续简介翻译、标签与字幕处理 |

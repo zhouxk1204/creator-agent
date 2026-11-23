@@ -10,7 +10,8 @@ Phase 1 is **implemented and in daily use**: collect → download → ASR transc
 architecture reference.
 
 Beyond the sync pipeline, the repo also carries a standalone Doraemon JA→ZH subtitle
-toolchain (see `bat/doraemon/01`–`05`): TVer download → episode info fetch → episode
+toolchain (see `bat/doraemon_legacy/01`–`05`; current download/publish entry points remain
+in `bat/doraemon/`): TVer download → episode info fetch → episode
 splitting (`scripts/split_episode.py`) → Japanese ASR with speaker diarization +
 word-level alignment (`asr/ja_worker.py`, dual conda envs) → LLM translation/burn-in
 (`translate/`) → a `learn` feedback loop that mines human corrections into a knowledge
