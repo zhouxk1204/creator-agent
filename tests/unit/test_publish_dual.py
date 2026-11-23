@@ -9,7 +9,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from creator_agent.doraemon.metadata import MetadataError, normalize_metadata, source_hash
+from creator_agent.doraemon.metadata import (
+    MetadataError,
+    load_metadata,
+    normalize_metadata,
+    source_hash,
+    update_metadata,
+)
+from creator_agent.doraemon.publishing import record_upload, video_hash
 from scripts import publish_dual
 
 
@@ -596,11 +603,19 @@ def test_merged_launcher_bootstraps_from_parent_and_selects_platform():
     assert not (root / "bat/publish_douyin.bat").exists()
 
 
-def test_merged_launcher_stops_on_failure_or_cancellation():
+def test_merged_launcher_continues_other_platform_and_preserves_failure_status():
     text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
-    bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
-    assert 'set "RC=%ERRORLEVEL%"\nif not "%RC%"=="0" goto :done' in bilibili
-    assert text.count("if errorlevel 1 goto :fail") == 3
+    setup = text.split("\n:setup\n", 1)[1]
+    bilibili = setup.split("\n:douyin\n", 1)[0]
+    assert setup.startswith('set "RC=0"\n')
+    assert bilibili.count("if errorlevel 1 goto :bilibili_failed") == 2
+    failure = bilibili.split("\n:bilibili_failed\n", 1)[1]
+    assert 'set "RC=1"' in failure
+    assert "goto :done" not in failure.split("\n:after_bilibili\n", 1)[0]
+    assert 'if /i "%PLATFORM%"=="bilibili" goto :done' in failure
+    assert text.count("if errorlevel 1 goto :douyin_failed") == 2
+    assert 'set "RC=%ERRORLEVEL%"' not in text
+    assert text.count('set "RC=0"') == 1
     assert "exit /b %RC%" in text
 
 
@@ -621,3 +636,313 @@ def test_setup_installs_biliup_runtime_patches():
     assert "403 rate limit exceeded" in download_patch
     assert "run_biliup_command(arguments, interactive=True)" in progress_patch
     assert "Live upload bytes, percentage, speed and ETA" in progress_patch
+
+
+@pytest.fixture
+def publisher(materials, monkeypatch):
+    folder, _ = materials
+    executable = folder / "sau.exe"
+    executable.touch()
+    monkeypatch.setattr(publish_dual, "sau_exe", lambda: executable)
+    monkeypatch.setattr(publish_dual, "ensure_session", lambda platform, account: True)
+    monkeypatch.setattr(publish_dual, "check_session", lambda platform, account: (True, "valid"))
+    run = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(publish_dual.subprocess, "run", run)
+
+    def invoke(*options):
+        monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--story", "941_1", "--yes", *options])
+        return publish_dual.main()
+
+    return invoke, run
+
+
+def upload_receipts(folder, platform, story_id="941_1"):
+    data = load_metadata(folder / "metadata.json")
+    story = next(story for story in data["stories"] if story["story_id"] == story_id)
+    return story["publish"][platform].get("uploads", [])
+
+
+@pytest.mark.parametrize("platform", ["douyin", "bilibili"])
+def test_success_is_recorded_and_retry_skips_without_login_or_confirmation(materials, publisher, monkeypatch, platform):
+    folder, _ = materials
+    invoke, run = publisher
+    assert invoke("--only", platform, "--schedule", "2026-12-01 10:15") == 0
+    receipt = upload_receipts(folder, platform)[0]
+    assert receipt["status"] == "success"
+    assert receipt["account"] == "default"
+    assert receipt["video_path"] == "941_1_final.mp4"
+    assert receipt["video_sha256"] == video_hash(folder / "941_1_final.mp4")
+    assert receipt["schedule"] == "2026-12-01 10:15"
+    assert receipt["uploaded_at"].endswith("+00:00")
+    run.reset_mock()
+    monkeypatch.setattr(publish_dual, "ensure_session", Mock(side_effect=AssertionError("must not log in")))
+    monkeypatch.setattr("builtins.input", Mock(side_effect=AssertionError("must not confirm")))
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--story", "941_1", "--only", platform])
+    assert publish_dual.main() == 0
+    run.assert_not_called()
+    assert len(upload_receipts(folder, platform)) == 1
+
+
+def test_partial_success_is_saved_immediately_and_only_failed_platform_retries(materials, publisher):
+    folder, _ = materials
+    invoke, run = publisher
+
+    def first_run(cmd, **kwargs):
+        if cmd[1] == "bilibili":
+            assert len(upload_receipts(folder, "douyin")) == 1
+            return SimpleNamespace(returncode=1)
+        return SimpleNamespace(returncode=0)
+
+    run.side_effect = first_run
+    assert invoke() == 1
+    assert upload_receipts(folder, "bilibili") == []
+    run.reset_mock(side_effect=True)
+    assert invoke() == 0
+    assert [call.args[0][1] for call in run.call_args_list] == ["bilibili"]
+    assert len(upload_receipts(folder, "douyin")) == len(upload_receipts(folder, "bilibili")) == 1
+
+
+def test_multiple_exports_record_each_success_and_retry_only_failed_file(materials, publisher):
+    folder, _ = materials
+    first = dy_export(folder, "941_1")
+    second = dy_export(folder, "941_1", "941_1_part2_dy.mp4")
+    second.write_bytes(b"different second cut")
+    invoke, run = publisher
+    run.side_effect = [SimpleNamespace(returncode=0), SimpleNamespace(returncode=1)]
+    assert invoke("--dy", "--only", "douyin") == 1
+    assert [receipt["video_path"] for receipt in upload_receipts(folder, "douyin")] == [
+        first.relative_to(folder).as_posix()
+    ]
+    run.reset_mock(side_effect=True)
+    assert invoke("--dy", "--only", "douyin") == 0
+    assert [flag(call.args[0], "--file") for call in run.call_args_list] == [str(second)]
+    assert len(upload_receipts(folder, "douyin")) == 2
+
+
+def test_identical_exports_in_same_batch_are_not_uploaded_twice(materials, publisher):
+    folder, _ = materials
+    dy_export(folder, "941_1")
+    dy_export(folder, "941_1", "941_1_copy_dy.mp4")
+    invoke, run = publisher
+    assert invoke("--dy", "--only", "douyin") == 0
+    assert run.call_count == 1
+    assert len(upload_receipts(folder, "douyin")) == 1
+
+
+@pytest.mark.parametrize("platform", ["douyin", "bilibili"])
+@pytest.mark.parametrize("resource", ["cover", "tags", "video"])
+def test_resource_validation_failure_does_not_block_other_platform(materials, publisher, platform, resource):
+    folder, data = materials
+    dy_export(folder, "941_1")
+    story = data["stories"][0]
+    if resource == "tags":
+        story["publish"][platform]["tags"] = []
+    elif resource == "cover":
+        if platform == "douyin":
+            story["publish"][platform]["cover_portrait_path"] = "missing.jpg"
+        else:
+            story["image_file"] = "missing.jpg"
+    elif platform == "douyin":
+        story["publish"][platform]["video_path"] = "missing.mp4"
+    else:
+        story["publish"]["video_path"] = "missing.mp4"
+    save(folder, data)
+    invoke, run = publisher
+    assert invoke() == 2
+    other = "bilibili" if platform == "douyin" else "douyin"
+    assert [call.args[0][1] for call in run.call_args_list] == [other]
+    assert upload_receipts(folder, platform) == []
+    assert len(upload_receipts(folder, other)) == 1
+
+
+def test_batch_validation_failure_does_not_block_other_story(materials, publisher, monkeypatch):
+    folder, data = materials
+    b_export(folder, "941_1")
+    b_export(folder, "941_2")
+    data["stories"][0]["publish"]["bilibili"]["tags"] = []
+    save(folder, data)
+    _, run = publisher
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--b", "--yes"])
+    assert publish_dual.main() == 2
+    assert [flag(call.args[0], "--file") for call in run.call_args_list] == [str(folder / "941_2_b.mp4")]
+    assert upload_receipts(folder, "bilibili") == []
+    assert len(upload_receipts(folder, "bilibili", "941_2")) == 1
+
+
+def test_dry_run_reports_invalid_platform_and_prints_valid_platform_without_records(materials, publisher, capsys):
+    folder, data = materials
+    data["stories"][0]["image_file"] = "missing.jpg"
+    save(folder, data)
+    original = (folder / "metadata.json").read_bytes()
+    invoke, run = publisher
+    assert invoke("--dry-run") == 2
+    run.assert_not_called()
+    printed = capsys.readouterr()
+    assert "douyin upload-video" in printed.out
+    assert "bilibili" in printed.err and "校验失败" in printed.err
+    assert (folder / "metadata.json").read_bytes() == original
+
+
+def test_cancel_does_not_write_upload_records(materials, publisher, monkeypatch):
+    folder, _ = materials
+    _, run = publisher
+    original = (folder / "metadata.json").read_bytes()
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder), "--story", "941_1"])
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    assert publish_dual.main() == 1
+    run.assert_not_called()
+    assert (folder / "metadata.json").read_bytes() == original
+
+
+def test_uploaded_video_skips_even_if_its_cover_translation_and_tags_are_now_invalid(materials, publisher):
+    folder, _ = materials
+    invoke, run = publisher
+    assert invoke("--only", "bilibili") == 0
+
+    def invalidate(data):
+        story = data["stories"][0]
+        story["image_file"] = "missing.jpg"
+        story["publish"]["bilibili"]["tags"] = []
+        story["zh"] = None
+        story["publish"]["title"] = None
+
+    update_metadata(folder / "metadata.json", invalidate)
+    run.reset_mock()
+    assert invoke("--only", "bilibili") == 0
+    run.assert_not_called()
+
+
+def test_changed_video_content_is_a_new_upload(materials, publisher):
+    folder, _ = materials
+    invoke, run = publisher
+    assert invoke("--only", "bilibili") == 0
+    (folder / "941_1_final.mp4").write_bytes(b"re-exported video")
+    assert invoke("--only", "bilibili") == 0
+    assert run.call_count == 2
+    assert len(upload_receipts(folder, "bilibili")) == 2
+
+
+def test_moved_directory_and_renamed_export_reuses_success_receipt(materials, publisher, monkeypatch):
+    folder, _ = materials
+    invoke, run = publisher
+    assert invoke("--only", "bilibili") == 0
+    moved = folder.with_name("moved materials")
+    folder.rename(moved)
+    (moved / "941_1_final.mp4").rename(moved / "renamed.mp4")
+    update_metadata(
+        moved / "metadata.json", lambda data: data["stories"][0]["publish"].update(video_path="renamed.mp4")
+    )
+    run.reset_mock()
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(moved), "--story", "941_1", "--only", "bilibili"])
+    assert publish_dual.main() == 0
+    run.assert_not_called()
+
+
+def test_receipts_are_scoped_to_account_and_platform(materials, publisher):
+    folder, _ = materials
+    invoke, run = publisher
+    assert invoke("--only", "bilibili") == 0
+    assert invoke("--only", "bilibili", "--bilibili-account", "other") == 0
+    assert invoke("--only", "douyin") == 0
+    assert run.call_count == 3
+    assert [receipt["account"] for receipt in upload_receipts(folder, "bilibili")] == ["default", "other"]
+    assert len(upload_receipts(folder, "douyin")) == 1
+
+
+@pytest.mark.parametrize("platform", ["douyin", "bilibili"])
+@pytest.mark.parametrize("error", [MetadataError("expired cookie"), OSError("cannot run check")])
+def test_session_failure_does_not_block_other_platform(materials, publisher, monkeypatch, platform, error):
+    folder, _ = materials
+    invoke, run = publisher
+
+    def ensure(selected, account):
+        if selected == platform:
+            raise error
+        return True
+
+    monkeypatch.setattr(publish_dual, "ensure_session", ensure)
+    assert invoke() == 1
+    other = "bilibili" if platform == "douyin" else "douyin"
+    assert [call.args[0][1] for call in run.call_args_list] == [other]
+    assert upload_receipts(folder, platform) == []
+    assert len(upload_receipts(folder, other)) == 1
+
+
+def test_recheck_error_does_not_abort_other_platform(materials, publisher, monkeypatch):
+    folder, _ = materials
+    invoke, run = publisher
+    run.side_effect = [SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)]
+    monkeypatch.setattr(publish_dual, "check_session", Mock(side_effect=OSError("check crashed")))
+    assert invoke() == 1
+    assert len(upload_receipts(folder, "bilibili")) == 1
+
+
+def test_record_write_failure_is_explicit_and_does_not_block_other_platform(materials, publisher, monkeypatch, capsys):
+    from creator_agent.doraemon import metadata
+
+    folder, _ = materials
+    invoke, run = publisher
+    original_replace = metadata.os.replace
+    replacements = []
+
+    def replace(source, target):
+        replacements.append(target)
+        if len(replacements) == 1:
+            raise OSError("disk full")
+        original_replace(source, target)
+
+    monkeypatch.setattr(metadata.os, "replace", replace)
+    assert invoke() == 1
+    assert run.call_count == 2
+    assert upload_receipts(folder, "douyin") == []
+    assert len(upload_receipts(folder, "bilibili")) == 1
+    printed = capsys.readouterr()
+    assert "上传已成功，但成功记录保存失败" in printed.err
+    assert "不要直接重试" in printed.err
+
+
+@pytest.mark.parametrize(
+    "receipts", [{}, ["bad"], [{"status": "success", "account": "default", "video_sha256": "sha256:" + "z" * 64}]]
+)
+def test_corrupt_receipts_fail_closed_without_blocking_other_platform(materials, publisher, receipts):
+    folder, data = materials
+    data["stories"][0]["publish"]["douyin"]["uploads"] = receipts
+    save(folder, data)
+    invoke, run = publisher
+    assert invoke() == 2
+    assert [call.args[0][1] for call in run.call_args_list] == ["bilibili"]
+    assert len(upload_receipts(folder, "bilibili")) == 1
+
+
+@pytest.mark.parametrize("platform", ["douyin", "bilibili"])
+def test_cover_preparation_skips_successful_videos_before_validating_resources(materials, monkeypatch, platform):
+    from scripts import make_bilibili_covers, make_douyin_covers
+
+    folder, _ = materials
+    video = dy_export(folder, "941_1") if platform == "douyin" else b_export(folder, "941_1")
+    record_upload(folder / "metadata.json", "941_1", platform, "default", video, video_hash(video), "title", None)
+    (folder / "941_1_4k.jpg").unlink()
+    update_metadata(folder / "metadata.json", lambda data: data["stories"][0].update(zh=None, image_file="missing.jpg"))
+    script = make_douyin_covers if platform == "douyin" else make_bilibili_covers
+    render = "render_cover" if platform == "douyin" else "make_bilibili_cover"
+    no_render = Mock(side_effect=MetadataError("missing cover"))
+    monkeypatch.setattr(script, render, no_render)
+    options = ["--dy-only"] if platform == "douyin" else []
+    monkeypatch.setattr(sys, "argv", ["covers.py", str(folder), "--story", "941_1", *options])
+    assert script.main() == 0
+    no_render.assert_not_called()
+    monkeypatch.setattr(
+        sys, "argv", ["covers.py", str(folder), "--story", "941_1", *options, f"--{platform}-account", "other"]
+    )
+    assert script.main() != 0
+
+
+@pytest.mark.parametrize("answer", ["", "   "])
+def test_empty_story_selection_never_defaults_to_first_story(materials, publisher, monkeypatch, answer):
+    folder, _ = materials
+    _, run = publisher
+    monkeypatch.setattr(sys, "argv", ["publish_dual.py", str(folder)])
+    monkeypatch.setattr("builtins.input", lambda prompt: answer)
+    assert publish_dual.main() == 2
+    run.assert_not_called()
+    assert upload_receipts(folder, "douyin") == upload_receipts(folder, "bilibili") == []

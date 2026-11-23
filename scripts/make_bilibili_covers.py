@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from creator_agent.doraemon.metadata import MetadataError, load_metadata  # noqa: E402
+from creator_agent.doraemon.publishing import pending_videos  # noqa: E402
 from scripts.publish_dual import b_videos, choose_target  # noqa: E402
 
 MAX_COVER_BYTES = 5 * 1024 * 1024
@@ -74,7 +75,7 @@ def main() -> int:
     parser.add_argument("--tid", help=argparse.SUPPRESS)
     parser.add_argument("--schedule", help=argparse.SUPPRESS)
     parser.add_argument("--douyin-account", help=argparse.SUPPRESS)
-    parser.add_argument("--bilibili-account", help=argparse.SUPPRESS)
+    parser.add_argument("--bilibili-account", default="default", help=argparse.SUPPRESS)
     parser.add_argument("--headed", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
@@ -88,6 +89,7 @@ def main() -> int:
         if not videos:
             named = f"{args.story} 的" if args.story else ""
             raise MetadataError(f"{path.parent} 下没有 {named}_b 视频：请先准备 <故事>_b.mp4")
+        videos = pending_videos(data, videos, "bilibili", args.bilibili_account)
         for story_id in dict.fromkeys(story_id for story_id, _ in videos):
             make_bilibili_cover(path.parent / f"{story_id}_4k.jpg")
     except (MetadataError, OSError, UnicodeError, EOFError) as exc:

@@ -37,7 +37,8 @@ from creator_agent.doraemon.jianying_cover import (  # noqa: E402
     requirements_problem,
 )
 from creator_agent.doraemon.metadata import MetadataError  # noqa: E402
-from scripts.publish_dual import choose_target  # noqa: E402
+from creator_agent.doraemon.publishing import pending_videos  # noqa: E402
+from scripts.publish_dual import choose_target, dy_videos  # noqa: E402
 
 
 def main() -> int:
@@ -64,7 +65,7 @@ def main() -> int:
     parser.add_argument("--only", choices=["douyin", "bilibili"], help=argparse.SUPPRESS)
     parser.add_argument("--tid", help=argparse.SUPPRESS)
     parser.add_argument("--schedule", help=argparse.SUPPRESS)
-    parser.add_argument("--douyin-account", help=argparse.SUPPRESS)
+    parser.add_argument("--douyin-account", default="default", help=argparse.SUPPRESS)
     parser.add_argument("--bilibili-account", help=argparse.SUPPRESS)
     parser.add_argument("--headed", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
@@ -84,10 +85,16 @@ def main() -> int:
             # Same convention publish_dual.py publishes from: a story is only
             # publishable once 剪映 exported <story>_dy/<story>_dy.mp4, so there
             # is no point spending a 剪映 render on the others yet.
-            stories = [story for story in stories if any((path.parent / f"{story['story_id']}_dy").glob("*_dy.mp4"))]
-            if not stories:
+            videos = dy_videos(path.parent, stories)
+            if not videos:
                 print("[X] 没有可发布的故事：先导出 <故事>_dy/<故事>_dy.mp4", file=sys.stderr)
                 return 2
+            videos = pending_videos(data, videos, "douyin", args.douyin_account)
+            pending_stories = {story_id for story_id, _ in videos}
+            stories = [story for story in stories if story["story_id"] in pending_stories]
+            if not stories:
+                print("所有选中抖音视频均已上传成功，无需生成封面。")
+                return 0
     except (MetadataError, OSError, UnicodeError, EOFError) as exc:
         print(f"[X] {exc}", file=sys.stderr)
         return 2

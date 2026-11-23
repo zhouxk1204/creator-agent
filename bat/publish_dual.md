@@ -63,7 +63,9 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941\metadata.json" --story 
 5. 屏幕上列出 metadata/故事/视频/标题/标签/简介/封面摘要，输入 `Y` 后才开始上传。
    抖音自主声明固定选择 **「虚构演绎，仅供娱乐」**，设置失败会停止发布；合集固定选择
    **「哆啦A梦2026合集」**（需已存在于创作者账号，找不到时会警告并保持未归集）。
-   先发抖音再发B站；一个失败不影响另一个。仅重试失败平台，避免重复发布已成功的平台：
+   先发抖音再发B站；资源校验、登录和上传按平台独立执行，一个失败不影响另一个。
+   每个视频成功提交后立即在 metadata 中保存对应平台的 `uploads` 记录。
+   可以直接重跑原命令，已成功的同账号、同内容视频会自动跳过；也可只选失败的平台：
 
 ```bat
 bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --only bilibili
@@ -82,7 +84,7 @@ bat\doraemon\03_publish.bat --only bilibili
 抖音使用 `<故事>_dy\` 里的剪映导出，自动生成横竖封面，固定有头浏览器。
 B 站使用素材目录根下的 `<故事>_b.mp4`，简介取保留换行的 `zh.synopsis`，
 封面由 `<故事>_4k.jpg` 自动转成同尺寸优化 JPEG，原图不变。
-详见 [`doraemon/03_publish.md`](./doraemon/03_publish.md)。
+详见 [`doraemon_legacy/03_publish.md`](./doraemon_legacy/03_publish.md)。
 
 ## 其他参数
 
@@ -98,6 +100,9 @@ bat\publish_dual.bat "%USERPROFILE%\Desktop\doraemon_941" --story 941_1 --schedu
 ```
 
 账号参数是 `--douyin-account` / `--bilibili-account`，默认均为 `default`。只发一个平台时仅校验该平台所需的标签和封面。
+成功记录按故事、平台、账号和视频内容 SHA-256 区分；移动目录或改名不会重复上传，内容改变或换账号会作为新投稿。
+`--dry-run` 和失败/取消不会写记录。旧版本已发布的视频没有本地记录，请先人工核对。
+若上传器没有确认成功、上传成功后记录保存失败或窗口被强制关闭，也需先核对平台投稿，不能盲目重试。
 
 ## 常见问题
 

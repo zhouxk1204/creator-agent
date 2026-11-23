@@ -30,6 +30,7 @@ from creator_agent.doraemon.metadata import (  # noqa: E402
     translation_is_current,
     validate_tags,
 )
+from creator_agent.doraemon.publishing import record_upload, video_hash, was_uploaded  # noqa: E402
 
 SAU_ROOT = REPO_ROOT / "tools" / "social-auto-upload"
 VIDEO_EXTS = {".mp4", ".mov", ".flv", ".mkv", ".avi"}
@@ -134,16 +135,9 @@ class PublishJob:
                 raise MetadataError("有多个故事，请用 --story 941_1 明确选择一个")
             story_id = data["stories"][0]["story_id"]
         story = get_story(data, story_id)
-        if not translation_is_current(story):
-            raise MetadataError(f"{story_id} 中文翻译缺失或已过期，请先运行 06 或 translate_doraemon.py")
         self.story_id = story_id
         publish = story["publish"]
         self.title = publish["title"]
-        if not isinstance(self.title, str) or not self.title.strip() or "\n" in self.title or "\r" in self.title:
-            raise MetadataError("publish.title 必须是非空单行标题")
-        prefix = f"哆啦a梦{int(data['episode'])} "
-        if not self.title.startswith(prefix) or not self.title[len(prefix) :].strip():
-            raise MetadataError(f"publish.title 格式应为：{prefix}中文标题")
         self.do_douyin = args.only in (None, "douyin")
         self.do_bilibili = args.only in (None, "bilibili")
         self.bilibili_batch = getattr(args, "b", False)
@@ -164,6 +158,29 @@ class PublishJob:
         self.douyin_desc = self.bilibili_desc = ""
         self.douyin_tags = self.bilibili_tags = ""
         self.tid = None
+        self.upload_hashes: dict[str, str] = {}
+        for platform, selected, account, upload in (
+            ("douyin", self.do_douyin, self.douyin_account, self.video_douyin),
+            ("bilibili", self.do_bilibili, self.bilibili_account, self.video_bilibili),
+        ):
+            if selected:
+                digest = video_hash(upload)
+                self.upload_hashes[platform] = digest
+                if was_uploaded(story, platform, account, digest):
+                    print(f"[跳过] {platform} {story_id} / {upload.name}：账号 {account} 已上传成功")
+                    if platform == "douyin":
+                        self.do_douyin = False
+                    else:
+                        self.do_bilibili = False
+        if not self.do_douyin and not self.do_bilibili:
+            return
+        if not translation_is_current(story):
+            raise MetadataError(f"{story_id} 中文翻译缺失或已过期，请先运行 06 或 translate_doraemon.py")
+        if not isinstance(self.title, str) or not self.title.strip() or "\n" in self.title or "\r" in self.title:
+            raise MetadataError("publish.title 必须是非空单行标题")
+        prefix = f"哆啦a梦{int(data['episode'])} "
+        if not self.title.startswith(prefix) or not self.title[len(prefix) :].strip():
+            raise MetadataError(f"publish.title 格式应为：{prefix}中文标题")
         if self.do_douyin:
             if len(self.title) > 55:
                 raise MetadataError("抖音标题最多 55 字，请编辑 publish.title")
@@ -412,7 +429,7 @@ def main() -> int:
                     print(
                         f"[!] {story_id} 有 {count} 个 {kind} 视频，将用同一个标题/简介/封面各发一条", file=sys.stderr
                     )
-            jobs = [PublishJob(path, args, story_id=story_id, video=video) for story_id, video in videos]
+            candidates = videos
         else:
             if not args.story and len(data["stories"]) > 1:
                 if args.yes:
@@ -420,11 +437,32 @@ def main() -> int:
                 for story in data["stories"]:
                     print(f"  {story['story_id']}：{story['publish']['title'] or story['title']}")
                 args.story = input("选择故事标识（例如 941_1）: ").strip()
-            jobs = [PublishJob(path, args)]
-        plan = [(job, job.build_commands(args.headed)) for job in jobs]
+                if not args.story:
+                    raise MetadataError("有多个故事，请用 --story 941_1 明确选择一个")
+            candidates = [(args.story or data["stories"][0]["story_id"], None)]
     except (MetadataError, OSError, UnicodeError, EOFError) as exc:
         print(f"[X] {exc}", file=sys.stderr)
         return 2
+
+    # Validate each story/platform independently: a missing cover or invalid
+    # tag on one destination must not prevent a valid destination from uploading.
+    plan = []
+    validation_failed = 0
+    for story_id, video in candidates:
+        for platform in [args.only] if args.only else ["douyin", "bilibili"]:
+            platform_args = argparse.Namespace(**{**vars(args), "only": platform})
+            try:
+                job = PublishJob(path, platform_args, story_id=story_id, video=video)
+                commands = job.build_commands(args.headed)
+                if commands:
+                    plan.append((job, commands))
+            except (MetadataError, OSError, UnicodeError) as exc:
+                print(f"[X] {platform} {story_id} 资源校验失败：{exc}", file=sys.stderr)
+                validation_failed += 1
+    if not plan:
+        if not validation_failed:
+            print("所有选中视频均已上传成功，无需重复发布。")
+        return 2 if validation_failed else 0
 
     for job, _ in plan:
         print("=" * 50)
@@ -450,7 +488,7 @@ def main() -> int:
         for _, commands in plan:
             for name, cmd in commands:
                 print(f"[{name}] {subprocess.list2cmdline(cmd)}")
-        return 0
+        return 2 if validation_failed else 0
     if not sau_exe().is_file():
         print("[X] 未安装 sau CLI，请先运行 bat\\setup_publish.bat")
         return 1
@@ -471,56 +509,87 @@ def main() -> int:
             sessions.append(("douyin", job.douyin_account))
         if job.do_bilibili:
             sessions.append(("bilibili", job.bilibili_account))
-    try:
-        for platform, account in dict.fromkeys(sessions):
+    blocked_sessions: set[tuple[str, str]] = set()
+    for platform, account in dict.fromkeys(sessions):
+        try:
             ensure_session(platform, account)
-    except MetadataError as exc:
-        print(f"[X] {exc}", file=sys.stderr)
-        return 1
-    failed = 0
+        except (MetadataError, OSError, UnicodeError) as exc:
+            print(f"[X] {platform} 账号 {account} 登录校验失败：{exc}", file=sys.stderr)
+            blocked_sessions.add((platform, account))
+    failed = len(blocked_sessions)
     for position, (job, commands) in enumerate(plan, 1):
         print(f"\n===== 发布 {position}/{len(plan)}：{job.story_id} =====", flush=True)
         for name, cmd in commands:
             platform = "douyin" if cmd[1] == "douyin" else "bilibili"
             account = job.douyin_account if platform == "douyin" else job.bilibili_account
+            if (platform, account) in blocked_sessions:
+                continue
             upload = Path(cmd[cmd.index("--file") + 1])
-            size_mib = upload.stat().st_size / 1024 / 1024
+            try:
+                # An earlier file in this batch may have uploaded the same bytes.
+                story = get_story(load_metadata(job.path), job.story_id)
+                if was_uploaded(story, platform, account, job.upload_hashes[platform]):
+                    print(f"[跳过] {name} {upload.name}：账号 {account} 已上传成功", flush=True)
+                    continue
+                size_mib = upload.stat().st_size / 1024 / 1024
+            except (MetadataError, OSError, UnicodeError) as exc:
+                print(f"[{name}] 上传前校验失败：{exc}", file=sys.stderr, flush=True)
+                failed += 1
+                continue
+            started = time.monotonic()
             print(f"[{name}] 开始上传：{upload.name}（{size_mib:.2f} MiB）", flush=True)
             print(f"[{name}] 下方显示实时日志；视频传完后还要等待稿件提交。", flush=True)
-            started = time.monotonic()
             try:
                 returncode = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode
                 ok = returncode == 0
                 if not ok:
                     print(f"[{name}] 上传命令退出码 {returncode}，正在检查登录状态…", flush=True)
-            except OSError as exc:
+            except (MetadataError, OSError, UnicodeError) as exc:
                 print(f"[{name}] 上传失败：{exc}", flush=True)
                 ok = False
             if not ok:
                 # A cookie that expired between the pre-flight check and the
                 # upload looks like any other failure; only a session that is
                 # now invalid is worth a login + one retry.
-                usable, _ = check_session(platform, account)
-                if not usable:
-                    try:
+                try:
+                    usable, _ = check_session(platform, account)
+                    if not usable:
                         print(f"[{name}] 上传失败且登录已失效，登录后重试一次…", flush=True)
                         ensure_session(platform, account)
-                    except MetadataError as exc:
-                        print(f"[{name}] 自动登录失败：{exc}", file=sys.stderr, flush=True)
-                    else:
-                        try:
-                            print(f"[{name}] 正在重试上传：{upload.name}", flush=True)
-                            returncode = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode
-                            ok = returncode == 0
-                            if not ok:
-                                print(f"[{name}] 重试命令退出码 {returncode}", flush=True)
-                        except OSError as exc:
-                            print(f"[{name}] 重试失败：{exc}", flush=True)
-                            ok = False
+                        print(f"[{name}] 正在重试上传：{upload.name}", flush=True)
+                        returncode = subprocess.run(cmd, cwd=SAU_ROOT, check=False).returncode
+                        ok = returncode == 0
+                        if not ok:
+                            print(f"[{name}] 重试命令退出码 {returncode}", flush=True)
+                except (MetadataError, OSError, UnicodeError) as exc:
+                    print(f"[{name}] 登录检查或重试失败：{exc}", file=sys.stderr, flush=True)
+            recorded = True
+            if ok:
+                try:
+                    record_upload(
+                        job.path,
+                        job.story_id,
+                        platform,
+                        account,
+                        upload,
+                        job.upload_hashes[platform],
+                        job.title,
+                        job.schedule,
+                    )
+                    print(f"[{name}] 成功记录已保存到 metadata.json", flush=True)
+                except (MetadataError, OSError, UnicodeError) as exc:
+                    recorded = False
+                    print(
+                        f"[{name}] 上传已成功，但成功记录保存失败：{exc}。"
+                        "请先人工核对平台投稿，不要直接重试以免重复发布。",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             elapsed = time.monotonic() - started
-            print(f"[{name}] {'成功' if ok else '失败'}（耗时 {elapsed:.1f} 秒）", flush=True)
-            failed += not ok
-    return 1 if failed else 0
+            result = "成功" if ok and recorded else "上传成功但记录失败" if ok else "失败"
+            print(f"[{name}] {result}（耗时 {elapsed:.1f} 秒）", flush=True)
+            failed += not ok or not recorded
+    return 2 if validation_failed else 1 if failed else 0
 
 
 if __name__ == "__main__":

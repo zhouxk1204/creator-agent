@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from creator_agent.doraemon import metadata as meta
+from creator_agent.doraemon.publishing import record_upload, video_hash, was_uploaded
 
 
 def sources():
@@ -194,3 +195,47 @@ def test_relative_and_absolute_assets_use_metadata_directory(path, tmp_path, mon
     assert meta.resolve_asset(path, "covers/portrait.jpg") == tmp_path / "covers/portrait.jpg"
     absolute = tmp_path / "external.mp4"
     assert meta.resolve_asset(path, str(absolute)) == absolute
+
+
+@pytest.mark.parametrize("platform", ["douyin", "bilibili"])
+def test_upload_receipts_survive_source_refresh_and_translation_update(path, platform):
+    video = path.parent / "941_1_final.mp4"
+    video.write_bytes(b"published video")
+    digest = video_hash(video)
+    record_upload(path, "941_1", platform, "default", video, digest, "old title", None)
+    before = meta.get_story(meta.load_metadata(path), "941_1")["publish"][platform]["uploads"]
+    fresh = sources()
+    fresh["stories"][0]["synopsis"] += "更新。"
+    meta.save_sources(path, fresh)
+    translate(path)
+    story = meta.get_story(meta.load_metadata(path), "941_1")
+    assert story["publish"][platform]["uploads"] == before
+    assert was_uploaded(story, platform, "default", digest)
+
+
+def test_record_upload_is_idempotent_and_preserves_other_platform_and_story(path):
+    video = path.parent / "941_1_final.mp4"
+    video.write_bytes(b"video")
+    digest = video_hash(video)
+    second = meta.get_story(meta.load_metadata(path), "941_2")
+    record_upload(path, "941_1", "douyin", "default", video, digest, "first title", None)
+    record_upload(path, "941_1", "bilibili", "default", video, digest, "first title", None)
+    record_upload(path, "941_1", "douyin", "default", video, digest, "retry title", None)
+    data = meta.load_metadata(path)
+    first = meta.get_story(data, "941_1")
+    for platform in ("douyin", "bilibili"):
+        assert len(first["publish"][platform]["uploads"]) == 1
+        assert first["publish"][platform]["uploads"][0]["title"] == "first title"
+    assert meta.get_story(data, "941_2") == second
+
+
+def test_failed_receipt_write_preserves_metadata_and_removes_temporary_files(path, monkeypatch):
+    video = path.parent / "941_1_final.mp4"
+    video.write_bytes(b"video")
+    before = path.read_bytes()
+    files = set(path.parent.iterdir())
+    monkeypatch.setattr(meta.os, "replace", Mock(side_effect=OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        record_upload(path, "941_1", "douyin", "default", video, video_hash(video), "title", None)
+    assert path.read_bytes() == before
+    assert set(path.parent.iterdir()) == files

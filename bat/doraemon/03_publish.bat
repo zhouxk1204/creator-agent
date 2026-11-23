@@ -11,6 +11,7 @@ rem Default: Bilibili (_b videos + optimized 4K covers), then Douyin
 rem (_dy exports + portrait/landscape covers), with a separate upload confirmation.
 rem Uses logs\.last_doraemon_materials unless a materials path is supplied.
 rem --only bilibili / --only douyin selects one platform.
+rem Each platform is independent; successes are recorded to skip on retries.
 rem --story, --dry-run, --yes, --ask and publisher options are forwarded.
 rem SHIFT changes numbered arguments, but leaves %* intact for all four steps.
 rem ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ echo [X] --only must be bilibili or douyin.
 goto :fail
 
 :setup
+set "RC=0"
 set "SAU_PY=%REPO_ROOT%\tools\social-auto-upload\.venv\Scripts\python.exe"
 if not exist "%SAU_PY%" (
     echo.
@@ -49,15 +51,21 @@ echo.
 echo [Bilibili 1/2] Optimize 4K covers for the Bilibili cover endpoint.
 echo.
 "%PY%" "%REPO_ROOT%\scripts\make_bilibili_covers.py" %*
-if errorlevel 1 goto :fail
+if errorlevel 1 goto :bilibili_failed
 
 echo.
 echo [Bilibili 2/2] Publish every _b video. Confirm actual uploads with Y.
 echo                Live biliup progress, speed and ETA will be shown below.
 echo.
 "%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %* --b --only bilibili
-set "RC=%ERRORLEVEL%"
-if not "%RC%"=="0" goto :done
+if errorlevel 1 goto :bilibili_failed
+goto :after_bilibili
+
+:bilibili_failed
+set "RC=1"
+echo [X] Bilibili failed or was cancelled. Douyin will still be attempted if selected.
+
+:after_bilibili
 if /i "%PLATFORM%"=="bilibili" goto :done
 
 :douyin
@@ -65,13 +73,18 @@ echo.
 echo [Douyin 1/2] Make portrait and landscape covers for _dy exports.
 echo.
 "%PY%" "%REPO_ROOT%\scripts\make_douyin_covers.py" %* --dy-only
-if errorlevel 1 goto :fail
+if errorlevel 1 goto :douyin_failed
 
 echo.
 echo [Douyin 2/2] Publish every _dy video. Headed mode; confirm uploads with Y.
 echo.
 "%SAU_PY%" "%REPO_ROOT%\scripts\publish_dual.py" %* --dy --only douyin --headed
-set "RC=%ERRORLEVEL%"
+if errorlevel 1 goto :douyin_failed
+goto :done
+
+:douyin_failed
+set "RC=1"
+echo [X] Douyin failed or was cancelled. Completed Bilibili uploads are preserved.
 
 :done
 echo.
