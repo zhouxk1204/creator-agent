@@ -82,7 +82,7 @@ uv run creator-agent sync --creator douyin_12345 --days 3
   沉淀到 `knowledge/` 知识库并生成 `reports/`；之后的翻译自动注入相关知识（需翻译服务在跑）
 - **`06_correct_subtitles.bat`** —— 按 `941_1_origin.srt` 的故事标识读取同目录 `metadata.json`：先写入中文标题/简介与平台标签，再用匹配的日中背景矫正并翻译字幕；双击默认使用上次素材目录，也可粘贴路径覆盖。
 - **`bat/publish_dual.bat`** —— 通用单故事发布入口：从同一份 metadata 选择故事发布，不再读取旧文本发布包。剪映按预填的 `<story_id>_final.mp4` 导出到素材目录，填写抖音两张独立封面路径，建议先用 `--story 941_1 --dry-run` 校验。字段标准见 [发布文档](docs/publish-package.md)。
-- **`bat/doraemon/03_publish.bat`** —— B 站 / 抖音统一批量入口：默认先优化 4K 封面并发布所有 `<story_id>_b.mp4`，再生成横竖封面并发布 `<story_id>_dy/` 中的剪映导出；每个平台上传前单独确认。`--only bilibili` / `--only douyin` 只跑对应平台，支持 `--story`、`--dry-run` 等参数。详见 [使用说明](bat/doraemon/03_publish.md)。
+- **`bat/doraemon/03_publish.bat`** —— B 站 / 抖音统一批量入口：发布前先确认待发布故事的中文简介和标签，缺失时自动启动本地模型翻译；然后默认先优化 4K 封面并发布所有 `<story_id>_b.mp4`（**没有 `_b` 视频时自动跳过 B 站**），再生成横竖封面并发布 `<story_id>_dy.mp4`（根目录）或 `<story_id>_dy/` 中的剪映导出；每个平台上传前单独确认。`--only bilibili` / `--only douyin` 只跑对应平台，支持 `--story`、`--dry-run` 等参数。详见 [使用说明](bat/doraemon/03_publish.md)。
 
 ## 日语 ASR（去背景音 + 说话人分离 + Qwen3-ASR + 词级对齐字幕）
 

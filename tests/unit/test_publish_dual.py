@@ -244,6 +244,24 @@ def test_dy_videos_loops_over_several_files_of_one_story(materials):
     assert found[-1][1] == part
 
 
+def test_dy_videos_accepts_a_flat_export_in_the_materials_root(materials):
+    # 剪映 is not forced to export into a subfolder: a plain 941_2_dy.mp4 left
+    # next to metadata.json must be publishable without moving it.
+    folder, data = materials
+    flat = folder / "941_2_dy.mp4"
+    flat.write_bytes(b"jianying export")
+
+    assert publish_dual.dy_videos(folder, data["stories"]) == [("941_2", flat)]
+
+
+def test_flat_root_export_is_picked_as_the_douyin_video(materials):
+    folder, _ = materials
+    flat = folder / "941_1_dy.mp4"
+    flat.write_bytes(b"jianying export")
+
+    assert job(folder).video == flat
+
+
 def test_dry_run_with_dy_publishes_each_export(materials, monkeypatch, capsys):
     folder, _ = materials
     dy_export(folder, "941_1")
@@ -616,7 +634,32 @@ def test_merged_launcher_continues_other_platform_and_preserves_failure_status()
     assert text.count("if errorlevel 1 goto :douyin_failed") == 2
     assert 'set "RC=%ERRORLEVEL%"' not in text
     assert text.count('set "RC=0"') == 1
+    # The translation gate runs before either platform and never touches RC.
+    assert text.index("ensure_doraemon_translation.py") < text.index("make_bilibili_covers.py")
+    assert text.index("ensure_doraemon_translation.py") < text.index("make_douyin_covers.py")
+    assert "call :ensure_server" in text
     assert "exit /b %RC%" in text
+
+
+def test_merged_launcher_skips_bilibili_when_no_b_video_exists():
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
+    bilibili = text.split("\n:setup\n", 1)[1].split("\n:douyin\n", 1)[0]
+    # make_bilibili_covers.py returns 3 for "no _b video": skip, do not abort.
+    assert bilibili.index("make_bilibili_covers.py") < bilibili.index("if errorlevel 3 goto :no_bilibili")
+    assert ":no_bilibili" in bilibili
+    assert "skipping Bilibili" in bilibili
+    # Skipping must not end the run: it falls into :after_bilibili, which only
+    # exits for --only bilibili, so "both" still reaches :douyin.
+    skip = bilibili.split("\n:no_bilibili\n", 1)[1]
+    assert "goto :done" not in skip.split("\n:after_bilibili\n", 1)[0]
+
+
+def test_merged_launcher_translates_before_any_platform_step():
+    text = (Path(__file__).resolve().parents[2] / "bat/doraemon/03_publish.bat").read_text(encoding="ascii")
+    assert text.index("ensure_doraemon_translation.py") < text.index("make_bilibili_covers.py")
+    assert text.index("ensure_doraemon_translation.py") < text.index("make_douyin_covers.py")
+    assert text.index("ensure_doraemon_translation.py") < text.index('publish_dual.py" %*')
+    assert "call :ensure_server" in text
 
 
 def test_setup_installs_biliup_runtime_patches():

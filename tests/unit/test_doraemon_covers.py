@@ -111,6 +111,19 @@ def test_dy_only_skips_stories_without_a_jianying_export(tmp_path, monkeypatch, 
     assert "942_2" not in out
 
 
+def test_dy_only_counts_a_flat_root_export(tmp_path, monkeypatch, capsys):
+    # 剪映 may drop <story>_dy.mp4 straight into the materials root; the cover
+    # step must still render for it, or publishing fails on missing covers.
+    import make_douyin_covers
+
+    path = make_metadata(tmp_path)
+    (tmp_path / "942_1_dy.mp4").write_bytes(b"export")
+    monkeypatch.setattr(sys, "argv", ["make_douyin_covers.py", str(path), "--dry-run", "--dy-only"])
+
+    assert make_douyin_covers.main() == 0
+    assert "MAKE 942_1" in capsys.readouterr().out
+
+
 def test_cover_step_accepts_forwarded_publish_arguments(tmp_path, monkeypatch, capsys):
     import make_douyin_covers
 

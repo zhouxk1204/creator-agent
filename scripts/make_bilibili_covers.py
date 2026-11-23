@@ -23,6 +23,10 @@ from scripts.publish_dual import b_videos, choose_target  # noqa: E402
 
 MAX_COVER_BYTES = 5 * 1024 * 1024
 JPEG_QUALITIES = (88, 82, 76, 70, 60)
+# Distinct from the 2 used for real errors: the launcher (bat/doraemon/03_publish.bat)
+# treats this as "nothing to publish to Bilibili", skips that step and still runs
+# Douyin instead of aborting the whole publish.
+NO_VIDEOS_RC = 3
 
 
 def upload_cover_path(source: Path) -> Path:
@@ -88,7 +92,11 @@ def main() -> int:
             videos = [(story_id, video) for story_id, video in videos if story_id == args.story]
         if not videos:
             named = f"{args.story} 的" if args.story else ""
-            raise MetadataError(f"{path.parent} 下没有 {named}_b 视频：请先准备 <故事>_b.mp4")
+            print(
+                f"[跳过] {path.parent} 下没有 {named}_b 视频（<故事>_b.mp4），B 站步骤跳过",
+                file=sys.stderr,
+            )
+            return NO_VIDEOS_RC
         videos = pending_videos(data, videos, "bilibili", args.bilibili_account)
         for story_id in dict.fromkeys(story_id for story_id, _ in videos):
             make_bilibili_cover(path.parent / f"{story_id}_4k.jpg")

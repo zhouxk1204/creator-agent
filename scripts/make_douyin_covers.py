@@ -82,12 +82,14 @@ def main() -> int:
         data = load(path)
         stories = stories_to_render(data, args.story)
         if args.dy_only:
-            # Same convention publish_dual.py publishes from: a story is only
-            # publishable once 剪映 exported <story>_dy/<story>_dy.mp4, so there
-            # is no point spending a 剪映 render on the others yet.
+            # Same discovery publish_dual.py publishes from: a story is only
+            # publishable once 剪映 exported it — into <story>_dy/ or as the flat
+            # <story>_dy.mp4 in the materials root — so there is no point
+            # spending a 剪映 render on the others yet.
             videos = dy_videos(path.parent, stories)
             if not videos:
-                print("[X] 没有可发布的故事：先导出 <故事>_dy/<故事>_dy.mp4", file=sys.stderr)
+                print("[X] 没有可发布的故事：先导出 <故事>_dy/<故事>_dy.mp4 或 <故事>_dy.mp4", file=sys.stderr)
+                return 2
                 return 2
             videos = pending_videos(data, videos, "douyin", args.douyin_account)
             pending_stories = {story_id for story_id, _ in videos}

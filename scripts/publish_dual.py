@@ -1,10 +1,12 @@
 """Publish one Doraemon metadata story to Douyin/Bilibili via social-auto-upload.
 
-Douyin takes the 剪映 export: every ``<materials>/<story>_dy/<name>_dy.mp4`` is a
-finished vertical cut with burned subtitles, and ``--dy`` publishes each of them
-in turn (one Douyin video per file). The dual-platform flow keeps using
-``publish.video_path`` for Bilibili; ``--b`` instead publishes every root-level
-``<story>_b`` video with an optimized JPEG made from its ``<story>_4k.jpg`` cover.
+Douyin takes the 剪映 export, either ``<materials>/<story>_dy/<name>_dy.mp4``
+(collected in the story's own folder) or the flat ``<materials>/<story>_dy.mp4``
+left in the materials root; every export is a finished vertical cut with burned
+subtitles, and ``--dy`` publishes each of them in turn (one Douyin video per
+file). The dual-platform flow keeps using ``publish.video_path`` for Bilibili;
+``--b`` instead publishes every root-level ``<story>_b`` video with an optimized
+JPEG made from its ``<story>_4k.jpg`` cover.
 
 This entry point and its metadata dependency use only the standard library,
 so they also run inside social-auto-upload's separate virtual environment.
@@ -55,11 +57,15 @@ def required_asset(path: Path, value, extensions: set[str]) -> Path:
 def dy_videos(materials: Path, stories: list[dict]) -> list[tuple[str, Path]]:
     """``(story_id, video)`` for every 剪映 ``_dy`` export under the materials folder.
 
-    The convention is ``<materials>/<story_id>_dy/<story_id>_dy.mp4``: the folder
-    holds the vertical cut with burned subtitles, exported from 剪映 after the
-    subtitle stage. A story may export more than one file (a split upload), and
-    not every story has been exported yet, so discovery — not a fixed path — is
-    what drives the loop.
+    Two layouts are accepted, because 剪映 does not force a subfolder:
+
+    * ``<materials>/<story_id>_dy/<story_id>_dy.mp4`` — the export collected in
+      its own folder (which may also hold the ``.srt`` and extra parts);
+    * ``<materials>/<story_id>_dy.mp4`` — the flat export left in the materials
+      root, which is where a single-drag export usually lands.
+
+    A story may export more than one file (a split upload), and not every story
+    has been exported yet, so discovery — not a fixed path — drives the loop.
     """
     known = {story["story_id"] for story in stories}
     found: list[tuple[str, Path]] = []
@@ -74,6 +80,14 @@ def dy_videos(materials: Path, stories: list[dict]) -> list[tuple[str, Path]]:
         named = [path for path in videos if path.stem.endswith("_dy")]
         for video in named or videos:
             found.append((story_id, video))
+    for video in sorted(materials.glob("*_dy.*")):
+        if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
+            continue
+        story_id = video.stem[: -len("_dy")]
+        if story_id not in known:
+            print(f"[!] 跳过 {video.name}：metadata 里没有故事 {story_id}")
+            continue
+        found.append((story_id, video))
     return found
 
 
@@ -110,11 +124,15 @@ def douyin_video(metadata: Path, story: dict, override: Path | None = None) -> P
     exported = metadata.parent / f"{story_id}_dy" / f"{story_id}_dy.mp4"
     if exported.is_file():
         return exported
+    flat = metadata.parent / f"{story_id}_dy.mp4"
+    if flat.is_file():
+        return flat
     master = (story.get("publish") or {}).get("video_path")
     if master and resolve_asset(metadata, master).is_file():
         return required_asset(metadata, master, VIDEO_EXTS)
     raise MetadataError(
-        f"{story_id} 没有抖音视频：请把剪映导出的 {story_id}_dy/{story_id}_dy.mp4 放到素材目录，"
+        f"{story_id} 没有抖音视频：请把剪映导出的 {story_id}_dy/{story_id}_dy.mp4"
+        f"（或 {story_id}_dy.mp4）放到素材目录，"
         "或在 metadata 的 publish.douyin.video_path 指定"
     )
 
@@ -382,7 +400,7 @@ def main() -> int:
     batch.add_argument(
         "--dy",
         action="store_true",
-        help="发布素材目录下所有 <故事>_dy/ 里的剪映导出（一个视频一条抖音），逐个循环",
+        help="发布素材目录下所有 <故事>_dy/ 里或根下的 <故事>_dy 剪映导出（一个视频一条抖音），逐个循环",
     )
     batch.add_argument(
         "--b",

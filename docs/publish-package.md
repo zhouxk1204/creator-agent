@@ -136,7 +136,8 @@ bat\doraemon\03_publish.bat "%USERPROFILE%\Desktop\doraemon_941" --only douyin -
 安装、扫码登录和上传故障处理见 [`bat/publish_dual.md`](../bat/publish_dual.md)。
 
 哆啦A梦日常批量发布使用 [`bat/doraemon/03_publish.bat`](../bat/doraemon_legacy/03_publish.md)：
-默认先发根目录的 `<故事>_b.mp4` 到 B 站，再发 `<故事>_dy/` 中的剪映导出到抖音，
-各平台自动处理封面并分别确认。`--only bilibili` / `--only douyin` 只跑对应平台；
+默认先发根目录的 `<故事>_b.mp4` 到 B 站，再发根目录的 `<故事>_dy.mp4`（或 `<故事>_dy/`
+目录里的剪映导出）到抖音，各平台自动处理封面并分别确认。发布前会先补齐缺失的中文简介和标签，
+没有 `_b` 视频时 B 站步骤自动跳过。`--only bilibili` / `--only douyin` 只跑对应平台；
 此入口一个平台失败或取消仍会继续另一个平台，保留成功记录，重试时自动跳过已上传的视频。
 
