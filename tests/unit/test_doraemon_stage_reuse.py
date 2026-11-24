@@ -31,7 +31,7 @@ def test_completed_download_skips_before_network_or_downloader(tmp_path, monkeyp
     network = Mock(side_effect=AssertionError("must not query TVer"))
     run = Mock(side_effect=AssertionError("must not launch yt-dlp"))
     monkeypatch.setattr(download.httpx, "Client", network)
-    monkeypatch.setattr(download.subprocess, "run", run)
+    monkeypatch.setattr(download, "run_logged", run)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -45,8 +45,8 @@ def test_completed_download_skips_before_network_or_downloader(tmp_path, monkeyp
 @pytest.mark.parametrize("force", [False, True])
 def test_download_force_bypasses_completed_file_without_real_download(tmp_path, monkeypatch, force):
     sparse_file(tmp_path / "941.mp4", download.MIN_FINISHED_BYTES)
-    run = Mock()
-    monkeypatch.setattr(download.subprocess, "run", run)
+    run = Mock(return_value=0)
+    monkeypatch.setattr(download, "run_logged", run)
     monkeypatch.setattr(download, "_ffmpeg_location", lambda: None)
     download.download("fake_episode", tmp_path, name="941", force=force)
     assert run.call_count == int(force)

@@ -63,15 +63,19 @@ def test_process_wait_reports_progress(monkeypatch):
     process = logging.LoggedProcess.__new__(logging.LoggedProcess)
     process.logger = Mock()
     process.started = 0
+    process.quiet = False
     process.proc = Mock()
     process.proc.wait.side_effect = [subprocess.TimeoutExpired("local", 10), 0]
     process.reader = Mock()
     progress = Mock(return_value="1/2 frames")
     monkeypatch.setattr(logging.time, "monotonic", lambda: 10)
     assert process.wait(progress=progress) == 0
-    progress.assert_called_once_with()
+    assert progress.call_count == 3
     process.reader.join.assert_called_once_with()
-    assert "1/2 frames" in process.logger.event.call_args_list[0].args[0]
+    assert process.logger.status.call_count == 3
+    assert "1/2 frames" in process.logger.status.call_args.args[0]
+    process.logger.finish_status.assert_called_once_with()
+    assert "[END]" in process.logger.event.call_args.args[0]
 
 
 @pytest.mark.parametrize("error", [KeyboardInterrupt(), RuntimeError("progress failed")])
@@ -168,3 +172,176 @@ def test_stopping_wrapper_also_stops_its_separate_child_group(tmp_path):
                 pass
             else:
                 os.kill(nested_pid, signal.SIGKILL)
+
+
+@pytest.fixture(autouse=True)
+def clean_console_state():
+    logging._CONSOLE_OWNER = None
+    logging._CONSOLE_LINE_START = True
+    logging._STATUS_OWNER = None
+    logging._STATUS_TEXT = ""
+    logging._STATUS_WIDTH = 0
+    yield
+    logging._CONSOLE_OWNER = None
+    logging._CONSOLE_LINE_START = True
+    logging._STATUS_OWNER = None
+    logging._STATUS_TEXT = ""
+    logging._STATUS_WIDTH = 0
+
+
+def visible_lines(output):
+    """Small ASCII terminal model: CR overwrites, LF commits the current row."""
+    rows, row, column = [], [], 0
+    for char in output:
+        if char == "\r":
+            column = 0
+        elif char == "\n":
+            rows.append("".join(row).rstrip())
+            row, column = [], 0
+        else:
+            if column < len(row):
+                row[column] = char
+            else:
+                row.append(char)
+            column += 1
+    if row:
+        rows.append("".join(row).rstrip())
+    return [row for row in rows if row]
+
+
+def test_status_overwrites_console_but_only_final_summary_is_logged(tmp_path, capsys):
+    path = tmp_path / "run.txt"
+    logger = logging.LiveLog(path, "upscale", live=True)
+    logger.status("[INFERENCE] [----------------] 0/123451 frames")
+    logger.status("[INFERENCE] [########--------] 60000/123451 frames")
+    assert not path.exists()
+    logger.finish_status()
+    text = path.read_text(encoding="utf-8")
+    assert "60000/123451" in text and " 0/123451 " not in text
+    assert text.count("[PROGRESS DONE]") == 1
+    assert "\r" not in text
+    rows = visible_lines(capsys.readouterr().out)
+    assert len(rows) == 1
+    assert "60000/123451" in rows[0]
+
+
+def test_parallel_message_clears_then_redraws_the_progress_line(tmp_path, capsys):
+    video = logging.LiveLog(tmp_path / "video.txt", "video", live=True)
+    materials = logging.LiveLog(tmp_path / "materials.txt", "materials", live=True)
+    video.status("[INFERENCE] 1/20 frames")
+    materials.event("cover ready")
+    video.status("[INFERENCE] 2/20 frames")
+    video.finish_status()
+    rows = visible_lines(capsys.readouterr().out)
+    assert len(rows) == 2
+    assert rows[0].endswith("[materials] cover ready")
+    assert rows[1].endswith("[PROGRESS DONE] [INFERENCE] 2/20 frames")
+    assert "[INFERENCE]" not in materials.path.read_text(encoding="utf-8")
+
+
+def test_redirected_output_only_contains_final_progress_summary(tmp_path, capsys):
+    logger = logging.LiveLog(tmp_path / "run.txt", "video", live=False)
+    for index in range(100):
+        logger.status(f"[INFERENCE] {index}/100 frames")
+    assert capsys.readouterr().out == ""
+    logger.finish_status()
+    output = capsys.readouterr().out
+    assert "99/100 frames" in output
+    assert output.count("\n") == 1
+    assert "\r" not in output
+
+
+@pytest.mark.parametrize("separator", ["\r", "\n", "\r\n"])
+def test_real_child_progress_refreshes_are_not_durable_log_lines(tmp_path, capsys, separator):
+    logger = logging.LiveLog(tmp_path / "run.txt", "download", live=True)
+    code = (
+        "import sys\n"
+        "for value in (10, 50, 100): "
+        "sys.stdout.write('[DOWNLOAD] %s%% at 2.0MiB/s 10MiB / 20MiB ETA 5s' % value"
+        f" + {separator!r}); sys.stdout.flush()\n"
+        "print('WARNING: diagnostic retained', file=sys.stderr)\n"
+    )
+    assert logging.run_logged([sys.executable, "-u", "-c", code], logger, quiet=True) == 0
+    text = logger.path.read_text(encoding="utf-8")
+    assert text.count("[PROGRESS DONE]") == 1
+    assert "[DOWNLOAD] [" in text
+    assert "100%" in text and "2.0MiB/s" in text
+    assert "10%" not in text and "50%" not in text
+    assert "WARNING: diagnostic retained" in text
+    rows = visible_lines(capsys.readouterr().out)
+    assert len(rows) == 2
+    assert "diagnostic retained" in rows[0]
+    assert "100%" in rows[1]
+
+
+def test_nested_wrapper_preserves_live_frames_without_duplicate_final_records(tmp_path, capsys):
+    scripts = Path(logging.__file__).parent
+    child_code = "import sys; [print('[INFERENCE] %s/3 frames' % i, end='\\r', flush=True) for i in range(4)]"
+    wrapper_code = (
+        f"import sys; sys.path.insert(0, {str(scripts)!r})\n"
+        "from live_logging import LiveLog, run_logged\n"
+        f"raise SystemExit(run_logged([sys.executable, '-u', '-c', {child_code!r}], "
+        "LiveLog(None, 'inner'), quiet=True))\n"
+    )
+    logger = logging.LiveLog(tmp_path / "pipeline.txt", "outer", live=True)
+    assert logging.run_logged([sys.executable, "-u", "-c", wrapper_code], logger, quiet=True) == 0
+    text = logger.path.read_text(encoding="utf-8")
+    assert text.count("[PROGRESS DONE]") == 1
+    assert "3/3 frames" in text
+    assert "0/3 frames" not in text
+    assert len(visible_lines(capsys.readouterr().out)) == 1
+
+
+def test_process_without_callback_does_not_log_running_heartbeats():
+    process = logging.LoggedProcess.__new__(logging.LoggedProcess)
+    process.logger = Mock()
+    process.started = time.monotonic()
+    process.quiet = False
+    process.proc = Mock()
+    process.proc.wait.side_effect = [subprocess.TimeoutExpired("local", 1), 0]
+    process.reader = Mock()
+    assert process.wait() == 0
+    process.logger.status.assert_not_called()
+    assert process.logger.event.call_count == 1
+    assert "[END]" in process.logger.event.call_args.args[0]
+
+
+def test_progress_line_never_wraps_a_narrow_terminal(monkeypatch, capsys):
+    monkeypatch.setattr(logging.shutil, "get_terminal_size", lambda **kwargs: os.terminal_size((80, 24)))
+    logger = logging.LiveLog(None, "download", live=True)
+    logger.status("[DOWNLOAD] 50% at 2MiB/s " + "details " * 20)
+    output = capsys.readouterr().out
+    assert "2MiB/s" in output
+    assert len(output.removeprefix("\r")) < 80
+    logger.finish_status(record=False)
+
+
+def test_child_filter_hides_per_image_logs_but_keeps_errors(tmp_path):
+    code = "print('Testing 0 frame_000001'); print('Testing 1 frame_000002'); print('RuntimeError: GPU failed')"
+    logger = logging.LiveLog(tmp_path / "run.txt", "upscale", live=False)
+    assert (
+        logging.run_logged(
+            [sys.executable, "-c", code],
+            logger,
+            quiet=True,
+            output_filter=lambda line: not line.startswith("Testing "),
+        )
+        == 0
+    )
+    text = logger.path.read_text(encoding="utf-8")
+    assert "[upscale] Testing" not in text
+    assert "RuntimeError: GPU failed" in text
+
+
+def test_diagnostics_with_a_progress_marker_are_not_overwritten(tmp_path):
+    code = (
+        "print('[INFERENCE] 1/10 frames'); "
+        "print('RuntimeError: [INFERENCE] GPU failed'); "
+        "print('[INFERENCE] 2/10 frames')"
+    )
+    logger = logging.LiveLog(tmp_path / "run.txt", "upscale", live=False)
+    assert logging.run_logged([sys.executable, "-c", code], logger, quiet=True) == 0
+    text = logger.path.read_text(encoding="utf-8")
+    assert "[upscale] RuntimeError: [INFERENCE] GPU failed" in text
+    assert text.count("[PROGRESS DONE]") == 1
+    assert "2/10 frames" in text

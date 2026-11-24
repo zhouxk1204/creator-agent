@@ -18,14 +18,19 @@ import translate_doraemon  # noqa: E402
 
 @pytest.mark.parametrize("name", [None, "941"])
 def test_tver_download_disables_sidecars(tmp_path, monkeypatch, name):
-    run = Mock()
-    monkeypatch.setattr(download_tver.subprocess, "run", run)
+    run = Mock(return_value=0)
+    monkeypatch.setattr(download_tver, "run_logged", run)
     monkeypatch.setattr(download_tver, "_ffmpeg_location", lambda: None)
 
     download_tver.download("episode123", tmp_path / "materials", name=name)
 
     cmd = run.call_args.args[0]
-    assert run.call_args.kwargs == {"check": True}
+    assert run.call_args.kwargs == {"quiet": True}
+    assert "--progress" in cmd and "--newline" in cmd and "--no-colors" in cmd
+    assert cmd[cmd.index("--progress-delta") + 1] == "1"
+    template = cmd[cmd.index("--progress-template") + 1]
+    assert "[DOWNLOAD]" in template and "%(progress._speed_str)s" in template
+    assert "%(progress._percent_str)s" in template and "%(progress._eta_str)s" in template
     assert "--no-write-thumbnail" in cmd
     assert "--no-write-info-json" in cmd
     assert not {"--write-thumbnail", "--write-info-json", "--convert-thumbnails"}.intersection(cmd)
@@ -199,3 +204,20 @@ def test_translation_is_saved_before_tags_and_reused_after_tag_failure(tmp_path,
     assert load_metadata(path)["stories"][0]["publish"]["douyin"]["tags"] == ["哆啦A梦", "大雄"]
     assert translate_doraemon.translate_metadata(path, "941_1", object(), refresh=True)[2]
     assert translate.call_count == 2
+
+
+def test_tver_progress_failure_keeps_existing_retry_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(download_tver, "run_logged", Mock(return_value=7))
+    monkeypatch.setattr(download_tver, "_ffmpeg_location", lambda: None)
+    with pytest.raises(RuntimeError, match="yt-dlp failed.*exit code 7"):
+        download_tver.download("episode123", tmp_path)
+
+
+def test_tver_complete_video_skips_without_starting_progress(tmp_path, monkeypatch):
+    target = tmp_path / "941.mp4"
+    target.write_bytes(b"done")
+    monkeypatch.setattr(download_tver, "MIN_FINISHED_BYTES", 4)
+    run = Mock(side_effect=AssertionError("must not download completed video"))
+    monkeypatch.setattr(download_tver, "run_logged", run)
+    download_tver.download("episode123", tmp_path, name="941")
+    run.assert_not_called()

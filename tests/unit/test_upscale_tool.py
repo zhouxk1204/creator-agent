@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -20,6 +22,19 @@ def setup(tmp_path, monkeypatch):
     for video in videos:
         video.write_bytes(b"original")
     monkeypatch.setattr(tool, "check_setup", lambda: None)
+    monkeypatch.setattr(
+        tool,
+        "video_info",
+        lambda video: {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "duration": 1 / 30,
+            "frames": 1,
+            "codec": "h264",
+            "estimated": False,
+        },
+    )
     return output, videos
 
 
@@ -237,3 +252,153 @@ def test_success_exit_without_complete_artifacts_is_not_a_checkpoint(setup, monk
     assert previous.read_bytes() == b"previous good output"
     assert not (output / ".upscale_tmp").exists()
     assert not list(output.glob("*.part.mp4"))
+
+
+def test_inference_progress_uses_actual_output_frame_count(tmp_path, monkeypatch):
+    for index in range(3):
+        (tmp_path / f"frame_{index:06d}_out.jpg").write_bytes(b"frame")
+    (tmp_path / "unrelated.jpg").write_bytes(b"other")
+    (tmp_path / "frame_999999_out.jpg").mkdir()
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 12)
+    status = tool._inference_progress(tmp_path, 123451, 10)
+    assert "3/123451 frames" in status
+    assert "1.50 frames/s" in status and "ETA=" in status
+    assert "[----------------]" in status
+
+
+@pytest.mark.parametrize("line", ["Testing 0 frame_000001", "Testing 1234 frame_001235", "Tile 1/4"])
+def test_routine_inference_lines_are_hidden(line):
+    assert tool._inference_output(line) is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["RuntimeError: CUDA out of memory", "Warning: image failed", "Testing 0 frame_000001 ERROR", "Error frame_000001"],
+)
+def test_inference_diagnostics_are_preserved(line):
+    assert tool._inference_output(line) is True
+
+
+def test_video_information_is_printed_before_frame_processing(setup, monkeypatch, capsys):
+    output, videos = setup
+    calls = fake_commands(monkeypatch, output)
+    assert tool.main([str(videos[0]), "--output-dir", str(output)]) == 0
+    text = capsys.readouterr().out
+    assert text.index("[VIDEO INFO]") < text.index("[STAGE 1/3]")
+    assert "resolution=1920x1080" in text and "FPS=30.000" in text and "frames=1" in text
+    for command in (calls[0], calls[2]):
+        assert "-nostats" in command and "-hide_banner" in command
+        assert command[command.index("-loglevel") + 1] == "warning"
+    assert "-progress" in calls[2] and "pipe:1" in calls[2]
+
+
+def test_video_probe_reads_header_metadata_and_prefers_configured_ffprobe(tmp_path, monkeypatch):
+    ffmpeg = tmp_path / "ffmpeg.exe"
+    probe = tmp_path / "ffprobe.exe"
+    probe.touch()
+    monkeypatch.setattr(tool, "FFMPEG_EXE", ffmpeg)
+    run = Mock(
+        return_value=SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "width": 1920,
+                            "height": 1080,
+                            "codec_name": "h264",
+                            "avg_frame_rate": "30000/1001",
+                            "nb_frames": "123451",
+                            "duration": "4119.15",
+                        }
+                    ]
+                }
+            ),
+        )
+    )
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    info = tool.video_info(tmp_path / "source.mp4")
+    assert run.call_args.args[0][0] == str(probe)
+    assert "-count_frames" not in run.call_args.args[0]
+    assert info["frames"] == 123451 and not info["estimated"]
+    assert info["fps"] == pytest.approx(29.97003)
+
+
+def test_video_probe_marks_estimates_and_uses_format_duration(tmp_path, monkeypatch):
+    monkeypatch.setattr(tool.shutil, "which", lambda name: "ffprobe")
+    run = Mock(
+        return_value=SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "streams": [
+                        {"avg_frame_rate": "0/0", "r_frame_rate": "30/1", "nb_frames": "N/A", "duration": "N/A"}
+                    ],
+                    "format": {"duration": "10"},
+                }
+            ),
+        )
+    )
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    info = tool.video_info(tmp_path / "source.mp4")
+    assert info["frames"] == 300 and info["estimated"]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        SimpleNamespace(returncode=1, stdout=""),
+        SimpleNamespace(returncode=0, stdout="bad json"),
+        SimpleNamespace(returncode=0, stdout='{"streams": []}'),
+    ],
+)
+def test_bad_probe_data_does_not_block_frame_extraction(tmp_path, monkeypatch, result):
+    monkeypatch.setattr(tool.shutil, "which", lambda name: "ffprobe")
+    monkeypatch.setattr(tool.subprocess, "run", Mock(return_value=result))
+    assert tool.video_info(tmp_path / "source.mp4") == {}
+
+
+def test_progress_denominator_is_extracted_frames_not_header_estimate(setup, monkeypatch):
+    output, videos = setup
+    monkeypatch.setattr(tool, "video_info", lambda video: {"frames": 123451, "estimated": True})
+    fake_commands(monkeypatch, output)
+    run = tool.run
+    statuses = []
+
+    def observe(command, log_file, cwd=None, **kwargs):
+        run(command, log_file, cwd, **kwargs)
+        statuses.append(kwargs["progress"]())
+
+    monkeypatch.setattr(tool, "run", observe)
+    assert tool.main([str(videos[0]), "--output-dir", str(output)]) == 0
+    assert "1/~123451 frames" in statuses[0]
+    assert "1/1 frames" in statuses[1]
+    assert "123451" not in statuses[1]
+
+
+def test_encoder_status_reads_ffmpeg_frames_and_retains_errors(tmp_path):
+    output = tmp_path / "video.part.mp4"
+    progress = tool.EncoderProgress(123451, output)
+    assert progress.output_line("frame=1234") is False
+    assert progress.output_line("out_time_us=10000") is False
+    assert progress.output_line("stream_0_0_q=22.0") is False
+    assert progress.output_line("progress=continue") is False
+    assert progress.output_line("ERROR: encoder failed") is True
+    assert "1234/123451 frames" in progress.status()
+    assert progress.output_line("frame=N/A") is False
+    assert progress.frames == 1234
+
+
+def test_upscale_runner_uses_quiet_progress_without_changing_failure_codes(tmp_path, monkeypatch):
+    run = Mock(return_value=7)
+    monkeypatch.setattr(tool, "run_logged", run)
+
+    def callback():
+        return "[INFERENCE] 1/2 frames"
+
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        tool.run(["local-tool"], tmp_path / "log.txt", progress=callback, output_filter=tool._inference_output)
+    assert error.value.returncode == 7
+    assert run.call_args.kwargs["quiet"] is True
+    assert run.call_args.kwargs["progress"] is callback
+    assert run.call_args.kwargs["output_filter"] is tool._inference_output

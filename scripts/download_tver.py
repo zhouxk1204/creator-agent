@@ -40,6 +40,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from live_logging import LiveLog, run_logged
 
 API_BASE = "https://service-api.tver.jp/api/v1"
 API_HEADERS = {"x-tver-platform-type": "web", "User-Agent": "Mozilla/5.0"}
@@ -145,6 +146,17 @@ def download(episode_id: str, out_dir: Path, name: str | None = None, force: boo
         sys.executable,
         "-m",
         "yt_dlp",
+        # Structured progress works both directly and through the materials
+        # wrapper: one updating bar, speed and ETA instead of permanent lines.
+        "--quiet",
+        "--progress",
+        "--newline",
+        "--no-colors",
+        "--progress-delta",
+        "1",
+        "--progress-template",
+        "download:[DOWNLOAD] %(progress._percent_str)s at %(progress._speed_str)s "
+        "%(progress._downloaded_bytes_str)s / %(progress._total_bytes_str)s ETA %(progress._eta_str)s",
         "--no-write-thumbnail",
         "--no-write-info-json",
         # TVer serves H.264/AAC HLS, so a remux is enough — no re-encode.
@@ -172,7 +184,9 @@ def download(episode_id: str, out_dir: Path, name: str | None = None, force: boo
     cmd.append(f"https://tver.jp/episodes/{episode_id}")
     print(f"  $ {' '.join(cmd[2:])}")
     try:
-        subprocess.run(cmd, check=True)
+        rc = run_logged(cmd, LiveLog(None, "download"), quiet=True)
+        if rc:
+            raise subprocess.CalledProcessError(rc, cmd)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"yt-dlp failed for episode {episode_id} (exit code {e.returncode}). "

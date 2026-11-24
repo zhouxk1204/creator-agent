@@ -10,15 +10,19 @@ video, including failures.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 
-from live_logging import LiveLog, install_interrupt_handler, run_logged
+from live_logging import LiveLog, install_interrupt_handler, progress_bar, run_logged
 
 REALESRGAN_DIR = Path(r"C:\to4k\Real-ESRGAN")
 PYTHON_EXE = Path(sys.executable)
@@ -38,15 +42,138 @@ def run(
     cwd: Path | None = None,
     *,
     progress: Callable[[], str] | None = None,
+    output_filter: Callable[[str], bool] | None = None,
 ) -> None:
     args = [str(part) for part in command]
-    rc = run_logged(args, LiveLog(log_file, "upscale"), cwd=cwd, progress=progress)
+    rc = run_logged(
+        args, LiveLog(log_file, "upscale"), cwd=cwd, progress=progress, quiet=True, output_filter=output_filter
+    )
     if rc:
         raise subprocess.CalledProcessError(rc, args)
 
 
 def _frames(directory: Path, pattern: str) -> int:
-    return sum(1 for path in directory.glob(pattern) if path.is_file())
+    # scandir reuses directory-entry metadata instead of stat-ing every JPG
+    # at each refresh, which matters for videos with tens of thousands of frames.
+    with os.scandir(directory) as entries:
+        return sum(entry.is_file() and fnmatch.fnmatchcase(entry.name, pattern) for entry in entries)
+
+
+def video_info(video: Path) -> dict:
+    """Read header metadata without decoding the entire source video."""
+    candidate = FFMPEG_EXE.with_name("ffprobe" + FFMPEG_EXE.suffix)
+    probe = str(candidate) if candidate.is_file() else shutil.which("ffprobe")
+    if not probe:
+        return {}
+    try:
+        result = subprocess.run(
+            [
+                probe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height,avg_frame_rate,r_frame_rate,nb_frames,duration:format=duration",
+                "-of",
+                "json",
+                str(video),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        if result.returncode:
+            return {}
+        data = json.loads(result.stdout)
+        stream = data["streams"][0]
+        fps = None
+        for key in ("avg_frame_rate", "r_frame_rate"):
+            try:
+                value = float(Fraction(stream.get(key, "0")))
+                if value > 0:
+                    fps = value
+                    break
+            except (ValueError, ZeroDivisionError, TypeError):
+                pass
+        duration = 0.0
+        for value in (stream.get("duration"), data.get("format", {}).get("duration")):
+            try:
+                duration = float(value)
+                if duration > 0:
+                    break
+            except (ValueError, TypeError):
+                continue
+        raw_frames = stream.get("nb_frames")
+        frames = int(raw_frames) if raw_frames and str(raw_frames).isdigit() else None
+        estimated = not frames and bool(fps and duration > 0)
+        if estimated:
+            frames = round(fps * duration)
+        return {
+            "width": stream.get("width"),
+            "height": stream.get("height"),
+            "codec": stream.get("codec_name"),
+            "fps": fps,
+            "duration": duration,
+            "frames": frames,
+            "estimated": estimated,
+        }
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError, OverflowError):
+        return {}
+
+
+def _extraction_progress(directory: Path, total: int | None, frame_label: str) -> str:
+    done = _frames(directory, "frame_*.jpg")
+    return f"[EXTRACT] {progress_bar(done, total)} {done}/{frame_label} frames"
+
+
+def _inference_output(line: str) -> bool:
+    """Hide the engine's one-line-per-image chatter, but preserve diagnostics."""
+    return re.fullmatch(r"\s*(?:Testing \d+ frame_\d+|Tile \d+/\d+)\s*", line) is None
+
+
+class EncoderProgress:
+    def __init__(self, total: int, output: Path):
+        self.total = total
+        self.output = output
+        self.frames = 0
+
+    def output_line(self, line: str) -> bool:
+        key, separator, value = line.strip().partition("=")
+        if separator and key == "frame":
+            try:
+                self.frames = max(self.frames, int(value))
+            except ValueError:
+                pass
+            return False
+        return not (
+            separator
+            and (
+                key
+                in {
+                    "fps",
+                    "bitrate",
+                    "total_size",
+                    "out_time_us",
+                    "out_time_ms",
+                    "out_time",
+                    "dup_frames",
+                    "drop_frames",
+                    "speed",
+                    "progress",
+                }
+                or re.fullmatch(r"stream_\d+_\d+_q", key)
+            )
+        )
+
+    def status(self) -> str:
+        size = self.output.stat().st_size / 1024 / 1024 if self.output.is_file() else 0
+        return (
+            f"[ENCODE] {progress_bar(self.frames, self.total)} {self.frames}/{self.total} frames; output={size:.1f} MiB"
+        )
 
 
 def _inference_progress(directory: Path, total: int, started: float) -> str:
@@ -55,7 +182,10 @@ def _inference_progress(directory: Path, total: int, started: float) -> str:
     rate = done / elapsed
     eta = f"{max(total - done, 0) / rate:.0f}s" if rate else "unknown"
     percent = done * 100 / total if total else 0
-    return f"[INFERENCE] {done}/{total} frames ({percent:.1f}%); {rate:.2f} frames/s; ETA={eta}"
+    return (
+        f"[INFERENCE] {progress_bar(done, total)} {done}/{total} frames ({percent:.1f}%); "
+        f"{rate:.2f} frames/s; ETA={eta}"
+    )
 
 
 def check_setup() -> None:
@@ -108,6 +238,16 @@ def upscale(
         log(f"[SKIP] Output already exists: {output}", log_file)
         return False
 
+    info = video_info(video)
+    source_frames = info.get("frames")
+    frame_label = ("~" if info.get("estimated") else "") + str(source_frames) if source_frames else "unknown"
+    fps_label = f"{info['fps']:.3f}" if info.get("fps") else "unknown"
+    duration_label = f"{info['duration']:.2f}s" if info.get("duration") else "unknown"
+    log(
+        f"[VIDEO INFO] resolution={info.get('width') or '?'}x{info.get('height') or '?'}; "
+        f"codec={info.get('codec') or 'unknown'}; FPS={fps_label}; duration={duration_label}; frames={frame_label}",
+        log_file,
+    )
     _clean_workspace(workspace, work_root)
     try:
         temp_output.unlink(missing_ok=True)
@@ -117,6 +257,10 @@ def upscale(
         run(
             [
                 FFMPEG_EXE,
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-nostats",
                 "-y",
                 "-hwaccel",
                 "cuda",
@@ -127,7 +271,7 @@ def upscale(
                 in_frames / "frame_%06d.jpg",
             ],
             log_file,
-            progress=lambda: f"[EXTRACT] {_frames(in_frames, 'frame_*.jpg')} frames saved",
+            progress=lambda: _extraction_progress(in_frames, source_frames, frame_label),
         )
         total = _frames(in_frames, "frame_*.jpg")
         if not total:
@@ -156,14 +300,22 @@ def upscale(
             log_file,
             cwd=REALESRGAN_DIR,
             progress=lambda: _inference_progress(out_frames, total, inference_started),
+            output_filter=_inference_output,
         )
         completed = _frames(out_frames, "frame_*_out.jpg")
         if completed != total:
             raise RuntimeError(f"Incomplete upscaled frames: {completed}/{total}")
         log(f"[INFERENCE DONE] {completed}/{total} frames; [STAGE 3/3] Encoding video and source audio", log_file)
+        encoder = EncoderProgress(total, temp_output)
         run(
             [
                 FFMPEG_EXE,
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-nostats",
+                "-progress",
+                "pipe:1",
                 "-y",
                 "-r",
                 "30",
@@ -190,11 +342,8 @@ def upscale(
                 temp_output,
             ],
             log_file,
-            progress=lambda: (
-                f"[ENCODE] partial output={temp_output.stat().st_size / 1024 / 1024:.1f} MiB"
-                if temp_output.is_file()
-                else "[ENCODE] waiting for first encoded frames"
-            ),
+            progress=encoder.status,
+            output_filter=encoder.output_line,
         )
         if not temp_output.is_file() or temp_output.stat().st_size == 0:
             raise RuntimeError("Encoder produced no video; completed output was not replaced")
