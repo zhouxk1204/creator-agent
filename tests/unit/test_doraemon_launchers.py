@@ -14,11 +14,12 @@ def test_batch_video_stages_are_enabled_with_materials_only_guard():
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("utf-8").replace("\r\n", "\n")
     assert 'set "DOWNLOAD_VIDEO=1"' in script
+    progress = script.index('set "CREATOR_AGENT_LIVE_PROGRESS=1"')
     guard = script.index('if "%DOWNLOAD_VIDEO%"=="0" set "VIDEOARG=--no-video"')
-    assert guard < script.index('"%PY%" scripts\\download_doraemon_materials.py %VIDEOARG%')
+    assert progress < guard < script.index('"%PY%" scripts\\download_doraemon_materials.py %VIDEOARG%')
     assert r"logs\.last_doraemon_materials" in script
     assert "copy /Y" not in script and r"C:\test" not in script
-    wrapper = (ROOT / "bat/doraemon/run_upscale.bat").read_text(encoding="utf-8")
+    wrapper = (ROOT / "bat/doraemon_legacy/run_upscale.bat").read_text(encoding="utf-8")
     assert '"%UPSCALE_PYTHON%" "%UPSCALE_SCRIPT%" %*' in wrapper
 
 
@@ -37,9 +38,9 @@ def test_batch_resume_and_latest_routing_initialize_result_before_jumping():
 @pytest.mark.parametrize("download_video", [0, 1])
 def test_shell_materials_only_toggle(tmp_path, download_video):
     repo = tmp_path / "repo"
-    launcher = repo / "bat/doraemon/最新话doraemon素材下载.sh"
+    launcher = repo / "bat/doraemon_legacy/最新话doraemon素材下载.sh"
     launcher.parent.mkdir(parents=True)
-    source = (ROOT / "bat/doraemon/最新话doraemon素材下载.sh").read_text(encoding="utf-8")
+    source = (ROOT / "bat/doraemon_legacy/最新话doraemon素材下载.sh").read_text(encoding="utf-8")
     launcher.write_text(source.replace("DOWNLOAD_VIDEO=0", f"DOWNLOAD_VIDEO={download_video}", 1), encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -97,7 +98,7 @@ def test_shell_materials_only_toggle(tmp_path, download_video):
 
 
 def test_ja_asr_launcher_uses_saved_materials_for_input_and_output():
-    data = (ROOT / "bat/doraemon/04_ja_asr.bat").read_bytes()
+    data = (ROOT / "bat/doraemon_legacy/04_ja_asr.bat").read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     script = data.decode("ascii").replace("\r\n", "\n")
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -209,6 +210,32 @@ def visible_lines(output):
     return [row for row in rows if row]
 
 
+@pytest.mark.parametrize(
+    ("tty", "setting", "live", "expected"),
+    [
+        (True, None, None, True),
+        (False, None, None, False),
+        (False, "0", None, False),
+        (False, "1", None, True),
+        (True, "0", None, True),
+        (False, "1", False, False),
+        (False, None, True, True),
+    ],
+)
+def test_live_progress_selection_respects_launcher_opt_in(monkeypatch, capsys, tty, setting, live, expected):
+    monkeypatch.setattr(logging.sys.stdout, "isatty", lambda: tty)
+    if setting is None:
+        monkeypatch.delenv("CREATOR_AGENT_LIVE_PROGRESS", raising=False)
+    else:
+        monkeypatch.setenv("CREATOR_AGENT_LIVE_PROGRESS", setting)
+    logger = logging.LiveLog(None, "upscale", live=live)
+    assert logger.live is expected
+    logger.status("[INFERENCE] [########--------] 1/2 frames")
+    output = capsys.readouterr().out
+    assert ("\r" in output) is expected
+    logger.finish_status(record=False)
+
+
 def test_status_overwrites_console_but_only_final_summary_is_logged(tmp_path, capsys):
     path = tmp_path / "run.txt"
     logger = logging.LiveLog(path, "upscale", live=True)
@@ -274,7 +301,9 @@ def test_real_child_progress_refreshes_are_not_durable_log_lines(tmp_path, capsy
     assert "100%" in rows[1]
 
 
-def test_nested_wrapper_preserves_live_frames_without_duplicate_final_records(tmp_path, capsys):
+@pytest.mark.parametrize("live", [True, None])
+def test_nested_wrapper_preserves_live_frames_without_duplicate_final_records(tmp_path, capsys, monkeypatch, live):
+    monkeypatch.setenv("CREATOR_AGENT_LIVE_PROGRESS", "1")
     scripts = Path(logging.__file__).parent
     child_code = "import sys; [print('[INFERENCE] %s/3 frames' % i, end='\\r', flush=True) for i in range(4)]"
     wrapper_code = (
@@ -283,7 +312,7 @@ def test_nested_wrapper_preserves_live_frames_without_duplicate_final_records(tm
         f"raise SystemExit(run_logged([sys.executable, '-u', '-c', {child_code!r}], "
         "LiveLog(None, 'inner'), quiet=True))\n"
     )
-    logger = logging.LiveLog(tmp_path / "pipeline.txt", "outer", live=True)
+    logger = logging.LiveLog(tmp_path / "pipeline.txt", "outer", live=live)
     assert logging.run_logged([sys.executable, "-u", "-c", wrapper_code], logger, quiet=True) == 0
     text = logger.path.read_text(encoding="utf-8")
     assert text.count("[PROGRESS DONE]") == 1
@@ -314,6 +343,25 @@ def test_progress_line_never_wraps_a_narrow_terminal(monkeypatch, capsys):
     assert "2MiB/s" in output
     assert len(output.removeprefix("\r")) < 80
     logger.finish_status(record=False)
+
+
+@pytest.mark.parametrize("columns", [20, 40, 60, 80, 120])
+@pytest.mark.parametrize("done", [0, 60000, 123451])
+def test_inference_bar_keeps_frame_count_on_its_right_in_narrow_terminals(tmp_path, monkeypatch, capsys, columns, done):
+    monkeypatch.setattr(logging.shutil, "get_terminal_size", lambda **kwargs: os.terminal_size((columns, 24)))
+    logger = logging.LiveLog(tmp_path / "run.txt", "upscale_tool", live=True)
+    status = f"[INFERENCE] {logging.progress_bar(done, 123451)} {done}/123451 frames (48.6%); 1.50 frames/s; ETA=42301s"
+    logger.status(status)
+    rendered = capsys.readouterr().out.removeprefix("\r")
+    assert len(rendered) < columns
+    assert "\n" not in rendered and "..." not in rendered
+    assert re.search(rf"\[[#?\-]+\] {done}/123451\b", rendered)
+    if columns >= 40:
+        assert f"{done}/123451 frames" in rendered
+    if 0 < done < 123451:
+        assert "#" in rendered and "-" in rendered
+    logger.finish_status()
+    assert status in logger.path.read_text(encoding="utf-8")
 
 
 def test_child_filter_hides_per_image_logs_but_keeps_errors(tmp_path):

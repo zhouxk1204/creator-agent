@@ -38,13 +38,32 @@ def _clear_status() -> None:
         _STATUS_WIDTH = 0
 
 
+def _fit_status(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    match = re.search(r"\[INFERENCE\] \[[#?\- ]+\] (\d+)/(\d+) frames", text)
+    if match:
+        # Drop optional timing details and wrapper labels before the frame count.
+        for compact in (text[: match.end()], match[0]):
+            if len(compact) <= width:
+                return compact
+        label = "[INFERENCE] "
+        count = f"{match[1]}/{match[2]} frames"
+        bar_width = width - len(label) - len(count) - 3
+        if bar_width < 1:
+            label = ""
+            count = f"{match[1]}/{match[2]}"
+            bar_width = width - len(count) - 3
+        if bar_width >= 1:
+            return f"{label}{progress_bar(int(match[1]), int(match[2]), bar_width)} {count}"
+    return text[: width - 3] + "..."
+
+
 def _redraw_status() -> None:
     global _STATUS_WIDTH
     if _STATUS_OWNER is not None and _STATUS_OWNER.live:
         columns = max(20, shutil.get_terminal_size(fallback=(120, 24)).columns)
-        rendered = _STATUS_TEXT
-        if len(rendered) >= columns:
-            rendered = rendered[: columns - 4] + "..."
+        rendered = _fit_status(_STATUS_TEXT, columns - 1)
         print("\r" + rendered, end="", flush=True)
         _STATUS_WIDTH = len(rendered)
 
