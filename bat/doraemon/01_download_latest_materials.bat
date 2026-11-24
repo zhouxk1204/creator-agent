@@ -5,7 +5,7 @@ REM Video stages enabled by default; set to 0 for materials-only mode.
 set "DOWNLOAD_VIDEO=1"
 REM Upscale (3/3) is OFF for now: split clips are kept for checking the ends.
 REM Set back to 1 to run Real-ESRGAN again (0 = download + split only).
-set "UPSCALE_VIDEO=0"
+set "UPSCALE_VIDEO=1"
 REM Splitting (2/3) locates each story end with the reference card stills
 REM assets\end1.jpg / end2.jpg first (prints the similarity and cuts on the
 REM matched frame), and only falls back to black frames; --no-end-ref disables it.
