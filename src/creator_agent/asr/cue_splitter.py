@@ -7,9 +7,11 @@ several sentences (or several speakers' lines), these break it into cues of
 at most ``max_chars`` / ``max_sec``, splitting at sentence punctuation first.
 
 Proportional-fallback pause boundaries (no aligner words) are snapped to a
-nearby punctuation edge — or dropped when none is close — so a pause cut can
-never land inside a word (``_snap_offsets_to_breaks``). Finished cues are
-stripped of leading punctuation/whitespace (``_strip_cue_head``).
+nearby punctuation edge — or nudged off small kana when none is close — so a
+pause cut never lands inside a word. ``merge_fragments_and_fix_duration``
+then folds the 1-2 char fragments that survive and stretches flash cues.
+Finished cues are stripped of leading punctuation/whitespace
+(``_strip_cue_head``).
 """
 
 from __future__ import annotations
@@ -138,6 +140,90 @@ def split_cues(
     return cues
 
 
+def merge_fragments_and_fix_duration(
+    cues: list[dict],
+    max_chars: int = 30,
+    min_sec: float = 0.4,
+    max_gap_merge_sec: float = 1.5,
+) -> list[dict]:
+    """Post-process split_cues() output into readable cues.
+
+    1. A 1-2 char cue is almost always a word fragment the aligner cut in the
+       middle ("お義姉|さん", "し|た"), not a real line: fold it into the
+       previous cue when that cue is still short enough. Fragments left at the
+       head (no previous cue) are folded into the next one instead.
+    2. A cue shorter than ``min_sec`` (0.05-0.3s flashes produced by degenerate
+       word times) gets its end stretched into the following silence — never
+       past the next cue — so it is physically readable. Text is untouched.
+
+    Deliberately no text rewriting: only boundaries and fragment joins, so the
+    review json still maps cue text to one ASR chunk.
+    """
+    if not cues:
+        return []
+    out: list[dict] = []
+    for cue in cues:
+        c = dict(cue)  # keep extra keys (diag/speaker) of the surviving piece
+        c["start"], c["end"], c["text"] = float(cue["start"]), float(cue["end"]), str(cue["text"])
+        t = c["text"]
+        if out and len(t) <= 2 and len(out[-1]["text"]) + len(t) <= max_chars + 8:
+            prev = out[-1]
+            # A complete line ends a sentence; the next 2-char cue is then a
+            # different utterance (「未来ラジオ!」+「ああ」), not a fragment.
+            if prev["text"][-1] not in _SENT_END and c["start"] - prev["end"] <= max_gap_merge_sec:
+                prev["text"] += t
+                prev["end"] = max(prev["end"], c["end"])
+                if isinstance(prev.get("diag"), dict):
+                    prev["diag"]["fragment_merged"] = int(prev["diag"].get("fragment_merged", 0)) + 1
+                continue
+        out.append(c)
+    # Head fragments (nothing before them) merge forward.
+    if len(out) >= 2 and len(out[0]["text"]) <= 2 and out[0]["end"] - out[0]["start"] < min_sec:
+        out[1]["text"] = out[0]["text"] + out[1]["text"]
+        out[1]["start"] = out[0]["start"]
+        out.pop(0)
+
+    for i, c in enumerate(out):
+        if c["end"] - c["start"] >= min_sec:
+            continue
+        limit = out[i + 1]["start"] if i + 1 < len(out) else c["start"] + min_sec
+        new_end = min(c["start"] + min_sec, max(c["start"] + 0.05, limit - 0.02))
+        c["end"] = max(c["end"], new_end)
+    prev_end = 0.0
+    for c in out:
+        c["start"] = round(max(c["start"], prev_end), 3)
+        c["end"] = round(max(c["end"], c["start"] + 0.05), 3)
+        prev_end = c["end"]
+    return out
+
+
+def dedupe_cue_boundaries(cues: list[dict], max_overlap: int = 6, max_gap: float = 0.3) -> tuple[list[dict], int]:
+    """Trim a word repeated on both sides of a cue boundary.
+
+    Adjacent ASR chunks overlap by ~0.2s (and the aligner window is padded),
+    so the same word often ends chunk N and starts chunk N+1 — the subtitle
+    then reads 「…久しぶりにふた」/「ふたりで映画でも…」. When the cues are
+    contiguous (gap ≤ ``max_gap``) and prev's tail equals cur's head (2 chars
+    up to ``max_overlap``), the tail is trimmed. Only the text is touched,
+    never the times, and only at the boundary between two cues.
+    """
+    out = [dict(c) for c in cues]
+    fixed = 0
+    for i in range(1, len(out)):
+        prev, cur = out[i - 1], out[i]
+        if cur["start"] - prev["end"] > max_gap:
+            continue
+        limit = min(max_overlap, len(prev["text"]) - 1, len(cur["text"]) - 1)
+        for n in range(limit, 1, -1):
+            if prev["text"][-n:] == cur["text"][:n]:
+                prev["text"] = prev["text"][:-n]
+                if isinstance(prev.get("diag"), dict):
+                    prev["diag"]["boundary_dup_trimmed"] = n
+                fixed += 1
+                break
+    return out, fixed
+
+
 def resolve_overlaps(segments: list[dict], min_dur: float = 0.05) -> list[dict]:
     """De-overlap cue time ranges ACROSS chunks; returns cues sorted by time.
 
@@ -145,16 +231,32 @@ def resolve_overlaps(segments: list[dict], min_dur: float = 0.05) -> list[dict]:
     cue edges may fall outside their chunk (the aligner sees a window padded
     beyond the chunk), so the last cue of chunk N can overlap the first cue
     of chunk N+1 — diarized simultaneous speech does the same. Walk the cues
-    in time order and split each overlap at its midpoint, keeping every cue
-    at least ``min_dur`` long; when two cues are too short to share, the
-    later one starts where the previous ends (any new collision that creates
-    is resolved by the next loop iteration).
+    in time order: a cue fully contained in the previous one (with much less
+    text, e.g. the repeated tail word at a chunk boundary) is dropped, other
+    overlaps are split at their midpoint, keeping every cue at least ``min_dur``
+    long; when two cues are too short to share, the later one starts where the
+    previous ends (any new collision is resolved by the next iteration).
     """
     segs = sorted(segments, key=lambda s: (s["start"], s["end"]))
-    for i in range(1, len(segs)):
+    i = 1
+    while i < len(segs):
         prev, cur = segs[i - 1], segs[i]
         if prev["end"] <= cur["start"]:
+            i += 1
             continue
+        # cur lies entirely inside prev: almost always the tail words of chunk
+        # N repeated by chunk N+1's opening (「あっち」 inside 「あっちへ行って
+        # なさい…」). Splitting at the midpoint used to shrink the 4.7s cue to
+        # a 0.3s flash and leave the rest of the sentence untimed; keep the
+        # longer cue untouched and drop the duplicate instead.
+        if cur["end"] <= prev["end"]:
+            pdur = prev["end"] - prev["start"]
+            cdur = cur["end"] - cur["start"]
+            if len(cur["text"]) < len(prev["text"]) and cdur < 0.5 * pdur:
+                if isinstance(prev.get("diag"), dict):
+                    prev["diag"]["contained_dup_dropped"] = cur["text"][:12]
+                segs.pop(i)
+                continue
         lo, hi = prev["start"] + min_dur, cur["end"] - min_dur
         if lo < hi:
             boundary = min(max((prev["end"] + cur["start"]) / 2, lo), hi)
@@ -163,6 +265,7 @@ def resolve_overlaps(segments: list[dict], min_dur: float = 0.05) -> list[dict]:
             cur["start"] = prev["end"]
             if cur["end"] < cur["start"] + min_dur:
                 cur["end"] = cur["start"] + min_dur
+        i += 1
     return segs
 
 
@@ -306,7 +409,7 @@ def _make_timeline(
     if words:
         char_word, matched = match_words_to_text(text, words)
         if matched >= max(1, int(0.5 * n)):
-            return _word_timeline(text, words, char_word, pause_sec)
+            return _word_timeline(text, words, char_word, pause_sec, speech)
     if speech:
         st = _speech_timeline(text, start, end, speech, pause_sec)
         if st is not None:
@@ -315,7 +418,11 @@ def _make_timeline(
 
 
 def _word_timeline(
-    text: str, words: Sequence[Word], char_word: list[int | None], pause_sec: float
+    text: str,
+    words: Sequence[Word],
+    char_word: list[int | None],
+    pause_sec: float,
+    speech: Sequence[tuple[float, float]] | None = None,
 ) -> tuple[Callable[[float], float], Callable[[float], float], bool, list[int]]:
     """Word-timestamp timeline: cue edges take the real word edges."""
     n = len(text)
@@ -344,31 +451,65 @@ def _word_timeline(
     # Hard cue boundaries: silence >= pause_sec between consecutive matched
     # words. The offset is the first char of the later word, so punctuation
     # the aligner dropped stays attached to the left piece.
+    #
+    # A word gap is only trusted when the audio agrees: degenerate aligner
+    # times (zero-length words like 「し」0.00s then 「た」+0.7s) invent gaps
+    # that are actually continuous speech, and cutting there splits a word
+    # ("し|たからね" -> a 0.3s flash cue). ``speech`` (VAD intervals) vetoes
+    # any gap that still contains detected speech.
     pauses: list[int] = []
     seq = list(dict.fromkeys(covered))  # matched word indices, in order
     for a, b in zip(seq, seq[1:]):
-        if float(words[b][1]) - float(words[a][2]) >= pause_sec:
-            pauses.append(char_word.index(b))
+        gap_lo, gap_hi = float(words[a][2]), float(words[b][1])
+        if gap_hi - gap_lo < pause_sec:
+            continue
+        if speech and _speech_within(gap_lo, gap_hi, speech):
+            continue
+        pauses.append(char_word.index(b))
 
     return start_at, end_at, True, pauses
 
 
-def _snap_offsets_to_breaks(
-    text: str, offsets: Sequence[int], window: int
-) -> tuple[list[int], list[dict]]:
-    """Snap each estimated pause offset to a punctuation-safe cut position.
+def _speech_within(lo: float, hi: float, speech: Sequence[tuple[float, float]], min_cov: float = 0.15) -> bool:
+    """True when ``speech`` covers more than ``min_cov`` seconds inside [lo, hi]."""
+    return any(min(hi, e) - max(lo, s) > min_cov for s, e in speech)
 
-    A cut at ``p`` splits ``text`` so the right piece starts at ``text[p]``; it
-    is SAFE only when ``text[p-1]`` is a break char (punctuation stays on the
-    left, and punctuation never occurs inside a word). For every estimated
-    offset ``est`` we search ``[est-window, est+window]`` for safe positions and
-    pick the best by (distance to est, sentence-end preferred, position). If
-    none is safe within the window the pause is DROPPED — conservative: the
-    text stays merged rather than cutting a word in half.
 
-    Returns ``(snapped_offsets, records)`` where each record is
-    ``{"raw", "snapped", "action", "punct", "distance"}`` for reporting
-    (``snapped``/``punct``/``distance`` are None when ``action == "drop"``).
+_SMALL_KANA = "ぁぃぅぇぉゃゅょゎァィゥェォャュョヮっッ"  # never start/end a cue on these
+
+
+def _nudge_cut(text: str, cut: int) -> int:
+    """Move an estimated cut off a mid-word position that no punctuation
+    marks: never put a small kana / long-vowel mark alone on either side."""
+    n = len(text)
+    p = max(1, min(cut, n - 1))
+    for _ in range(2):
+        if p < n - 1 and (text[p] in _SMALL_KANA or text[p] == "ー"):
+            p += 1
+        elif p > 1 and (text[p - 1] in _SMALL_KANA or text[p - 1] == "ー"):
+            p -= 1
+        else:
+            break
+    return max(1, min(p, n - 1))
+
+
+def _snap_offsets_to_breaks(text: str, offsets: Sequence[int], window: int) -> tuple[list[int], list[dict]]:
+    """Snap each estimated pause offset to the best safe cut position.
+
+    A cut at ``p`` splits ``text`` so the right piece starts at ``text[p]``. It
+    is punctuation-safe when ``text[p-1]`` is a break char (punctuation never
+    occurs inside a word). For every estimated offset ``est`` we search
+    ``[est-window, est+window]`` for such positions and pick the best by
+    (distance to est, sentence-end preferred, position).
+
+    When no punctuation is in reach the pause STILL cuts — the pause is real
+    audio information, and merging the two sides would make one cue straddle
+    the silence — but the cut is nudged off small kana / ー so it does not
+    shatter a word's tail (``action="cut"``). The 1-2 char fragments that
+    remain are folded back by ``merge_fragments_and_fix_duration``.
+
+    Returns ``(offsets, records)``; each record is
+    ``{"raw", "snapped", "action", "punct", "distance"}``.
     """
     n = len(text)
     snapped: list[int] = []
@@ -385,15 +526,20 @@ def _snap_offsets_to_breaks(
             if best_key is None or key < best_key:
                 best_key, best = key, p
         if best is None:
-            records.append({"raw": est, "snapped": None, "action": "drop",
-                            "punct": None, "distance": None})
-        else:
+            best = _nudge_cut(text, est)
             snapped.append(best)
-            records.append({
-                "raw": est, "snapped": best,
+            records.append({"raw": est, "snapped": best, "action": "cut", "punct": None, "distance": best - est})
+            continue
+        snapped.append(best)
+        records.append(
+            {
+                "raw": est,
+                "snapped": best,
                 "action": "keep" if best == est else "snap",
-                "punct": text[best - 1], "distance": best - est,
-            })
+                "punct": text[best - 1],
+                "distance": best - est,
+            }
+        )
     return sorted(set(snapped)), records
 
 

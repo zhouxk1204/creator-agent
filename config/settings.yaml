@@ -43,6 +43,9 @@ ja_asr:
   model: C:/models/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf
   # model: C:/models/Qwen3-ASR-1.7B-hf   # 官方原版（回滚用）；C:/models/Qwen3-ASR-0.6B-hf for speed
   sep_model: ""                   # blank -> audio-separator default BS-RoFormer
+  # ASR 上下文/热词（Qwen3-ASR system prompt）：作品名 + 角色名 + 道具名。
+  # 实测：不加时 8s 以上窗口只转第一句就停（11.1s/13.4s 各丢半句），加了之后同一窗口完整转出。
+  context_prompt: "この音声は日本のアニメ「ドラえもん」の日本語音声です。登場人物: のび太、ドラえもん、しずか、ジャイアン、スネ夫、のび太のママ、のび太のパパ、セワシ。固有名詞: ドラえもん、どら焼き、未来ラジオ、ひみつ道具、のび太温泉、タイムふろしき、どこでもドア、タケコプター。"
   device: cuda:0                  # cpu works too (slow); mps on Mac
   language: Japanese
   keep_vocals: false
@@ -68,11 +71,16 @@ ja_asr:
   vad_min_speech_ms: 120
   vad_min_silence_ms: 300
   vad_speech_pad_ms: 150
-  # 分块：目标 3~8s，max_chunk_sec 是硬上限（超出在自然停顿处强拆，无停顿时硬切）
-  chunk_target_min_sec: 3.0
-  chunk_target_max_sec: 8.0
-  max_chunk_sec: 15.0       # ASR chunk 硬上限
+  # 分块：目标 2.5~5s，max_chunk_sec 是硬上限（超出在自然停顿处强拆，无停顿时硬切）。
+  # Qwen3-ASR 对 >8s 窗口会静默丢掉后半句，所以上限压到 6s。
+  chunk_target_min_sec: 2.5
+  chunk_target_max_sec: 5.0
+  max_chunk_sec: 6.0        # ASR chunk 硬上限
+  chunk_merge_gap_sec: 0.6  # 一个 chunk 不跨超过此值的静音（稀疏窗口会让 ASR 跳过远端）
+  snap_quiet_cuts: true     # 硬切点吸附到 ±0.45s 内能量低谷（长连续旁白别切在音节中间）
   asr_max_new_tokens: 1024  # ASR 生成上限（512 对长块有截断风险）
+  asr_max_tokens_per_sec: 12.0  # 每秒音频生成预算，防音乐段空转（曾 5.7s 音频跑 40s 只留 2 字）
+  asr_rescue_min_cps: 2.5   # 字/语音秒低于此值 = 漏转，按语音组重识别；0=关
   # 对齐质量门：窗口两侧 pad（也是词时间允许超出块边界的最大距离）+ 覆盖率下限
   align_pad_sec: 0.3
   align_min_coverage: 0.5

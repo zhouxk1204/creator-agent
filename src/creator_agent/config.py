@@ -50,6 +50,12 @@ class JaAsrSettings(BaseModel):
     # blank = everything intermediate is discarded after the run.
     work_dir: str = ""
     model: str = "Qwen/Qwen3-ASR-1.7B-hf"  # or Qwen/Qwen3-ASR-0.6B-hf for speed
+    # Context/hotword prompt sent as the ASR system message (Qwen3-ASR
+    # `prompt=`): character names, prop names, the work itself. Measured on a
+    # Doraemon recap: without it the model stops after the FIRST sentence of a
+    # >8s window and silently drops the rest; with it the same window is
+    # transcribed in full (13.4s chunk: 14 -> 51 generated tokens).
+    context_prompt: str = ""
     sep_model: str = ""  # audio-separator model filename; blank = default BS-RoFormer
     device: str = "cuda:0"  # "mps" / "cpu" for Mac debugging
     language: str = "Japanese"
@@ -70,6 +76,9 @@ class JaAsrSettings(BaseModel):
     max_cue_chars: int = 24  # split/merge cues to at most this many characters
     max_cue_sec: float = 8.0  # ... and at most this duration
     pause_sec: float = 0.6  # hard cue break at silence gaps of at least this (needs word alignment)
+    # Cue repair (断句收尾): fold 1-2 char word fragments into the neighbouring
+    # cue, and stretch physical flashes below this duration (text untouched).
+    min_cue_sec: float = 0.4
     # VAD (silero) — low min-speech keeps short interjections (「あっ」「えっ」),
     # speech-pad keeps soft onsets from being clipped.
     vad_min_speech_ms: int = 120
@@ -105,12 +114,36 @@ class JaAsrSettings(BaseModel):
     srt_min_display_sec: float = 0.0
     srt_lead_in_sec: float = 0.0
     srt_tail_sec: float = 0.0
-    # Chunking: aim for 3-8s chunks; max_chunk_sec is the HARD cap (oversized
+    # Chunking: aim for ~3-5s chunks; max_chunk_sec is the HARD cap (oversized
     # chunks are force-split at the nearest natural pause, else hard-cut).
-    chunk_target_min_sec: float = 3.0
-    chunk_target_max_sec: float = 8.0
-    max_chunk_sec: float = 15.0
+    # Qwen3-ASR truncates long windows, so keep the cap around 6s: measured on
+    # an 11.1s / 13.4s / 8.2s window the model returned only the first phrase,
+    # while 4-6s windows returned everything.
+    chunk_target_min_sec: float = 2.5
+    chunk_target_max_sec: float = 5.0
+    max_chunk_sec: float = 6.0
+    # A chunk never bridges a silence longer than this, even when the two
+    # sides would still fit the duration budget: sparse windows (music or long
+    # pauses padded by the permissive VAD) make the ASR skip the far side.
+    chunk_merge_gap_sec: float = 0.6
+    # Forced cuts inside long continuous speech are moved to the quietest
+    # nearby frame (syllable gap) instead of landing exactly at target_max,
+    # which used to cut mid-word and garble the boundary text.
+    snap_quiet_cuts: bool = True
     asr_max_new_tokens: int = 1024  # ASR generation cap (512 could truncate long chunks)
+    # Runaway-generation guard: cap generated tokens at ~this many per second
+    # of chunk audio (1024 stays the hard ceiling). Music/noise windows used to
+    # spin for 40s on a 5.7s clip and return 2 characters.
+    asr_max_tokens_per_sec: float = 12.0
+    # Truncation rescue: a chunk whose text is implausibly short for the
+    # speech it contains (chars/sec below this) is re-ASR'd one VAD group at a
+    # time; the group-wise result replaces it when it recognizes more text.
+    # 0 disables the pass.
+    asr_rescue_min_cps: float = 2.5
+    # Drop the ASR model (1.7B, GPU-resident) before the aligner subprocess
+    # starts: on Windows the system commit limit fails first, and a failed
+    # ForcedAligner load degrades EVERY chunk to proportional cue timing.
+    free_asr_before_align: bool = True
     # Alignment quality gate: window padding per side (also the max distance a
     # word may spill outside its chunk) and the word-coverage floor.
     align_pad_sec: float = 0.3

@@ -9,7 +9,7 @@ silence.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 
 def speech_coverage(start: float, end: float, intervals: Sequence[tuple[float, float]]) -> float:
@@ -165,11 +165,13 @@ REASON_SPLIT_HARD = "forced_split_hard"  # single >hard_max interval cut mid-spe
 def build_chunks(
     intervals: list[tuple[float, float]],
     merge_gap: float = 0.3,
-    target_min: float = 3.0,
-    target_max: float = 8.0,
-    hard_max: float = 15.0,
+    target_min: float = 2.5,
+    target_max: float = 5.0,
+    hard_max: float = 6.0,
     pad: float = 0.1,
     duration: float | None = None,
+    max_internal_gap: float | None = 0.6,
+    cut_snap: Callable[[float, float, float], float] | None = None,
 ) -> list[dict]:
     """Merge VAD speech intervals into ASR chunks of ~target_min..target_max
     seconds, never exceeding ``hard_max``.
@@ -177,11 +179,19 @@ def build_chunks(
     - Intervals separated by <= ``merge_gap`` merge into utterance *groups*
       (short breaths inside one line).
     - Consecutive groups pack into one chunk while the span stays within
-      ``target_max``; an undersized chunk (< ``target_min``) may stretch past
-      ``target_max`` up to ``hard_max`` to reach a reasonable length.
+      ``target_max`` AND the silence between them stays <= ``max_internal_gap``
+      (``None`` disables the gap limit = old behavior). A chunk bridging a long
+      pause is *sparse*: the ASR model transcribes the near side and silently
+      drops the far side (measured: an 11.1s window with a 3s interior silence
+      returned only its first phrase).
+    - An undersized chunk (< ``target_min``) may stretch past ``target_max`` up
+      to ``hard_max`` to reach a reasonable length.
     - A single group longer than ``hard_max`` is force-split at the internal
       pause closest to ``target_max`` (recursively); a single *interval*
       longer than ``hard_max`` has no pause to split at and is hard-cut.
+      ``cut_snap(desired, start, end)`` may move that hard cut to a nearby
+      quiet point (the worker passes an energy-minimum snapper), so long
+      narration is cut between syllables instead of mid-word.
 
     Returns ``[{"start", "end", "reason", "segments"}, ...]`` — ``segments``
     is the number of source VAD intervals in the chunk (for logging).
@@ -202,7 +212,7 @@ def build_chunks(
     # 2. Force-split oversized groups -> pieces tagged with a split reason.
     pieces: list[tuple[list[tuple[float, float]], str | None]] = []
     for g in groups:
-        pieces.extend(_split_group(g, target_max, hard_max))
+        pieces.extend(_split_group(g, target_max, hard_max, cut_snap))
 
     def span(ints: list[tuple[float, float]]) -> float:
         return ints[-1][1] - ints[0][0]
@@ -230,8 +240,12 @@ def build_chunks(
         cur, cur_reasons, cur_groups = [], set(), 0
 
     for ints, split_reason in pieces:
-        if cur and span(cur + ints) > target_max and (span(cur) >= target_min or span(cur + ints) > hard_max):
-            flush()
+        if cur:
+            gap = ints[0][0] - cur[-1][1]
+            too_long = span(cur + ints) > target_max and (span(cur) >= target_min or span(cur + ints) > hard_max)
+            too_big_gap = max_internal_gap is not None and gap > max_internal_gap + 1e-9
+            if too_long or too_big_gap:
+                flush()
         cur += ints
         cur_groups += 1
         if split_reason:
@@ -239,6 +253,12 @@ def build_chunks(
     flush()
 
     # 4. Pad + clamp, like merge_speech_intervals.
+    # Deliberately unconditional: the ~0.2s overlap between neighbouring
+    # chunks gives the ASR its missing onset/offset context. Padding only into
+    # silence was tried (base10) and made boundary recognition worse
+    # ("おちんぽ!"/"帰ろう!" for 「話せばわかる!」/「かかえろ。」) while the
+    # duplicated syllable it was meant to fix is handled by
+    # cue_splitter.dedupe_cue_boundaries instead.
     out: list[dict] = []
     for c in chunks:
         s = max(0.0, c["start"] - pad)
@@ -251,7 +271,10 @@ def build_chunks(
 
 
 def _split_group(
-    group: list[tuple[float, float]], target_max: float, hard_max: float
+    group: list[tuple[float, float]],
+    target_max: float,
+    hard_max: float,
+    cut_snap: Callable[[float, float, float], float] | None = None,
 ) -> list[tuple[list[tuple[float, float]], str | None]]:
     """Split one utterance group so every piece is <= ``hard_max``; pieces
     produced by splitting carry their split reason."""
@@ -263,12 +286,20 @@ def _split_group(
         # One continuous speech interval with no internal pause: hard-cut at
         # target_max and recurse on the remainder.
         (s, e) = group[0]
-        cut = s + target_max
+        desired = s + target_max
+        cut = desired
+        if cut_snap is not None:
+            try:
+                cut = float(cut_snap(desired, s, e))
+            except Exception:
+                cut = desired
+        # Never let the snapper break the budget or produce an empty piece.
+        cut = min(max(cut, s + 1.0), e - 1.0)
         left = [(s, cut)]
         right = [(cut, e)]
         return [(left, REASON_SPLIT_HARD)] + [
             (piece, REASON_SPLIT_HARD if reason is None else reason)
-            for piece, reason in _split_group(right, target_max, hard_max)
+            for piece, reason in _split_group(right, target_max, hard_max, cut_snap)
         ]
 
     # Split at the internal pause whose midpoint is closest to start+target_max.
@@ -279,8 +310,8 @@ def _split_group(
     left, right = group[: cut_at + 1], group[cut_at + 1 :]
     return [
         (piece, REASON_SPLIT_NATURAL if reason is None else reason)
-        for piece, reason in _split_group(left, target_max, hard_max)
+        for piece, reason in _split_group(left, target_max, hard_max, cut_snap)
     ] + [
         (piece, REASON_SPLIT_NATURAL if reason is None else reason)
-        for piece, reason in _split_group(right, target_max, hard_max)
+        for piece, reason in _split_group(right, target_max, hard_max, cut_snap)
     ]

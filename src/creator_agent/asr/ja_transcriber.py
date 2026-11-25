@@ -332,11 +332,22 @@ class JaTranscriber:
                 str(s.chunk_target_max_sec),
                 "--max-new-tokens",
                 str(s.asr_max_new_tokens),
+                "--max-tokens-per-sec",
+                str(s.asr_max_tokens_per_sec),
+                "--rescue-min-cps",
+                str(s.asr_rescue_min_cps),
+                "--chunk-merge-gap",
+                str(s.chunk_merge_gap_sec),
                 "--align-pad",
                 str(s.align_pad_sec),
                 "--align-min-coverage",
                 str(s.align_min_coverage),
             ]
+            if s.context_prompt:
+                cmd += ["--context-prompt", s.context_prompt]
+            cmd.append("--free-asr-before-align" if s.free_asr_before_align else "--no-free-asr-before-align")
+            cmd += ["--min-cue-sec", str(s.min_cue_sec)]
+            cmd.append("--snap-quiet-cuts" if s.snap_quiet_cuts else "--no-snap-quiet-cuts")
             if s.verbose:
                 cmd.append("--verbose")
             if s.recover_missed:

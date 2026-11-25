@@ -99,7 +99,13 @@ _SHORT_SEG_SEC = 0.5  # VAD segments below this are counted as "short" in the su
 # live in creator_agent, which is not installed here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from align_check import INVALID_TIMING, NO_WORDS, AlignCheck, check_alignment, repair_word_timing  # noqa: E402
-from cue_splitter import cut_repeat_tail, resolve_overlaps, split_cues  # noqa: E402
+from cue_splitter import (  # noqa: E402
+    cut_repeat_tail,
+    dedupe_cue_boundaries,
+    merge_fragments_and_fix_duration,
+    resolve_overlaps,
+    split_cues,
+)
 from speaker_turns import build_speaker_chunks, smooth_labels, speaker_names  # noqa: E402
 from timing_audit import audit_chunk, save_checkpoint  # noqa: E402
 from vad_chunker import build_chunks, merge_close, speech_coverage, subtract_intervals, uncovered_ranges  # noqa: E402
@@ -306,6 +312,11 @@ _TIGHT_THRESHOLD = 0.5
 # Cues whose tight-VAD speech coverage falls below this are dropped as
 # hallucinated / misaligned (logged, counted in the summary).
 _MIN_CUE_SPEECH_COV = 0.3
+# A cue denser than this (chars per second) cannot be read; word timing that
+# produces one is rejected for the whole chunk (speech-aware re-split instead).
+# 12 chars/s is above any real reading speed but far below the aligner's
+# degenerate 26-chars-in-0.29s outputs.
+_MAX_CUE_CPS = 12.0
 
 
 def _diarize(
@@ -364,14 +375,107 @@ def _diarize(
     return [0 if lab is None else lab for lab in labels]
 
 
-def _transcribe_chunk(processor, model, chunk_wav: Path, language: str, max_new_tokens: int) -> str:
-    inputs = processor.apply_transcription_request(
-        audio=str(chunk_wav),
-        language=language,
-    ).to(model.device, model.dtype)
+def _transcribe_chunk(
+    processor,
+    model,
+    chunk_wav: Path,
+    language: str,
+    max_new_tokens: int,
+    context_prompt: str = "",
+) -> str:
+    """Transcribe one window.
+
+    ``context_prompt`` goes in as the Qwen3-ASR system prompt (hotwords /
+    domain context). It is not cosmetic: without it the model stops after the
+    first sentence of a window longer than ~7s and drops the remainder
+    (measured 13.4s window: 14 vs 51 generated tokens with the prompt).
+    """
+    kwargs = {"audio": str(chunk_wav), "language": language}
+    if context_prompt:
+        kwargs["prompt"] = context_prompt
+    inputs = processor.apply_transcription_request(**kwargs).to(model.device, model.dtype)
     output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     generated = output_ids[:, inputs["input_ids"].shape[1] :]
     return processor.decode(generated, return_format="transcription_only")[0]
+
+
+def _char_budget(end: float, start: float, args) -> int:
+    """Generation cap for a window: ~``asr_max_tokens_per_sec`` tokens per
+    audio second, never below 48, never above ``asr_max_new_tokens``.
+
+    Guards runaway generation: on music/noise the model used to emit hundreds
+    of junk tokens (40s wall time on a 5.7s clip, 2 characters kept). Real
+    Japanese speech needs far fewer tokens than this budget allows.
+    """
+    per_sec = float(getattr(args, "max_tokens_per_sec", 0) or 0)
+    hard = int(getattr(args, "max_new_tokens", 1024) or 1024)
+    if per_sec <= 0:
+        return hard
+    budget = max(48, int(round((float(end) - float(start)) * per_sec)))
+    return min(hard, budget)
+
+
+def _quiet_cut_snapper(vocals_path: Path, half_window: float = 0.45):
+    """Build ``cut_snap(desired, start, end)`` for forced mid-speech cuts.
+
+    Long continuous narration has no pause to split at, so the chunker used to
+    cut exactly at ``start + target_max`` — frequently mid-word ("パパに襲い|
+    かかろ" -> "どそいかかえろ"). Moving the cut to the quietest 20ms frame
+    within ±``half_window`` lands between syllables instead. A cut is only
+    moved when a real dip exists (>=30% below the window median energy),
+    otherwise the nominal position is kept.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    data, sr = sf.read(str(vocals_path), dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    frame = max(1, int(sr * 0.02))
+    n = len(data) // frame
+    if n < 8:
+        return None
+    rms = np.sqrt((data[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
+    smooth = np.convolve(rms, np.ones(3) / 3, mode="same")
+    times = (np.arange(n) + 0.5) * frame / sr
+
+    def snap(desired: float, start: float, end: float) -> float:
+        lo = max(start + 0.6, desired - half_window)
+        hi = min(end - 0.6, desired + half_window)
+        if hi <= lo:
+            return desired
+        a = int(max(0, np.searchsorted(times, lo)))
+        b = int(min(n, np.searchsorted(times, hi) + 1))
+        if b <= a:
+            return desired
+        window = smooth[a:b]
+        best = a + int(np.argmin(window))
+        if float(window.min()) > 0.7 * float(np.median(window)):
+            return desired
+        return float(times[best])
+
+    return snap
+
+
+def _free_cuda_cache() -> None:
+    """Release the ASR model's CUDA/commit footprint before the aligner starts.
+
+    The aligner is a SECOND model in a SECOND process. On Windows the system
+    commit limit (page file) is what runs out first: with the ASR model still
+    resident, ForcedAligner's ``from_pretrained`` dies in ``safe_open`` with
+    os error 1455 "page file too small" and EVERY chunk silently degrades to
+    proportional timing.
+    """
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _align_stream(
@@ -451,7 +555,9 @@ def _align_stream(
     env["PYTHONIOENCODING"] = "utf-8"
     _progress(vid, f"词级对齐：启动独立环境对齐器（{len(jobs)} 块，模型加载约半分钟）…")
     results: dict[int, dict] = {}
-    try:
+
+    def _run_once() -> dict[int, dict]:
+        out: dict[int, dict] = {}
         # stdout carries one ===ALIGN_CHUNK=== line per finished chunk (read
         # here, in order); stderr progress is forwarded live on a thread.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -472,7 +578,7 @@ def _align_stream(
                 continue
             try:
                 rec = json.loads(line[len(_CHUNK_MARKER) :])
-                results[int(rec["chunk_id"])] = rec
+                out[int(rec["chunk_id"])] = rec
                 entry = audit_chunk(audit, int(rec["chunk_id"]))
                 if entry is not None:
                     entry["raw_alignment"] = copy.deepcopy(rec)
@@ -482,7 +588,26 @@ def _align_stream(
         rc = proc.wait()
         t.join()
         if rc != 0:
-            _warn(f"aligner subprocess exited {rc}; {len(asr_chunks) - len(results)} chunk(s) missing -> proportional")
+            _warn(f"aligner subprocess exited {rc}; {len(jobs) - len(out)} chunk(s) missing -> proportional")
+        return out
+
+    try:
+        results = _run_once()
+        # A whole-batch "model load" failure means the aligner never started:
+        # typically Windows system commit (page file) ran out. Free caches and
+        # try once more before degrading every chunk to proportional timing.
+        load_failures = [r for r in results.values() if str(r.get("error") or "").startswith("model load")]
+        if results and len(load_failures) == len(results):
+            _warn("aligner model load failed for all chunks; freeing caches and retrying once")
+            _free_cuda_cache()
+            time.sleep(5)
+            results = _run_once()
+            load_failures = [r for r in results.values() if str(r.get("error") or "").startswith("model load")]
+        if results and len(load_failures) == len(results):
+            msg = load_failures[0].get("error") if load_failures else "unknown"
+            _warn(f"aligner could not load the model ({msg}); cue timing falls back to proportional")
+            if audit is not None:
+                audit["alignment_error"] = str(msg)
         _progress(vid, f"词级对齐完成：{len(results)}/{len(jobs)} 块返回")
         return results
     except Exception as e:
@@ -530,7 +655,14 @@ def _asr_pass(
         }
         try:
             chunk_wav = _slice_wav(vocals, work / f"chunk_{c['idx']:04d}.wav", c["start"], c["end"])
-            text = _transcribe_chunk(processor, asr_model, chunk_wav, args.language, args.max_new_tokens)
+            text = _transcribe_chunk(
+                processor,
+                asr_model,
+                chunk_wav,
+                args.language,
+                _char_budget(c["end"], c["start"], args),
+                context_prompt=getattr(args, "context_prompt", "") or "",
+            )
         except Exception as e:
             c["asr_status"] = "failed"
             c["asr_error"] = str(e)
@@ -575,10 +707,122 @@ def _asr_pass(
     return asr_chunks
 
 
+def _speech_groups(intervals: list[tuple[float, float]], gap: float = 0.35) -> list[tuple[float, float]]:
+    """Merge speech intervals separated by <= ``gap`` (one utterance)."""
+    out: list[tuple[float, float]] = []
+    for s, e in sorted((float(a), float(b)) for a, b in intervals if b > a):
+        if out and s - out[-1][1] <= gap + 1e-9:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def _rescue_truncated(
+    processor,
+    asr_model,
+    asr_chunks: list[dict],
+    tight: list[tuple[float, float]],
+    args,
+    stats,
+    work: Path,
+    vocals: Path,
+    audit: dict | None = None,
+) -> list[dict]:
+    """Re-ASR a suspiciously under-transcribed chunk, one utterance group at a time.
+
+    Qwen3-ASR can answer a multi-utterance window with just its first phrase
+    (the rest is silently dropped). Detection is rate-based: chars per second
+    of actual speech below ``--asr-rescue-min-cps`` means the text cannot
+    describe what was said. Each speech group inside the chunk is then
+    transcribed in a focused window; the joined result replaces the chunk text
+    only when it is clearly longer (>= 1.2x), so a genuinely sparse/garbled
+    window is left untouched. Timing still comes from the chunk's own
+    alignment window, so no chunk boundaries move.
+    """
+    min_cps = float(getattr(args, "rescue_min_cps", 0.0) or 0.0)
+    if min_cps <= 0 or not asr_chunks:
+        return asr_chunks
+    for c in asr_chunks:
+        text = "".join(str(c.get("text") or "").split())
+        spans = [(s, e) for s, e in tight if e > c["start"] and s < c["end"]]
+        speech_dur = sum(min(e, c["end"]) - max(s, c["start"]) for s, e in spans)
+        cps = len(text) / max(speech_dur, 0.5)
+        cid = f"CHUNK {c['idx'] + 1:03d}"
+        if cps >= min_cps:
+            continue
+        groups = _speech_groups([(max(s, c["start"]), min(e, c["end"])) for s, e in spans])
+        if len(groups) < 2:
+            # One continuous utterance covering the whole window: still
+            # re-check in ~2.5s slices. Measured case: a 4.55s window came back
+            # as 2 characters ("わら") while its halves produce 20+ ("わからん
+            # っ!わからんっ!わからんっ!"), i.e. the model answered with noise
+            # on the full window only.
+            lo = min((s for s, _ in groups), default=c["start"])
+            hi = max((e for _, e in groups), default=c["end"])
+            if hi - lo < 2.5:
+                _chunk_log(cid, "RESCUE", f"skip cps={cps:.1f} speech={speech_dur:.1f}s groups=1 (too short)")
+                continue
+            n = max(2, int(round((hi - lo) / 2.5)))
+            step = (hi - lo) / n
+            groups = [(lo + i * step, lo + (i + 1) * step) for i in range(n)]
+        stats["asr_rescue_tried"] += 1
+        parts: list[str] = []
+        for gi, (s, e) in enumerate(groups):
+            try:
+                wav = _slice_wav(
+                    vocals,
+                    work / f"rescue_{c['idx']:04d}_{gi:02d}.wav",
+                    max(0.0, s - 0.15),
+                    min(float(c["end"]), e + 0.15),
+                )
+                piece = _transcribe_chunk(
+                    processor,
+                    asr_model,
+                    wav,
+                    args.language,
+                    _char_budget(e + 0.15, max(0.0, s - 0.15), args),
+                    context_prompt=getattr(args, "context_prompt", "") or "",
+                )
+            except Exception as ex:  # rescue is best-effort, never fatal
+                _chunk_log(cid, "RESCUE", f"group {gi + 1}/{len(groups)} FAIL {ex}")
+                continue
+            piece = "".join(str(piece).split())
+            if piece:
+                parts.append(piece)
+                _chunk_log(cid, "RESCUE", f'group {gi + 1}/{len(groups)} {s:.2f}-{e:.2f} "{piece[:40]}"')
+        joined = cut_repeat_tail("".join(parts))
+        if parts and len(joined) >= 1.2 * max(1, len(text)):
+            c["rescue_before"] = text
+            c["text"] = joined
+            c["alignment_text"] = joined
+            c["rescued"] = len(groups)
+            stats["asr_rescued"] += 1
+            _chunk_log(cid, "RESCUE", f"ACCEPT cps={cps:.1f} -> {len(joined)} chars {joined[:40]}")
+        else:
+            _chunk_log(cid, "RESCUE", f"keep original cps={cps:.1f} joined={len(joined)} chars")
+        if audit is not None:
+            entry = audit_chunk(audit, c["idx"])
+            entry["rescue"] = {
+                "cps_before": round(cps, 2),
+                "speech_sec": round(speech_dur, 2),
+                "groups": len(groups),
+                "joined": joined,
+                "accepted": bool(c.get("rescued")),
+            }
+            save_checkpoint(audit, "ASR_PARTIAL")
+    return asr_chunks
+
+
 def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
     import soundfile as sf
 
     separator, vad_model, processor, asr_model, sv_pipeline = models
+    if asr_model is None:
+        # Freed before a previous video's alignment pass (--free-asr-before-align).
+        _progress(job["video_id"], "重新加载 ASR 模型（上一轮对齐前释放过显存）…")
+        processor, asr_model = _load_asr(args.model, args.device)
+        models[2:4] = [processor, asr_model]
     audio_path = Path(job["audio_path"])
     duration = float(sf.info(str(audio_path)).duration)
 
@@ -678,6 +922,14 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 _warn(f"diarization failed, falling back to plain chunks: {e}")
                 chunks = []
         if not chunks:
+            # Forced cuts inside long continuous speech land on the quietest
+            # nearby frame (syllable gap) instead of exactly at target_max.
+            cut_snap = None
+            if getattr(args, "snap_quiet_cuts", True):
+                try:
+                    cut_snap = _quiet_cut_snapper(vocals)
+                except Exception as e:
+                    _warn(f"quiet-cut snapping disabled ({e})")
             chunks = build_chunks(
                 intervals,
                 target_min=args.chunk_target_min,
@@ -685,6 +937,10 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 hard_max=args.max_chunk,
                 pad=0.1,
                 duration=duration,
+                max_internal_gap=(
+                    getattr(args, "chunk_merge_gap", None) if (getattr(args, "chunk_merge_gap", 0) or 0) > 0 else None
+                ),
+                cut_snap=cut_snap,
             )
         for i, c in enumerate(chunks):
             c["idx"] = i
@@ -711,6 +967,12 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         asr_chunks = _asr_pass(
             processor, asr_model, chunks, args, stats, work, vocals, tight, total=len(chunks), audit=audit
         )
+
+        # Phase 1.2 (optional rescue pass): a chunk whose text is far too short
+        # for the speech it contains was probably answered with only its first
+        # phrase. Re-ASR it utterance-group by utterance-group; the timing stays
+        # the chunk's own (no boundary moves), only the text improves.
+        asr_chunks = _rescue_truncated(processor, asr_model, asr_chunks, tight, args, stats, work, vocals, audit=audit)
 
         # Phase 1.5 (optional recovery pass): speech that NO successful ASR
         # chunk covers (the permissive VAD missed it, or its chunk came back
@@ -769,6 +1031,15 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # Phase 2+3, pipelined per chunk: align (one subprocess, results
         # streamed per chunk) -> quality gate -> cue split. Rejected
         # alignments fall back to proportional cue times with a logged reason.
+        if align_on and getattr(args, "free_asr_before_align", True):
+            # The aligner is a second model in its own process; on Windows the
+            # commit limit is what fails first (os error 1455 at model load ->
+            # EVERY chunk degrades to proportional timing). Drop the ASR model
+            # (reloaded on demand for a later video) before launching it.
+            models[3] = None
+            asr_model = None
+            processor = None
+            _free_cuda_cache()
         align_results = (
             _align_stream(args, work, asr_chunks, vid, vocals, min(duration, vocal_info.duration), audit=audit)
             if align_on
@@ -829,6 +1100,7 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
             # weak speech is invisible to the tight pass, so auditing them
             # against tight would drop them as hallucination.
             cov_intervals = recovery if c["reason"] == "recovered" else tight
+            cue_speech = [(s, e) for s, e in cov_intervals if e > c["start"] and s < c["end"]]
             cues = split_cues(
                 c["text"],
                 c["start"],
@@ -840,8 +1112,46 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
                 # Speech-aware fallback: when word alignment is rejected, cues
                 # are spread over the speech intervals only (never over
                 # silence), with hard breaks at inter-utterance gaps.
-                speech=[(s, e) for s, e in cov_intervals if e > c["start"] and s < c["end"]],
+                speech=cue_speech,
             )
+            # Word timing can pass the gate and still be unusable: the aligner
+            # sometimes squeezes a whole chunk's text into a fraction of a
+            # second (26 chars inside 0.29s -> a physically unreadable cue).
+            # Re-split the chunk on the speech-aware proportional timeline
+            # instead of shipping that.
+            too_dense = [
+                cue
+                for cue in cues
+                if _MAX_CUE_CPS > 0
+                and cue["end"] - cue["start"] > 0
+                and len(cue["text"]) / (cue["end"] - cue["start"]) > _MAX_CUE_CPS
+            ]
+            if words is not None and too_dense:
+                stats["align_ok"] -= 1
+                stats["align_fallback_CUE_CPS"] += 1
+                _chunk_log(
+                    cid,
+                    "CUE",
+                    f"REJECT word timing: {len(too_dense)} cue(s) above {_MAX_CUE_CPS} chars/s "
+                    f'(e.g. "{too_dense[0]["text"][:12]}" in {too_dense[0]["end"] - too_dense[0]["start"]:.2f}s)',
+                )
+                words = None
+                entry["alignment_gate"] = {
+                    "ok": False,
+                    "reason": "CUE_CPS",
+                    "coverage": None,
+                    "detail": f"{len(too_dense)} cue(s) denser than {_MAX_CUE_CPS} chars/s",
+                }
+                cues = split_cues(
+                    c["text"],
+                    c["start"],
+                    c["end"],
+                    words=None,
+                    max_chars=args.max_cue_chars,
+                    max_sec=args.max_cue_sec,
+                    pause_sec=args.pause_sec,
+                    speech=cue_speech,
+                )
             entry["cues_before_filter"] = copy.deepcopy(cues)
             # Drop cues covering (almost) no speech under the baseline VAD pass:
             # hallucinated text on music/silence, or words the aligner locked
@@ -899,6 +1209,19 @@ def _process_one(models, job: dict, args, keep_dir: Path | None) -> dict:
         # above rejects the badly-shifted alignments it used to "repair".
         audit["segments_before_overlap"] = copy.deepcopy(segments)
         segments = resolve_overlaps(segments)
+        # 断句收尾：1-2 字的词碎片并回上一条（"お義姉|さん"、"し|た"），
+        # 并把 0.05~0.3s 的闪光条拉到可读长度（文字不动，只动边界）。
+        before_merge = len(segments)
+        segments = merge_fragments_and_fix_duration(
+            segments,
+            max_chars=args.max_cue_chars,
+            min_sec=getattr(args, "min_cue_sec", 0.4),
+        )
+        stats["cues_merged_fragments"] += before_merge - len(segments)
+        # 相邻 chunk 重叠 0.2s，同一个词常被前后两块各识别一次
+        # （「…久しぶりにふた」/「ふたりで映画でも…」）。跨 cue 边界去重。
+        segments, deduped = dedupe_cue_boundaries(segments)
+        stats["cues_boundary_deduped"] += deduped
         for seg in segments:
             before = seg["diag"]["cue_before_overlap"]
             seg["diag"]["overlap_changed"] = before["start"] != seg["start"] or before["end"] != seg["end"]
@@ -1016,6 +1339,7 @@ def _print_summary(
         f"  empty                 : {stats['asr_empty']}",
         f"  failed                : {stats['asr_failed']}",
         f"  repeat-tail cut       : {stats['asr_repeat_cut']}",
+        f"  rescue tried/accepted : {stats['asr_rescue_tried']}/{stats['asr_rescued']}",
         "Alignment",
         f"  success               : {stats['align_ok']}",
         f"  fallback              : {sum(stats[k] for k in fallback_reasons)}",
@@ -1025,6 +1349,8 @@ def _print_summary(
         "Subtitle",
         f"  cues                  : {stats['cues']}",
         f"  dropped (no speech)   : {stats['cues_dropped_no_speech']}",
+        f"  fragments merged      : {stats['cues_merged_fragments']}",
+        f"  boundary dup trimmed  : {stats['cues_boundary_deduped']}",
     ]
     # Speech the subtitles never covered (ASR dropped it, or its cues were
     # rejected/filtered away). Long ranges here = missing dialogue.
@@ -1061,6 +1387,12 @@ def main() -> int:
     parser.add_argument("--sep-model", default="", help="audio-separator model filename (blank = default)")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--language", default="Japanese")
+    parser.add_argument(
+        "--context-prompt",
+        default="",
+        help="ASR system prompt: work title / character & prop names (hotwords). "
+        "Without it the model truncates windows longer than ~7s.",
+    )
     parser.add_argument("--keep-vocals-dir", default="", help="dir to keep vocals.wav per video (blank = discard)")
     parser.add_argument(
         "--aligner-model", default="", help="Qwen3-ForcedAligner HF id / local path (blank = no word alignment)"
@@ -1115,11 +1447,49 @@ def main() -> int:
         default=0.0,
         help=">0: only cut a repeat tail when chars/speech-second exceeds this (keeps real うんうん); 0 = always cut",
     )
-    # Chunking: aim for 3-8s chunks, never exceed --max-chunk.
-    parser.add_argument("--chunk-target-min", type=float, default=3.0)
-    parser.add_argument("--chunk-target-max", type=float, default=8.0)
-    parser.add_argument("--max-chunk", type=float, default=15.0, help="hard ASR chunk cap in seconds")
+    # Chunking: aim for 2.5-5s chunks, never exceed --max-chunk (6s default:
+    # Qwen3-ASR drops the tail of longer windows).
+    parser.add_argument("--chunk-target-min", type=float, default=2.5)
+    parser.add_argument("--chunk-target-max", type=float, default=5.0)
+    parser.add_argument("--max-chunk", type=float, default=6.0, help="hard ASR chunk cap in seconds")
+    parser.add_argument(
+        "--chunk-merge-gap",
+        type=float,
+        default=0.6,
+        help="a chunk never bridges a silence longer than this (sparse windows truncate ASR); <=0 disables the limit",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=1024, help="ASR generation cap")
+    parser.add_argument(
+        "--max-tokens-per-sec",
+        type=float,
+        default=12.0,
+        help="generation budget per audio second (runaway-generation guard); <=0 = only --max-new-tokens",
+    )
+    parser.add_argument(
+        "--rescue-min-cps",
+        type=float,
+        default=2.5,
+        help="chars/speech-second below which a chunk is re-ASR'd group by group; <=0 disables",
+    )
+    parser.add_argument(
+        "--free-asr-before-align",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="drop the ASR model before the aligner subprocess starts (Windows commit/page-file "
+        "pressure: otherwise ForcedAligner load can fail with os error 1455 for the whole video)",
+    )
+    parser.add_argument(
+        "--min-cue-sec",
+        type=float,
+        default=0.4,
+        help="stretch subtitle cues shorter than this to a readable duration (text untouched)",
+    )
+    parser.add_argument(
+        "--snap-quiet-cuts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="move forced mid-speech chunk cuts to the quietest nearby frame (syllable gap)",
+    )
     # Alignment: window padding and the coverage floor of the quality gate.
     parser.add_argument("--align-pad", type=float, default=0.3, help="alignment window padding per side (s)")
     parser.add_argument("--align-min-coverage", type=float, default=0.5, help="min word coverage to trust alignment")
@@ -1165,7 +1535,7 @@ def main() -> int:
     else:
         _progress("-", "未配置 speaker_model：不做说话人分离")
 
-    models = (*core, sv_pipeline)
+    models = [*core, sv_pipeline]
 
     results: list[dict] = []
     for job_idx, job in enumerate(jobs):

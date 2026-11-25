@@ -200,24 +200,25 @@ def test_stage0_word_internal_split_pushes_suffix_after_word_end(tmp_path):
     assert (cues[1]["start"], cues[1]["end"]) == (2.0, 2.05)
 
 
-def test_stage0_proportional_pause_is_dropped_without_punctuation(tmp_path):
+def test_stage0_proportional_pause_is_kept_without_punctuation(tmp_path):
     text = "ああああいいいい"
     speech = [(0.0, 2.0), (5.0, 7.0)]
     cues = split_cues(text, 0.0, 7.0, max_chars=24, pause_sec=0.6, speech=speech)
     _record(
         tmp_path,
         "S0-SPLIT-02",
-        requirement="speech-aware 比例分配分支宣称长停顿是硬边界，但无标点时实际跨越该停顿。",
+        requirement="speech-aware 比例分配分支的长停顿是硬边界：无标点时也必须在停顿处断开。",
         evidence=[
-            "src/creator_agent/asr/cue_splitter.py:387-389 _snap_offsets_to_breaks",
-            "src/creator_agent/asr/cue_splitter.py:470-471 _speech_timeline",
-            "tests/unit/test_cue_splitter.py:256-262 test_speech_fallback_gap_is_hard_boundary",
+            "src/creator_agent/asr/cue_splitter.py _snap_offsets_to_breaks (action=cut)",
+            "src/creator_agent/asr/cue_splitter.py _speech_timeline",
         ],
         inputs={"text": text, "speech": speech, "pause_sec": 0.6},
         observed={"cues": cues, "silent_gap_sec": 3.0},
         requirement_met=len(cues) == 2,
     )
-    assert cues == [{"start": 0.0, "end": 7.0, "text": text}]
+    assert [c["text"] for c in cues] == ["ああああ", "いいいい"]
+    assert (cues[0]["start"], cues[0]["end"]) == (0.0, 2.0)
+    assert (cues[1]["start"], cues[1]["end"]) == (5.0, 7.0)
 
 
 def test_stage0_semantic_short_lines_are_not_length_filtered(tmp_path):

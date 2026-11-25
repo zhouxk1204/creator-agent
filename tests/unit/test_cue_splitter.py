@@ -1,6 +1,47 @@
 from __future__ import annotations
 
-from creator_agent.asr.cue_splitter import resolve_overlaps, split_cues
+from creator_agent.asr.cue_splitter import (
+    dedupe_cue_boundaries,
+    merge_fragments_and_fix_duration,
+    resolve_overlaps,
+    split_cues,
+)
+
+
+def test_fragments_merge_into_previous_cue():
+    # The aligner cut 「お義姉|さん」 and 「し|た」 in the middle of a word: the
+    # 1-2 char tail is a fragment, so it folds back into the previous cue.
+    cues = [
+        {"start": 0.0, "end": 2.0, "text": "お義姉"},
+        {"start": 2.5, "end": 2.55, "text": "さん"},
+    ]
+    out = merge_fragments_and_fix_duration(cues, max_chars=30, min_sec=0.4)
+    assert len(out) == 1
+    assert out[0]["text"] == "お義姉さん"
+    assert out[0]["end"] >= 2.55
+
+
+def test_flash_cue_stretches_but_not_past_next_cue():
+    # 0.05s flash -> stretched for readability, capped just before the next cue.
+    cues = [
+        {"start": 1.0, "end": 1.05, "text": "未来ラジオ!"},
+        {"start": 1.3, "end": 3.0, "text": "ああ"},
+    ]
+    out = merge_fragments_and_fix_duration(cues, max_chars=30, min_sec=0.4)
+    assert out[0]["text"] == "未来ラジオ!"
+    assert abs(out[0]["end"] - 1.28) < 0.02
+    assert out[1]["start"] == 1.3
+
+
+def test_head_fragment_merges_forward():
+    cues = [
+        {"start": 0.0, "end": 0.2, "text": "た"},
+        {"start": 0.6, "end": 2.0, "text": "からね。"},
+    ]
+    out = merge_fragments_and_fix_duration(cues, max_chars=30, min_sec=0.4)
+    assert len(out) == 1
+    assert out[0]["text"] == "たからね。"
+    assert out[0]["start"] == 0.0
 
 
 def test_empty_and_invalid_input():
@@ -204,12 +245,26 @@ def test_resolve_overlaps_sorts_and_handles_chains():
         assert cur["end"] > cur["start"]
 
 
-def test_resolve_overlaps_contained_cue_shares_at_boundary():
-    # The later cue sits fully inside the earlier one; the overlap is still
-    # split so both keep at least min_dur.
+def test_resolve_overlaps_drops_contained_boundary_duplicate():
+    # Chunk N's tail word ("あっち") is repeated by chunk N+1's opening, and
+    # sits fully inside its long cue. Keeping the long cue intact matters:
+    # splitting at the midpoint turned 4.7s into a 0.3s flash.
     segs = [
-        {"start": 0.0, "end": 1.06, "text": "a"},
-        {"start": 1.0, "end": 1.05, "text": "b"},
+        {"start": 44.85, "end": 49.57, "text": "あっちへ行ってなさい。あ、そう。忠告したからね。あとわし"},
+        {"start": 44.87, "end": 45.19, "text": "あっち"},
+    ]
+    out = resolve_overlaps(segs)
+    assert len(out) == 1
+    assert out[0]["start"] == 44.85 and out[0]["end"] == 49.57
+    assert out[0]["text"].endswith("あとわし")
+
+
+def test_resolve_overlaps_contained_cue_shares_at_boundary():
+    # Contained but not a short duplicate (similar text length): the overlap
+    # is still split so both keep at least min_dur.
+    segs = [
+        {"start": 0.0, "end": 1.06, "text": "ab"},
+        {"start": 1.0, "end": 1.05, "text": "ab"},
     ]
     out = resolve_overlaps(segs)
     assert out[0]["end"] == out[1]["start"]
@@ -333,3 +388,40 @@ def test_cut_repeat_tail_cps_guard_cuts_impossible_speed():
     assert cut_repeat_tail(text, speech_dur=1.0, max_cps=12.0) == "バイバイ。"
     # max_cps=0 restores the old always-cut behavior.
     assert cut_repeat_tail("うん、うん、うん、うん、", speech_dur=2.0, max_cps=0.0) == "うん、"
+
+
+# ---------------------------------------------------------------------------
+# dedupe_cue_boundaries (same word recognised by two adjacent chunks)
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_cue_boundaries_trims_repeated_word():
+    cues = [
+        {"start": 0.0, "end": 2.0, "text": "心配することなかった。久しぶりにふた"},
+        {"start": 2.0, "end": 4.0, "text": "ふたりで映画でも観に行こうか。"},
+    ]
+    out, fixed = dedupe_cue_boundaries(cues)
+    assert fixed == 1
+    assert out[0]["text"] == "心配することなかった。久しぶりに"
+    assert out[1]["text"] == "ふたりで映画でも観に行こうか。"
+
+
+def test_dedupe_cue_boundaries_trims_longer_shared_prefix():
+    cues = [
+        {"start": 0.0, "end": 2.0, "text": "調整したらそうなっちゃった。でもどうして"},
+        {"start": 2.0, "end": 4.0, "text": "どうして25年後の僕の部屋から水の音が"},
+    ]
+    out, fixed = dedupe_cue_boundaries(cues)
+    assert fixed == 1
+    assert out[0]["text"].endswith("でも")
+    assert out[1]["text"].startswith("どうして")
+
+
+def test_dedupe_cue_boundaries_ignores_across_pause():
+    cues = [
+        {"start": 0.0, "end": 1.0, "text": "ああ"},
+        {"start": 2.0, "end": 3.0, "text": "ああ"},
+    ]
+    out, fixed = dedupe_cue_boundaries(cues)
+    assert fixed == 0
+    assert [c["text"] for c in out] == ["ああ", "ああ"]

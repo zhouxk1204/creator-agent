@@ -25,10 +25,15 @@ ja_asr:
   repeat_tail_max_cps: 0.0    # 0=一律砍重复尾；12.0=按语速判据，保留真「うんうん」 | 看日志 cps= 与 repeat-tail cut 数
 
   # ───────── ③ 文字准确度（chunk 与生成上限）─────────
-  chunk_target_min_sec: 3.0   # 过短 chunk 识别易缺上下文 | 看 asr_empty / 文本断句
-  chunk_target_max_sec: 8.0
-  max_chunk_sec: 15.0         # 硬上限；forced_split_hard 多说明 VAD 把音乐当语音
+  context_prompt: "この音声は日本のアニメ「ドラえもん」の日本語音声です。登場人物: のび太、ドラえもん、しずか、ジャイアン、スネ夫、のび太のママ、のび太のパパ、セワシ。固有名詞: ドラえもん、どら焼き、未来ラジオ、ひみつ道具、のび太温泉、タイムふろしき、どこでもドア、タケコプター。"   # ASR 上下文/热词：实测不加时 >8s 窗口只转第一句就停
+  chunk_target_min_sec: 2.5   # 过短 chunk 识别易缺上下文 | 看 asr_empty / 文本断句
+  chunk_target_max_sec: 5.0
+  max_chunk_sec: 6.0          # 硬上限；Qwen3-ASR 对 >8s 窗口会丢掉后半句（实测 11.1s/13.4s 只出第一句）
+  chunk_merge_gap_sec: 0.6    # chunk 内不跨超过此值的静音：稀疏窗口会让 ASR 跳过远端
+  snap_quiet_cuts: true       # 硬切点吸附到 ±0.45s 内能量低谷 | 关掉看边界词是否更碎
   asr_max_new_tokens: 1024    # 太小会截断长 chunk | 看 cue 是否缺尾
+  asr_max_tokens_per_sec: 12.0  # 每秒音频的生成预算，防音乐段空转（曾 5.7s 音频生成 40s 只留 2 字）
+  asr_rescue_min_cps: 2.5     # 字/语音秒低于此值视为漏转，按语音组重识别；0=关
 
   # ───────── ④ 时间轴准确度 ─────────
   align_pad_sec: 0.3          # 太大→词锁到相邻句(OUT_OF_WINDOW 多)，太小→找不回起音 | 看 align_fallback_*
@@ -43,7 +48,8 @@ ja_asr:
   # ───────── ⑤ 分句与可读性 ─────────
   max_cue_chars: 30           # 每条字幕字数上限（按人工修正字幕行长 ~30 字） | 人工看断句
   max_cue_sec: 8.0
-  pause_sec: 0.6              # 词间静音≥此值=硬断点；调低=断得更碎
+  pause_sec: 0.6              # 词间静音≥此值=硬断点（会再用 VAD 校验：假停顿不切） | 调低=断得更碎
+  min_cue_sec: 0.4            # 0.05~0.3s 闪光条拉到可读长度；1~2 字词碎片并回上一条
   speaker_threshold: 0.5      # 仅配了 speaker_model 才有效；调低=说话人更多
 
   # ───────── ⑥ 显示时长（只改 .srt，不改 transcript.json / .txt）─────────

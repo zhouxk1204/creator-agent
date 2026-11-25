@@ -11,7 +11,25 @@ from creator_agent.asr.vad_chunker import (
     build_chunks,
 )
 
-KW = dict(merge_gap=0.3, target_min=3.0, target_max=8.0, hard_max=15.0, pad=0.0)
+KW = dict(merge_gap=0.3, target_min=3.0, target_max=8.0, hard_max=15.0, pad=0.0, max_internal_gap=None)
+# Same budget, but with the production silence-bridging cap enabled.
+KW_GAP = dict(KW, max_internal_gap=0.6)
+
+
+def test_default_gap_cap_keeps_sparse_windows_apart():
+    # Two utterances 1.5s apart fit the duration budget but a chunk bridging
+    # that pause is sparse: the ASR transcribes the near side and drops the
+    # far one. Default max_internal_gap=0.6 keeps them separate.
+    ivs = [(0.0, 2.0), (3.5, 6.0)]
+    chunks = build_chunks(ivs, merge_gap=0.3, target_min=1.0, target_max=8.0, hard_max=15.0, pad=0.0)
+    assert [(c["start"], c["end"]) for c in chunks] == [(0.0, 2.0), (3.5, 6.0)]
+
+
+def test_gap_cap_does_not_split_short_breaths():
+    # A 0.5s gap is inside the cap: the two intervals still form one chunk.
+    ivs = [(0.0, 2.0), (2.5, 6.0)]
+    chunks = build_chunks(ivs, **KW_GAP)
+    assert [(c["start"], c["end"]) for c in chunks] == [(0.0, 6.0)]
 
 
 def test_empty_and_invalid():
@@ -58,6 +76,36 @@ def test_undersized_chunk_closes_when_stretch_would_exceed_hard_max():
     assert [(c["start"], c["end"]) for c in chunks] == [(0.0, 11.0), (11.0, 20.0)]
     assert all(c["end"] - c["start"] <= KW["hard_max"] for c in chunks)
     assert all(c["reason"] == REASON_SPLIT_HARD for c in chunks)
+
+
+def test_hard_cut_snaps_to_quiet_point():
+    # A 20s continuous utterance has no pause to split at. The snapper may move
+    # each forced cut (nominal start+target_max) to a nearby quiet frame.
+    chunks = build_chunks(
+        [(0.0, 20.0)],
+        **{**KW, "target_min": 2.5, "target_max": 5.0, "hard_max": 6.0, "max_internal_gap": 0.6},
+        cut_snap=lambda desired, s, e: desired + 0.4,
+    )
+    # Each cut is snapped +0.4 past its nominal point (recursion re-applies it).
+    assert [(round(c["start"], 2), round(c["end"], 2)) for c in chunks] == [
+        (0.0, 5.4),
+        (5.4, 10.8),
+        (10.8, 16.2),
+        (16.2, 20.0),
+    ]
+    assert all(c["end"] - c["start"] <= 6.0 for c in chunks)
+
+
+def test_hard_cut_snapper_cannot_break_budget():
+    # A snapper returning a nonsense position is clamped: never an empty piece,
+    # never past the interval.
+    chunks = build_chunks(
+        [(0.0, 13.0)],
+        **{**KW, "target_min": 2.5, "target_max": 5.0, "hard_max": 6.0, "max_internal_gap": 0.6},
+        cut_snap=lambda desired, s, e: 0.2,
+    )
+    assert all(c["end"] > c["start"] for c in chunks)
+    assert all(c["end"] - c["start"] <= 6.0 for c in chunks)
 
 
 def test_oversized_group_splits_at_natural_pause_near_target():

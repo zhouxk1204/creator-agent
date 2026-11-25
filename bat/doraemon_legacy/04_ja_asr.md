@@ -90,13 +90,28 @@
 
 `vad_threshold` 调低（如 0.35）可找回弱语音，代价是音乐/噪音误检增多。
 
-**分块（无说话人时，`build_chunks`）**：目标 3–8s，硬上限 15s。
+**分块（无说话人时，`build_chunks`）**：目标 2.5–5s，硬上限 6s。
 1. gap ≤ 0.3s 的相邻语音段合并为 utterance group（句内换气）。
-2. 相邻 group 打包进同一 chunk，直到跨度超 target_max；过短的 chunk（< target_min）允许
-   撑过 target_max 直到 hard_max 来凑够长度。
+2. 相邻 group 打包进同一 chunk，直到跨度超 target_max；**同时**两个 group 之间的静音
+   不得超过 `chunk_merge_gap_sec`（0.6s）——跨长停顿的 chunk 是「稀疏窗口」，模型只转近侧、
+   把远侧静默丢掉（实测 11.1s 窗口内 3s 静音，只出了第一句）。过短的 chunk（< target_min）
+   允许撑过 target_max 直到 hard_max 来凑够长度。
 3. 单 group 超 hard_max：在内部停顿最接近 target_max 处递归切（`forced_split_natural`）；
    单条连续语音段超 hard_max 且无停顿可切：硬切（`forced_split_hard`）。
-4. 每 chunk 两侧 pad 0.1s，clamp 到 [0, duration]。
+   **硬切点吸附安静处（`snap_quiet_cuts`，默认开）**：长连续旁白没有停顿可切时，纯按
+   `start+target_max` 硬切会切在音节中间（「パパに襲い|かかろ」→ 两块各自补出半截
+   假词）。`_quiet_cut_snapper` 读人声 stem，按 20ms 帧 RMS + 3 帧平滑，在 ±0.45s 内找
+   能量最低点；只有该点 ≤ 0.7×窗口能量中位数（即真的是低谷）才移动切点，否则保持标称
+   位置——避免切在响亮的音节中央。切点仍 clamp 在 [start+1.0, end-1.0]，不产生空片、
+   不突破 hard_max。
+4. 每 chunk 两侧 pad 0.1s，clamp 到 [0, duration]。**两个相邻 chunk 因此重叠 ~0.2s，
+   这是刻意的**：重叠给了 ASR 缺失的 onset/offset 上下文。试过"pad 只往静音里扩（不相邻
+   chunk 重叠）"，边界识别反而更差（「話せばわかる!」→「なせがわかる!おちんぽ!」、
+   「かかえろ。」→「帰ろう!」，覆盖缺口 4.2s → 6.5s），已回退。重叠导致的重复音节由
+   `dedupe_cue_boundaries` 在字幕层裁掉。
+
+为什么上限从 15s 压到 6s：Qwen3-ASR 对长窗口会**静默截断**——同一段音频 11.1s 只出
+「天才プロゴルファー、ぶっとびキャサリン。」，拆成 5.0s + 6.1s 两半则全文出齐。
 
 每个 chunk 带 `reason`（normal / merged / forced_split_natural / forced_split_hard），
 进日志和 SUMMARY 计数。
@@ -115,8 +130,13 @@
 - 模型当前部署为 `jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`（Qwen3-ASR-1.7B 的日语
   动漫/Galgame 微调，本地 `C:/models/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`；官方原版
   `Qwen/Qwen3-ASR-1.7B-hf` 在 settings.yaml 里留注释可回滚，0.6B 可提速），
-  `apply_transcription_request` + generate，
-  `max_new_tokens=1024`（512 会截长 chunk）。
+  `apply_transcription_request` + generate。
+- **上下文/热词 prompt（`context_prompt`）**：作为 ASR 的 system prompt 传进去（作品名 +
+  角色名 + 道具名）。它不是装饰：不加时模型对 >7s 窗口**只转第一句就停**（实测同一 13.4s
+  窗口 14 token vs 51 token），加上才完整。热词也让「どら焼き」「未来ラジオ」这类专名更稳。
+- **生成预算（`asr_max_tokens_per_sec`）**：`max_new_tokens = clamp(时长×12, 48, 1024)`。
+  音乐/噪音窗口曾出现 5.7s 音频生成 40s、最后只留 2 字（空转），按时长限预算后截断这种空转。
+  正常日语语速远低于这个预算，不会误伤。
 - **幻觉防护 `cut_repeat_tail`**：音乐/噪音上模型会循环同一单元（「バイバイ。バイバイ。…」）。
   结尾同一单元重复 ≥3 次且跨度 ≥6 字符 → 砍回只留一次。**只砍尾巴**——句首结巴（「ねねねね…」）
   是真实语音不动。截断发生在对齐之前，免得幽灵词把真实 cue 拖离音频。
@@ -125,6 +145,22 @@
   0 = 旧行为（一律砍）。砍时日志带 `cps=` 可直接核对判据。
 - 每块打日志：`[CHUNK nnn/NNN][ASR] OK 1.2s len=18 text="…"`；空文本 / 异常分别计
   `asr_empty` / `asr_failed`，跳过该块继续。
+
+### 步骤 4.2：漏转补救 pass（`asr_rescue_min_cps`）
+
+「识别到了，但只识别了开头」的块会被自动返工，**在补漏 pass 和对齐之前**执行：
+
+1. 判据：`len(text) / 该块紧凑 VAD 语音时长 < asr_rescue_min_cps`（默认 2.5 字/秒）。
+   正常日语对话 4–6 字/秒，低于 2.5 说明这段语音的文本量对不上。
+2. 返工方式：把该 chunk 的语音切成 utterance group，**逐组用聚焦窗口重新识别**
+   （带同样的 `context_prompt` 和生成预算）；只有一个连续语音段时，按 ~2.5s 切片返工。
+3. 只有拼回来的文本 **明显更长**（≥1.2 倍）才替换原文本；否则保留原结果（刻意的保守，
+   避免把正常短句改坏）。
+4. **时间轴不动**：chunk 边界不变，只换文本，后续对齐仍在原窗口上做。
+   日志 `[CHUNK nnn][RESCUE] ACCEPT/keep ...`，SUMMARY 里 `rescue tried/accepted`。
+
+实测案例：4.55s 窗口整段只回「わら」两个字（还空转 40s）；按 2.5s 切片返工后得到
+「わからんっ!わからんっ!わからんっ!」——即整段被子音/喊叫占满、整窗识别失败。
 
 ### 步骤 4.5：补漏 pass（`recover_missed` 开启时）
 
@@ -160,6 +196,12 @@ UNRECOVERED 清单）——这是刻意的，重试同样的音频大概率还�
   窄到对齐器几乎看不到相邻语句、不会把重复词锁到隔壁句上。词时间由 aligner_worker 加上
   `chunk_start` 换算成绝对秒。
 - aligner 异常/缺失只降级该 chunk，绝不中断批次。
+- **对齐前先释放 ASR 模型（`free_asr_before_align`，默认开）**：对齐器是**第二个进程里的
+  第二个模型**；Windows 先耗尽的是系统提交（页面文件），ASR 模型还驻留时 ForcedAligner
+  `from_pretrained` 会在 `safe_open` 抛 `os error 1455 页面文件太小`，**整条视频的每个 chunk**
+  都掉进比例分摊（实测 0/41 成功）。所以在起子进程前把 ASR 模型置空 + `gc.collect()` +
+  `torch.cuda.empty_cache()`；同批次还有下一个视频时再按需重新加载。
+- 即便如此仍整批 "model load" 失败时，会再释放一次缓存、等 5s、**重试一次**对齐器。
 
 **先修复再过门（`align_check.repair_word_timing`）**：ForcedAligner 经常在一组本来很准的
 词时间里夹几个**零时长 token**（「は」「の」「っ」「じゃ」等短功能 mora 对不齐就塌缩成
@@ -213,6 +255,35 @@ start==end），偶尔还有相邻词毫秒级重叠。这些无害（词就在�
 （`[CHUNK nnn][CUE] DROP speech_cov=…`）。真实对话几乎不会低于这个地板。
 被丢的 cue 同时收集进结果 JSON 的 `dropped` 字段，主环境写成 `<stem>.dropped.txt`
 （格式 `[12.34-14.10] speech_cov=0.21  文本`）——事后可核对丢掉的是幻觉还是真台词。
+
+**语速守卫（`_MAX_CUE_CPS` = 12 字/秒）**：词级时间能过质量门，仍可能完全不可读——
+对齐器把整块文本压进 0.3s（26 字塞进 0.29s ⇒ 90 字/秒）。逐 cue 校验
+`字数 / (end-start)`，任一条超 12 字/秒就把**该 chunk 的对齐整体作废**，改走 speech-aware
+比例分摊重切（`alignment_gate.reason=CUE_CPS`，SUMMARY 里 `CUE_CPS` 计数）。12 字/秒高于
+任何真实阅读速度、远低于退化输出，正常语速不会误伤。
+
+**跨 chunk 去重叠（`resolve_overlaps`）**：词计时 cue 允许越出 chunk，于是第 N 块的尾词
+可能落进第 N+1 块。**包含式重叠**（后一条完全落在前一条内、且文字明显更短）是上一块的
+尾词被下一块开头重复，直接丢弃短条——若按中点切分，会把 4.7s 的长 cue 砍成 0.29s 闪光条，
+同时让后面 3.6s 语音没有任何字幕（是本轮覆盖缺口的最大成因）。其余部分重叠仍按中点分，
+过短的两条各自保 `min_dur`。
+
+**跨 cue 边界去重（`dedupe_cue_boundaries`）**：相邻 chunk 有 0.2s 重叠，同一个词常被两块
+各识别一次，字幕读起来是「…久しぶりにふた」/「ふたりで映画でも…」。两条 cue 时间相接
+（gap ≤ 0.3s）且前一条尾 = 后一条头（2–6 字）时，裁掉前一条的重复尾巴。只改文本，不动时间。
+
+**断句收尾（`merge_fragments_and_fix_duration`，跨 chunk、`resolve_overlaps` 之后）：**
+
+- **断点必须有真实静音**：词时间轴的停顿判据 `pause_sec` 之外，再用紧凑 VAD 反向校验——
+  词间空隙里如果还检测到语音，就不是真停顿（对齐全零时长词会造出假空隙，例如
+  「し」0.00s 紧接着「た」+0.7s，在这里切会得到 0.3s 的闪光条）。假停顿不切。
+- **词碎片并回**：1–2 字且上一条不以句末标点结尾 → 并进上一条（「お義姉|さん」「し|たからね」）。
+  上一条已经以 。！？ 结尾时不并（那是另一句，「未来ラジオ!」+「ああ」）。
+- **闪光条拉长**：时长 < `min_cue_sec`（0.4s）的 cue 终点向后延伸到可读长度，但不越过下一条。
+
+**比例分摊分支的断点不再丢弃**：没有对齐词时，停顿偏移先贴近标点；窗口内找不到标点时
+`action="cut"` 仍在停顿处切，只把切点从小浊点（っゃゅょ/ー）挪开，避免切碎词尾——
+以前这里是 `action="drop"`（整条 cue 跨越静音），断句质量最差的一环。
 
 ### 步骤 6（主环境，bat 第 5+6 步）：边界检查 + 写产物（`boundary_check.py`）
 
@@ -306,6 +377,7 @@ CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 | `out_dir` | "" | 输出根目录；空 = 写到视频旁边 |
 | `work_dir` | "" | 中间产物保留目录；空 = 跑完即删 |
 | `model` | `jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf` | 当前部署（日语动漫/Galgame 微调）；代码默认官方 `Qwen/Qwen3-ASR-1.7B-hf`，可换 0.6B 提速 |
+| `context_prompt` | Doraemon 角色/道具热词 | ASR 的 system prompt。**不加会截断 >7s 窗口**（只转第一句），加了才完整 |
 | `sep_model` | "" | audio-separator 模型文件名；空 = 默认 BS-RoFormer |
 | `device` | `cuda:0` | `mps` / `cpu` 用于 Mac 调试 |
 | `language` | `Japanese` | |
@@ -321,8 +393,13 @@ CLI 的 `--language/--device/--model/-v` 优先级高于调参文件。
 | `recover_vad_threshold` | 0.35 | 补漏**检测**阈值（独立于主分块阈值）：调低找回弱/远语音行；补漏 chunk 的时间轴回退 + 幻觉过滤同用此阈值 |
 | `repeat_tail_max_cps` | 0.0 | >0 启用语速判据（建议试 12.0）：字/秒 ≤ 此值的真实重复（「うんうん」）不砍；0 = 一律砍 |
 | `srt_min_display_sec` / `srt_lead_in_sec` / `srt_tail_sec` | 0.0 / 0.0 / 0.0 | 最终SRT显示余量；硬边界优先；原始对齐检查不使用 |
-| `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 3.0 / 8.0 / 15.0 | 分块目标区间 + 硬上限 |
-| `asr_max_new_tokens` | 1024 | ASR 生成上限 |
+| `chunk_target_min_sec` / `chunk_target_max_sec` / `max_chunk_sec` | 2.5 / 5.0 / 6.0 | 分块目标区间 + 硬上限（Qwen3-ASR 对 >8s 窗口会丢后半句） |
+| `chunk_merge_gap_sec` | 0.6 | 一个 chunk 不跨超过此值的静音；0 以下 = 关闭该限制 |
+| `asr_max_new_tokens` / `asr_max_tokens_per_sec` | 1024 / 12.0 | 生成上限；每秒音频预算（防音乐段空转） |
+| `asr_rescue_min_cps` | 2.5 | 字/语音秒低于此值 → 按语音组返工重识别；0 = 关 |
+| `free_asr_before_align` | true | 起对齐子进程前释放 ASR 模型（否则可能 os error 1455，整批退比例分摊） |
+| `min_cue_sec` | 0.4 | 断句收尾：1–2 字碎片并回上一条；闪光条拉到这个时长 |
+| `snap_quiet_cuts` | true | 硬切点吸附到 ±0.45s 内的能量低谷（长连续旁白不切在音节中间）；关闭 = 纯按 target_max 切 |
 | `align_pad_sec` / `align_min_coverage` | 0.3 / 0.5 | 对齐窗口 padding（也是词允许越界的最远距离）/ 质量门覆盖率下限 |
 | `boundary_check` | true | 边界诊断开关，ja-asr不吸附时间 |
 | `boundary_snap_sec` | 0.5 | 旧显式吸附分支参数；ja-asr诊断模式不使用 |
