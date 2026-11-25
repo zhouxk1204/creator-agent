@@ -318,11 +318,11 @@ def prune_index() -> None:
         return
     try:
         data = json.loads(index.read_text(encoding="utf-8-sig"))
-    except Exception:  # noqa: BLE001
-        return
+    except Exception as exc:  # noqa: BLE001
+        raise CoverRenderError(f"无法读取草稿列表索引 {index}：{exc}") from exc
     store = data.get("all_draft_store")
     if not isinstance(store, list):
-        return
+        raise CoverRenderError(f"草稿列表索引格式异常：{index}（all_draft_store 不是列表）")
     kept = [entry for entry in store if Path(str(entry.get("draft_fold_path", ""))).is_dir()]
     if len(kept) == len(store):
         return
@@ -331,6 +331,29 @@ def prune_index() -> None:
     if isinstance(data.get("draft_ids"), list):
         data["draft_ids"] = [item for item in data["draft_ids"] if item in ids]
     index.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    log(f"   草稿列表索引清理成功（移除 {len(store) - len(kept)} 条失效记录）")
+
+
+def _cleanup_draft(draft: Path) -> None:
+    """Report cleanup failures without hiding a render error or discarding a finished cover."""
+    try:
+        stop_jianying()
+    except Exception as exc:  # noqa: BLE001
+        log(f"   [错误] 清理草稿前停止剪映失败：{exc}")
+    try:
+        if draft.exists():
+            shutil.rmtree(draft)
+            if draft.exists():
+                raise CoverRenderError("删除后草稿目录仍然存在")
+            log(f"   临时草稿删除成功：{draft}")
+        else:
+            log(f"   临时草稿无需删除（目录不存在）：{draft}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"   [错误] 临时草稿删除失败：{draft}（{exc}）。请关闭剪映后手动删除。")
+    try:
+        prune_index()
+    except Exception as exc:  # noqa: BLE001
+        log(f"   [错误] 草稿列表索引清理失败：{exc}")
 
 
 def _ffmpeg() -> str:
@@ -387,10 +410,16 @@ def render_cover(*, image: Path, episode: str, title: str, out: Path, orientatio
     with tempfile.TemporaryDirectory(prefix="doraemon_cover_") as temp:
         workdir = Path(temp)
         stop_jianying()
-        draft = build_draft(
-            name=draft_name, image=image, episode=str(episode), title=title, workdir=workdir, orientation=orientation
-        )
+        draft = draft_root() / draft_name
         try:
+            draft = build_draft(
+                name=draft_name,
+                image=image,
+                episode=str(episode),
+                title=title,
+                workdir=workdir,
+                orientation=orientation,
+            )
             log(f"   草稿已生成 {draft.name}")
             video = _open_and_export(draft_name, workdir, export_title)
             frame = _first_frame(video, workdir / f"{export_title}.png")
@@ -411,9 +440,7 @@ def render_cover(*, image: Path, episode: str, title: str, out: Path, orientatio
             result.save(out, quality=95, subsampling=0)
             return out
         finally:
-            stop_jianying()
-            shutil.rmtree(draft, ignore_errors=True)
-            prune_index()
+            _cleanup_draft(draft)
 
 
 def render_portrait_cover(*, image: Path, episode: str, title: str, out: Path) -> Path:
