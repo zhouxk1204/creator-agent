@@ -84,6 +84,26 @@ uv run creator-agent sync --creator douyin_12345 --days 3
 - **`bat/publish_dual.bat`** —— 通用单故事发布入口：从同一份 metadata 选择故事发布，不再读取旧文本发布包。剪映按预填的 `<story_id>_final.mp4` 导出到素材目录，填写抖音两张独立封面路径，建议先用 `--story 941_1 --dry-run` 校验。字段标准见 [发布文档](docs/publish-package.md)。
 - **`bat/doraemon/03_publish.bat`** —— B 站 / 抖音统一批量入口：发布前先确认待发布故事的中文简介和标签，缺失时自动启动本地模型翻译；然后默认先优化 4K 封面并发布所有 `<story_id>_b.mp4`（**没有 `_b` 视频时自动跳过 B 站**），再生成横竖封面并发布 `<story_id>_dy.mp4`（根目录）或 `<story_id>_dy/` 中的剪映导出；每个平台上传前单独确认。`--only bilibili` / `--only douyin` 只跑对应平台，支持 `--story`、`--dry-run` 等参数。详见 [使用说明](bat/doraemon/03_publish.md)。
 
+## 日漫硬字幕提取工具（独立工具，当前仅阶段 0）
+
+按 [PRD](new.md) 逐阶段开发，目前只做**视频逐帧解码与 PTS 帧索引**，
+不做字幕裁剪、检测、OCR、翻译或 SRT 输出，也不改动现有下载 / ASR 流水线。
+
+```bash
+uv sync --extra subtitle-extractor
+uv run --extra subtitle-extractor anime-subtitle-extractor --input "D:/Anime/episode01.mp4"
+# 只验证时间轴、不保存逐帧 PNG；指定新目录避免覆盖已有结果：
+uv run --extra subtitle-extractor anime-subtitle-extractor --input "D:/Anime/episode01.mp4" --output "output/episode01_index" --no-save-frames
+```
+
+默认输出 `output/<视频名>/`：`video_info.json`、`frame_index.csv`、`frames/`、
+`timestamp_anomalies.jsonl`、`analysis.log`、`task_status.json`。
+保留原始 PTS，不用平均 FPS 强行构造 VFR 时间轴；所有时序回退都有来源记录。
+默认保留每帧 PNG，建议先用 30～60 秒片段验证，注意磁盘空间。
+已有非空目录不会被覆盖；阶段 0 暂不支持断点恢复或 Windows EXE。
+
+详细参数、时间轴规则和实际视频验证步骤见 [阶段 0 使用说明](docs/anime-subtitle-extractor.md)。
+
 ## 日语 ASR（去背景音 + 说话人分离 + Qwen3-ASR + 词级对齐字幕）
 
 针对 TVer / 哆啦A梦等日语视频的独立工具（与 sync 流水线无关，纯文件进文件出）：

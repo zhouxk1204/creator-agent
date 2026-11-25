@@ -30,9 +30,15 @@ covers = [
     "pillow>=10,<13",
     "jianying-tool>=0.5,<0.6",
 ]
+# 独立日漫硬字幕工具：PyAV 建立 PTS 时间轴，Pillow 保存逐帧 PNG。
+subtitle-extractor = [
+    "av>=16,<18",
+    "pillow>=10,<13",
+]
 
 [project.scripts]
 creator-agent = "creator_agent.cli.main:app"
+anime-subtitle-extractor = "creator_agent.subtitle_extractor.cli:app"
 
 [dependency-groups]
 dev = [
