@@ -4,6 +4,63 @@
 不会裁剪、检测、分组、OCR、翻译或生成 SRT，也不接入现有下载 / ASR 流水线。
 Windows EXE 和阶段恢复功能留到后续阶段；先用 Python 命令验证。
 
+## 开发交接（2026-11-25）
+
+**交接结论：阶段 0 已实现，阶段 1～5 尚未实现。** 当前能从视频得到原始帧及可追溯的
+PTS 时间轴，还不能提取日文硬字幕；不要把阶段 0 的元信息 JSON 当作完整字幕结果 JSON。
+
+| 功能 | 当前状态 |
+| --- | --- |
+| 视频逐帧解码、帧编号 | 已实现 |
+| PTS、持续时间、CFR/VFR 检查 | 已实现 |
+| 原始帧、索引和异常日志输出 | 已实现 |
+| 指定字幕区域裁剪 | 未实现 |
+| 灰度、二值化结果输出 | 未实现 |
+| 字符候选框检测与输出 | 未实现 |
+| 相邻帧相似度、连续分组 | 未实现 |
+| 最佳帧选择、日文 OCR | 未实现 |
+| SRT / 完整结果 JSON | 未实现 |
+
+### 回家接续入口
+
+- 开发分支：`fix/doraemon-materials-default`。
+- 阶段 0 实现提交：`5b89a2e`（`feat(subtitles): add stage-zero video decoding and PTS frame index`）。
+- 完整需求：[new.md](../new.md)，后续按其中的阶段顺序推进。
+- 实现入口：`src/creator_agent/subtitle_extractor/cli.py`（命令行）、
+  `analysis.py`（逐帧解码与输出）、`timeline.py`（PTS / duration / CFR/VFR）。
+- 单元测试：`tests/unit/test_subtitle_analysis.py`、`tests/unit/test_subtitle_timeline.py`。
+
+另一台机器在仓库根目录、确认工作区没有未提交改动后执行：
+
+```bash
+git fetch origin
+git switch fix/doraemon-materials-default
+git pull --ff-only origin fix/doraemon-materials-default
+uv sync --extra subtitle-extractor
+uv run --extra subtitle-extractor anime-subtitle-extractor --help
+```
+
+先按下文“回家实际验证”用真实短视频验收阶段 0。现有单元测试使用模拟解码器，
+不代替真实视频的解码兼容性、画面正确性、VFR 和性能验证。
+
+### 下一步开发范围
+
+真实视频验收通过后，先实现 **阶段 1：指定字幕区域裁剪和预处理输出**：
+
+1. 支持百分比 / 像素坐标及裁剪放大；初始区域可试 X 5%～95%、Y 72%～97%，
+   但必须按实际视频确认，不能当作所有视频的固定答案。
+2. 输出 `crops/`、`crop_config.json`、`crop_preview.jpg`；裁剪结果与原始帧编号一一对应。
+3. 输出原始裁剪图、灰度、CLAHE、OTSU、自适应二值化等处理版本，便于人工比较。
+4. 验收裁剪位置、图像尺寸一致性、帧编号映射，以及字幕没有被截断。
+
+阶段 1 验收后再推进：阶段 2 字符候选框 / 字幕存在性检测 → 阶段 3 相似度与连续分组
+→ 阶段 4 最佳帧和日文 OCR → 阶段 5 SRT / `result.json`。
+本次只记录交接，不实现这些后续功能。
+
+**接续约束：** 保留原始 PTS、可追溯回退和异常日志；不能用平均 FPS 重建 VFR 时间轴。
+字幕结束时间取末帧 `pts_time + duration`。不覆盖已有任务输出，不提前引入翻译 / ASR，
+不接入现有下载流水线；Windows EXE 和阶段恢复仍留待后续。
+
 ## 安装与运行
 
 在仓库根目录执行（Python ≥3.12、uv）：
