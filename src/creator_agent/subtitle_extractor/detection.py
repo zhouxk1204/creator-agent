@@ -45,6 +45,9 @@ class DetectionConfig:
     band_tolerance_ratio: float = 0.08
     horizontal_gap_ratio: float = 1.5
     coverage_gate: float = 0.06
+    small_coverage_gate: float = 0.035
+    small_run_min_height_ratio: float = 0.20
+    small_run_min_aspect: float = 0.9
     bright_level: int = 230
     bright_reference: float = 0.45
     density_reference: float = 0.30
@@ -67,6 +70,8 @@ class DetectionConfig:
             raise DetectionError("detection horizontal gap ratio must be finite and positive")
         if not math.isfinite(self.coverage_gate) or not 0.0 <= self.coverage_gate <= 1.0:
             raise DetectionError("detection coverage gate must be within 0..1")
+        if not math.isfinite(self.small_coverage_gate) or not 0.0 <= self.small_coverage_gate < self.coverage_gate:
+            raise DetectionError("detection small coverage gate must be below the coverage gate")
 
     @property
     def enabled(self) -> bool:
@@ -144,8 +149,17 @@ def _score_run(
     if right <= left or bottom <= top:
         return None
     coverage = (right - left) / width
-    if coverage < config.coverage_gate:
+    if coverage < config.small_coverage_gate:
         return None
+    if coverage < config.coverage_gate:
+        # A single short caption ("哇") is only ~40 px wide, which used to fall
+        # under the coverage gate. Let it through only when it looks like a tall
+        # glyph rather than a flat patch of background.
+        height = gray.shape[0]
+        if (bottom - top) / height < config.small_run_min_height_ratio or (right - left) / (
+            bottom - top
+        ) < config.small_run_min_aspect:
+            return None
 
     mask = np.zeros(gray.shape, dtype=np.uint8)
     for component in run:
