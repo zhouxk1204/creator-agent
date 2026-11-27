@@ -173,6 +173,8 @@ def is_srt_worthy(text: str, status: str, confidence: float, duration: float, co
         confidence >= config.low_confidence_floor
         and duration >= config.low_confidence_min_duration
         and len(text.strip()) >= 2
+        # "儿儿": the same glyph twice is a background shape read as text.
+        and len(set(normalize_caption(text))) > 1
     )
 
 
