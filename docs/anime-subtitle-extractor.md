@@ -1,180 +1,268 @@
-# 日漫硬字幕工具：阶段 0 验证说明
+# 日漫硬字幕工具：阶段 0–5 实现说明
 
-当前只交付 [PRD](../new.md) 的**阶段 0——视频解码与 PTS 帧索引**。
-不会裁剪、检测、分组、OCR、翻译或生成 SRT，也不接入现有下载 / ASR 流水线。
-Windows EXE 和阶段恢复功能留到后续阶段；先用 Python 命令验证。
+本工具实现 [PRD](../new.md) 的**阶段 0～5**：逐帧解码与 PTS 索引 → 字幕区域裁剪 → 字幕存在性检测 →
+相似度分组 → 最佳帧 OCR → SRT / `result.json`。一次解码同时完成阶段 0～3，分组结束后才调用 OCR，
+不做翻译、不接入现有下载 / ASR 流水线。
 
-## 开发交接（2026-11-25）
+## 实现状态
 
-**交接结论：阶段 0 已实现，阶段 1～5 尚未实现。** 当前能从视频得到原始帧及可追溯的
-PTS 时间轴，还不能提取日文硬字幕；不要把阶段 0 的元信息 JSON 当作完整字幕结果 JSON。
-
-| 功能 | 当前状态 |
-| --- | --- |
-| 视频逐帧解码、帧编号 | 已实现 |
-| PTS、持续时间、CFR/VFR 检查 | 已实现 |
-| 原始帧、索引和异常日志输出 | 已实现 |
-| 指定字幕区域裁剪 | 未实现 |
-| 灰度、二值化结果输出 | 未实现 |
-| 字符候选框检测与输出 | 未实现 |
-| 相邻帧相似度、连续分组 | 未实现 |
-| 最佳帧选择、日文 OCR | 未实现 |
-| SRT / 完整结果 JSON | 未实现 |
-
-### 回家接续入口
-
-- 开发分支：`fix/doraemon-materials-default`。
-- 阶段 0 实现提交：`5b89a2e`（`feat(subtitles): add stage-zero video decoding and PTS frame index`）。
-- 完整需求：[new.md](../new.md)，后续按其中的阶段顺序推进。
-- 实现入口：`src/creator_agent/subtitle_extractor/cli.py`（命令行）、
-  `analysis.py`（逐帧解码与输出）、`timeline.py`（PTS / duration / CFR/VFR）。
-- 单元测试：`tests/unit/test_subtitle_analysis.py`、`tests/unit/test_subtitle_timeline.py`。
-
-另一台机器在仓库根目录、确认工作区没有未提交改动后执行：
-
-```bash
-git fetch origin
-git switch fix/doraemon-materials-default
-git pull --ff-only origin fix/doraemon-materials-default
-uv sync --extra subtitle-extractor
-uv run --extra subtitle-extractor anime-subtitle-extractor --help
-```
-
-先按下文“回家实际验证”用真实短视频验收阶段 0。现有单元测试使用模拟解码器，
-不代替真实视频的解码兼容性、画面正确性、VFR 和性能验证。
-
-### 下一步开发范围
-
-真实视频验收通过后，先实现 **阶段 1：指定字幕区域裁剪和预处理输出**：
-
-1. 支持百分比 / 像素坐标及裁剪放大；初始区域可试 X 5%～95%、Y 72%～97%，
-   但必须按实际视频确认，不能当作所有视频的固定答案。
-2. 输出 `crops/`、`crop_config.json`、`crop_preview.jpg`；裁剪结果与原始帧编号一一对应。
-3. 输出原始裁剪图、灰度、CLAHE、OTSU、自适应二值化等处理版本，便于人工比较。
-4. 验收裁剪位置、图像尺寸一致性、帧编号映射，以及字幕没有被截断。
-
-阶段 1 验收后再推进：阶段 2 字符候选框 / 字幕存在性检测 → 阶段 3 相似度与连续分组
-→ 阶段 4 最佳帧和日文 OCR → 阶段 5 SRT / `result.json`。
-本次只记录交接，不实现这些后续功能。
-
-**接续约束：** 保留原始 PTS、可追溯回退和异常日志；不能用平均 FPS 重建 VFR 时间轴。
-字幕结束时间取末帧 `pts_time + duration`。不覆盖已有任务输出，不提前引入翻译 / ASR，
-不接入现有下载流水线；Windows EXE 和阶段恢复仍留待后续。
+| 功能 | 状态 | 代码入口 |
+| --- | --- | --- |
+| 逐帧解码、帧编号、PTS / duration / CFR-VFR 检查 | 已实现 | `analysis.py`、`timeline.py` |
+| 原始帧、索引、异常日志 | 已实现 | `analysis.py` |
+| 字幕区域裁剪（百分比 / 像素、缩放、四种变体） | 已实现 | `crop.py` |
+| 字幕存在性检测（形态学 + 连通域打分） | 已实现 | `detection.py` |
+| 相邻帧相似度、连续分组 | 已实现 | `grouping.py` |
+| 同文合并、噪声过滤 | 已实现 | `extraction.py` |
+| 最佳帧选择、OCR + 低置信度回退 | 已实现 | `extraction.py`、`ocr.py` |
+| SRT / `result.json` / `groups.json` / 可视化 | 已实现 | `srt.py`、`extraction.py` |
+| 翻译、字幕擦除、断点恢复、Windows EXE | 未实现（后续） | — |
 
 ## 安装与运行
 
-在仓库根目录执行（Python ≥3.12、uv）：
-
 ```bash
-uv sync --extra subtitle-extractor
-uv run --extra subtitle-extractor anime-subtitle-extractor --help
+uv sync --extra subtitle-extractor          # PyAV + Pillow
 uv run --extra subtitle-extractor anime-subtitle-extractor --input "D:/Anime/episode01.mp4"
 ```
 
-macOS/Linux 同样适用，只需换输入路径。工具使用 PyAV 解码**第一个视频流**，
-按解码后的显示顺序逐帧编号；音频、已有软字幕和其他视频流不处理。
-不会重新编码或修改输入视频。
-
-默认任务目录为当前工作目录下的 `output/<视频文件名，不含扩展名>/`。
-默认保存每帧 PNG，长视频可能需要大量磁盘空间；建议先用 30～60 秒的现成测试片段。
-
-只检查时间轴、不保存图片：
+OCR 依赖体积大、且平台覆盖有限，单独安装（`pyproject.toml` 中有 `subtitle-ocr` extra）：
 
 ```bash
-uv run --extra subtitle-extractor anime-subtitle-extractor --input "D:/Anime/episode01.mp4" --output "output/episode01_index" --no-save-frames
+uv pip install paddlepaddle paddleocr        # 或 uv sync --extra subtitle-extractor --extra subtitle-ocr
 ```
 
-指定输出目录，保留所有帧：
+注意：`paddlepaddle` 会把 numpy 解析到 2.3.5、pyyaml 到 6.0.2，装进现有环境会连带 downgrade；
+本仓库的 `uv.lock` 保持原样，需要 OCR 的机器自行安装并在本地刷新 lock。
+
+完整的日文字幕流程（默认参数）：
 
 ```bash
-uv run --extra subtitle-extractor anime-subtitle-extractor --input "D:/Anime/episode01.mp4" --output "output/episode01_frames"
+uv run --extra subtitle-extractor anime-subtitle-extractor --input episode01.mp4 \
+  --output output/episode01 --ocr-language japan
 ```
 
-**输出目录必须不存在或为空。** 同名视频、重复运行、失败后的重试都应指定新的
-`--output`；工具不覆盖已有结果，不提供 `--force`。一次失败会保留已经写出的数据，
-但失败任务的索引可能不完整，不能当作成功结果使用。阶段 0 不支持断点恢复。
+只跑检测和分组、不识别文字（不需要 OCR 依赖，也没有 SRT）：
+
+```bash
+uv run --extra subtitle-extractor anime-subtitle-extractor --input episode01.mp4 \
+  --output output/episode01_groups --no-ocr
+```
+
+**输出目录必须不存在或为空**；工具不覆盖已有结果，失败任务保留已写出的部分数据，但不支持断点续跑。
+
+### Windows 一键启动
+
+```bat
+bat\subtitle\run_subtitle_srt.bat                        :: demo.mp4 + 中文 OCR
+bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4"    :: 自动输出到 output\ep01_srt
+bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4" japan
+```
+
+参数依次是输入视频、OCR 语言（默认 `ch`）、输出目录（默认 `output\<文件名>_srt`）。脚本会：
+检查 OCR 依赖 → 拒绝覆盖已存在的输出目录 → 实时打印解码进度条和每组字幕的识别结果 →
+结束后打印 `result.json` 摘要（分组数、SRT 条数、前 5 条字幕）→ 把 `analysis.log`
+复制到 `logs\subtitle_<文件名>.log`。10 分钟片段大约需要 35～45 分钟。
+
+如果默认输出目录里已经有 `crops\crop_config.json`（同一视频跑过一遍），脚本自动切换到**复用模式**：
+跳过解码，只跑阶段 2～5，结果写到 `output\<文件名>_srt_ocr`，配置行会显示
+`mode : Reuse crops ...`，通常十几分钟就能出新 SRT。
+
+## 流水线
+
+```
+一次解码
+  ├── 阶段 0：PTS / duration / 帧索引 → frame_index.csv、video_info.json
+  ├── 阶段 1：固定区域裁剪 → crops/<frame>.png，可选四种变体
+  ├── 阶段 2：字幕打分 → detection/frame_detection.csv
+  └── 阶段 3：遮罩 IoU 比较 → 连续分组（组内留 9 个均匀分布帧）
+        ↓ 分组关闭时
+        阶段 4：抽 3 帧 OCR 投票 → ocr/group_XXXX.json
+        ↓ 全部结束后
+        阶段 5：同文合并 → 过滤 → result.srt、result.json、groups/groups.json、可视化
+```
+
+阶段 2～5 也可以不重新解码：已存在 `crops/` 时用 `--from-crops` 直接跑
+检测 → 分组 → OCR → SRT（见下文「复用 crops」）。
+
+### 阶段 2：字幕存在性检测
+
+对裁剪图做：灰度 → 高斯模糊 → top-hat（15×9）突出亮色笔画 → 按 97 分位取阈值 →
+开运算 2×2 → 连通域按高度 / 宽度 / 面积 / 填充率 / 长宽比过滤 → 按 y 中心聚成文字带 →
+**按水平间距 1.5×字高把文字带断成若干「文字段」** → 每段单独打分，取最高分的段。
+
+打分（0～1）：
+
+```
+score = 0.5 × min(1, 亮像素比例 / 0.45)
+      + 0.3 × min(1, 掩膜密度 / 0.30)
+      + 0.2 × min(1, 连通域数 / 6)
+```
+
+阈值默认 0.40。此外段宽必须 ≥ 裁剪宽度的 `coverage_gate`（0.06），避免把一小块亮斑当整行字幕。
+
+两个改动解决了真实素材上的典型漏检：
+
+- **旧的「取最宽文字带」会把字幕和右侧亮的背景连成一个带**，密度被稀释，整行掉到阈值下；
+  现在横向断开、按段打分，字幕段自己胜出。
+- **旧逻辑按带宽加总选带**，遇到脖子 / 衣服那种大面积亮区会把字幕带挤掉；现在同一帧的
+  候选段全部打分，最高分入选，`000366-000378` 这种右侧短句也能命中。
+
+代价是误报略多（草地、天空纹理特定帧仍可到 0.4-0.9 分），这些组大多 OCR 成空文本，被阶段 5 挡掉，
+只多花一点 OCR 时间。**策略仍是宁可多检**：漏检的字幕补不回来，误检可以过滤。
+
+### 阶段 3：分组
+
+- 与上一帧遮罩做 IoU，≥ `--similarity-threshold`（默认 0.85）视为同一组，否则关闭旧组开新组。
+- 允许组内最多 `--max-missing-frames`（默认 2）帧没有检测到字幕，超过即关闭。
+- 少于 `--min-group-frames` 帧的组丢弃（代码默认 1，CLI 默认 2）。
+- 组内保留 `keep_frames`（9）个**在时间上分布开**的帧：新帧挤掉距离最近、清晰度较低的那一帧，
+  而不是只留一串开场帧。这样组尾的帧也参与 OCR。
+
+### 阶段 4：OCR
+
+- 从保留帧里**均匀抽 `1 + --ocr-fallback-frames`（默认 3）帧**（首、中、尾），全部识别，不早停。
+- **投票取字**：按归一化文本把几次识别聚成簇，票数最多的簇获胜，取簇内置信度最高那次的文本；
+  同一句在三帧里读出 `走你` / `走你` / `走祢` 时，投票能消掉单帧的错字。
+- 单组失败不中断整个任务，记 `ocr_error` 并继续；每组的候选结果和票数写在 `ocr/group_XXXX.json`。
+- 语言用 PaddleOCR 代码：`japan` / `ch` / `en` / `korean`，也接受 `ja`、`zh` 等别名。
+- **Windows 上必须关掉 oneDNN**：`paddle.set_flags({"FLAGS_use_mkldnn": False})` +
+  `enable_mkldnn=False`，否则 PaddlePaddle 3.3 会抛
+  `NotImplementedError: ConvertPirAttribute2RuntimeAttribute`。适配器已在 `ocr.py` 内处理。
+
+### 阶段 5：同文合并、过滤与 SRT
+
+- **文本清理**：去掉汉字之间的多余空格、字母两侧空格保留、句末单个 `.,;:`（省略号保留），
+  `不需要100个铜锣烧...` 不会被截断。
+- **相邻合并**：遮罩相似度会因字幕抖动、背景运动而掉到阈值下，把一句字幕拆成多条碎条；
+  字幕淡入淡出时还会读出 `902给我看看啦` 这种带前缀噪声的变体。OCR 后把相邻、间隔 ≤
+  `--merge-gap`（默认 0.8 秒）、文本相似度 ≥ `--merge-similarity`（默认 0.80）的组并成一条，
+  起止时间取两端，**文本取置信度最高的那次识别**（噪声变体的置信度天然更低），合并次数记在
+  `merged_groups`。查找「上一个有文本的组」时会跳过中间的空白组，因此漏检一两帧不会把一句话
+  切成两条。
+- **噪声过滤**：`groups.json` 里每条都有 `in_srt` 标记，决定是否进 SRT：
+  - 文本不含任何文字字符（汉字 / 假名 / 字母 / 数字）→ 判 `no_text`，例如 `((`、`…。`；
+  - 时长 < `--min-cue-duration`（默认 0.2 秒）→ 直接丢弃，这类多是场景切换帧上的单字噪声；
+  - `ok` 组满足时长后即进；
+  - `low_confidence` 组还需置信度 ≥ 0.6、时长 ≥ 0.2 秒、文本 ≥ 2 字，否则视为误检。
+- 时间：开始 = 组首帧 `pts_time`，结束 = 组末帧 `pts_time + duration`，不是末帧 PTS。
+- 相邻重叠由 `build_srt` 裁到下一句开始；零长句补到 40 ms，不产生非法条目。
+- SRT 使用 UTF-8 无 BOM，句序按时间排序并连续编号。
+
+## 参数
+
+阶段 0 / 1：
+
+| 参数 | 默认 | 作用 |
+| --- | --- | --- |
+| `--crop/--no-crop` | 开启 | 关闭后只做阶段 0（且不能开 OCR） |
+| `--crop-unit` | `percent` | `percent`（0-100）或 `pixel` |
+| `--crop-box` | `5,72,95,97` | `x_start,y_start,x_end,y_end`，单位由 `--crop-unit` 决定 |
+| `--crop-scale` | `1.0` | 裁剪图缩放，0.1～8.0 |
+| `--crop-variants` | `gray,clahe,otsu,adaptive` | `none` 只留彩色裁剪，长片建议关掉变体省磁盘 |
+| `--save-frames/--no-save-frames` | 开启 | 是否保存整帧 PNG |
+
+阶段 2～5：
+
+| 参数 | 默认 | 作用 |
+| --- | --- | --- |
+| `--ocr/--no-ocr` | 开启 | 关闭后只做检测与分组，不生成 SRT |
+| `--ocr-engine` | `auto` | `auto` / `paddleocr` / `none`（`none` 等同 `--no-ocr`） |
+| `--ocr-language` | `japan` | PaddleOCR 语言代码；中文片源用 `ch` |
+| `--ocr-confidence-threshold` | `0.85` | 低于此值换候选帧重识别 |
+| `--ocr-fallback-frames` | `2` | 额外候选帧数量 |
+| `--detection-threshold` | `0.40` | 字幕存在性分数阈值 |
+| `--similarity-threshold` | `0.85` | 同组所需遮罩 IoU |
+| `--max-missing-frames` | `2` | 组内容忍的漏检帧数 |
+| `--min-group-frames` | `2` | 少于该帧数的组丢弃 |
+| `--merge-gap` | `0.8` | 相邻组参与合并的最大间隔（秒） |
+| `--merge-similarity` | `0.80` | 合并所需文本相似度（忽略标点 / 全半角后比较） |
+| `--min-cue-duration` | `0.2` | 短于此值的条目直接不进 SRT |
+| `--from-crops` | 无 | 复用已有任务的 `crops/`，跳过解码，只跑阶段 2～5 |
+
+## 复用 crops（推荐用于调算法）
+
+阶段 0/1 的产物是完全自洽的：`crops/<frame>.png` + `frame_index.csv` 就够跑后半程。改检测或
+OCR 参数后不必再花半小时解码：
+
+```bash
+.venv\Scripts\anime-subtitle-extractor.exe --from-crops output\demo_srt --output output\demo_srt_ocr --ocr-language ch
+```
+
+- `--from-crops` 指向旧任务目录（含 `crops/` 与 `frame_index.csv`），`--output` 必须是新的空目录；
+- 只做 检测 → 分组 → OCR → SRT，产出与全量跑批一致（`detection/`、`groups/`、`ocr/`、`result.srt`）；
+- 批量启动脚本 `bat\subtitle\run_subtitle_srt.bat` 已自动判断：默认输出目录里存在
+  `crops\crop_config.json` 时，改为 `--from-crops`，并把结果写到 `output\<名称>_srt_ocr`，屏幕日志会打印
+  `mode : Reuse crops ...`。同一个视频反复调参时省掉全部解码时间。
 
 ## 输出文件
 
 ```text
-output/episode01_frames/
-├── video_info.json              # 元信息、实际解码帧数、时间轴统计与异常计数
-├── frame_index.csv              # 每帧唯一记录，包含时间数据来源
-├── frames/                      # --no-save-frames 时不创建
-│   ├── 000000.png
-│   ├── 000001.png
-│   └── ...
-├── timestamp_anomalies.jsonl     # 按帧记录异常/回退；没有异常时为空
-├── analysis.log                 # 开始、结束、异常与失败堆栈
-└── task_status.json             # running / completed / failed / interrupted
+output/episode01/
+├── video_info.json                  # 解码统计、时间轴、裁剪摘要、extraction 摘要
+├── frame_index.csv                  # 每帧 PTS / duration 及来源
+├── frames/                          # --no-save-frames 时不创建
+├── crops/                           # 彩色裁剪；变体在 crops/<variant>/
+├── crop_config.json                 # 实际区域、像素框、尺寸、变体参数
+├── crop_preview.jpg                 # 抽 4 帧整帧红框 + 裁剪图
+├── detection/frame_detection.csv    # 每帧 has_subtitle / score / 特征 / 清晰度
+├── debug/similarity.csv             # 相邻检测帧的 IoU 与判定（same / new / start）
+├── debug/detection_visualization.jpg
+├── debug/groups_visualization.jpg   # 前 12 组的最佳帧、时间、文本
+├── groups/groups.json               # 每组帧范围、时间、文本、置信度、状态、in_srt
+├── groups/group_0001/frame_000123.png  # 组内保留帧（最多 9 张，时间上分布）
+├── ocr/group_0001.json              # 该组每次 OCR 调用的文本、置信度、box 数
+├── result.srt                       # 最终字幕
+├── result.json                      # 配置、摘要与完整分组列表
+├── timestamp_anomalies.jsonl        # 时间轴异常，正常时为空
+├── analysis.log
+└── task_status.json                 # running / completed / failed / interrupted
 ```
 
-`video_info.json` 中：
-
-- `frame_count`：实际解码帧数，不是 `平均 FPS × 时长`。
-- `expected_frame_count`：容器声明的帧数，只是参考，可能为空或不准确。
-- `index_record_count`：实际写入索引的记录数；成功时必须等于 `frame_count`。
-- `duration` / `duration_source`：优先视频流时长，其次容器时长，均未知时采用解码显示跨度。
-- `first_pts` / `last_display_end` / `decoded_duration`：解码得到的原时间轴首帧时间、
-  末帧显示结束时间、二者之差，可能与容器时长不同。
-- `frame_rate_mode`：检查实际相邻 PTS 间隔后标记 `CFR` / `VFR`；少于 3 帧、缺失 PTS、
-  重复或倒退 PTS 时保守标记 `unknown`。不能仅凭平均 FPS 判断。
-- `timestamp_complete_rate`：有原始解码 PTS 的帧数 / 实际解码帧数。
-- `pts_sources` / `duration_sources` / `anomaly_counts`：用于审计回退和异常。
+`result.json` 的 `summary`：`detected_frames`、`processed_frames`、`detection_rate`、`groups`、
+`groups_with_text`、`srt_cues`、`merged_groups`、`ocr_calls`、`ocr_failures`。
 
 ## 时间轴约定
 
-`frame_index.csv` 前四列保持 PRD 的定义：
-`frame_index,image_path,pts_time,duration`。关闭帧保存时 `image_path` 为空，不伪造图片路径。
+- 原始 PTS 秒数 = `raw_pts × time_base`，不减首帧 PTS；不按平均 FPS 重建 VFR 时间轴。
+- 帧持续时间优先取解码器值，其次取下一帧 PTS 间隔，最后才用显式 / 平均 FPS；来源逐帧记录。
+- 字幕结束时间取末帧 `pts_time + duration`。
 
-另外保留 `raw_pts`、`time_base`、`pts_source`、`duration_source`，以及 PTS 秒数和
-持续时间各自的 `*_numerator` / `*_denominator`。内部按有理数计算；秒数列用 9 位小数
-便于查看，后续需要无损读取时使用分子 / 分母列。
+## 验证记录
 
-- 原始 PTS 秒数 = `raw_pts × time_base`，**不减掉首帧 PTS**。
-- 非零起点、负数、重复和倒退 PTS 均保留原值；异常写入日志，不静默修正。
-- 持续时间优先取解码器的正值，其次取下一帧的正 PTS 间隔。
-- 末帧缺少持续时间时，可用已知视频流起点 + 时长推导结束时间；无法采用时，
-  回退到最近有效原始 PTS 间隔，最后才用显式 FPS / 平均 FPS。
-- 缺失首帧 PTS 时使用视频流起点，仍未知则以 0 为可追溯的回退起点；后续缺失 PTS
-  优先使用上一帧持续时间，再用最近有效 PTS 间隔，最后才用 FPS。
-- FPS 回退及其他推断会记录来源和异常；有缺失 PTS 的视频不会据此宣称是 CFR。
-  无法可靠回退时直接报错，不造一个默认 25 FPS 时间轴。
-- 字幕未来的结束时间应取末帧 `pts_time + duration`，而不是末帧 PTS。
+### 60 秒片段（`demo.mp4` 前 60 秒，中文硬字幕，`--ocr-language ch`）
 
-其他时间参数：
+- 1800 帧，检测 1114 帧（61.9%），37 组（合并前 73 组），25 组有文字，105 次 OCR；
+- 合并把「喂大雄好好干啊」「什么啊不就是只鸟吗」等碎条并回单句，SRT 由 73 行降到 19 条；
+- 噪声组（`红`、`1`、`om`、`心`，均为低置信度短碎片）被 `in_srt` 过滤挡掉；
+- 残留一处 OCR 瑕疵：`2好疼`（前导字符），属于字幕淡入时截到半帧，非流程错误。
 
-| 参数 | 默认 | 作用 |
-| --- | --- | --- |
-| `--fallback-fps` | 无 | 仅在时序数据不足时明确指定 FPS 回退，优先于平均 FPS |
-| `--gap-warning-seconds` | `1.0` | 超过此值的 PTS 间隔写提示；提示不等于已证明丢帧 |
-| `--cfr-tolerance` | 自动 | CFR 间隔容差（秒），自动值考虑实际时钟精度并限制在最短间隔的 5% 内 |
+### 全片（`demo.mp4`，中文硬字幕，复用 `output\demo_srt\crops`）
 
-## 回家实际验证
+- 18,718 帧，检测 12,366 帧（66.1%），611 组（合并前 679 组），258 组有文字，3,539 次 OCR；
+- 174 条 SRT，字幕覆盖 326.3 秒；`analysis.log` 与 `result.json` 都在任务目录里；
+- 复查用户指出的两处：
+  - `000130-000167`（同一句「走你」）现在是**一条** `00:00:04,333 --> 00:00:05,600`，
+    旧结果只有 131-133 帧、时间轴缺头少尾；
+  - `000366-000378` 识别为 `嗯？`，`00:00:12,200 --> 00:00:12,633`，旧结果整段漏检；
+- 噪声过滤后仍有极少数 OCR 瑕疵（如 `谁来救救我~CO` 尾部的 `CO`），属于单帧背景笔画被读进同一行，
+  不影响时间轴。
 
-1. 先用 `--no-save-frames` 跑一次，确认命令正常完成。
-2. 检查 `task_status.json` 的 `status` 为 `completed`，且
-   `video_info.json` 的 `frame_count == index_record_count`。
-3. 用同一段视频、不同输出目录保存 PNG，抽查首帧、中间帧和末帧：编号连续，
-   文件与 `frame_index.csv` 一一对应，画面内容与原视频一致。
-4. 查看相邻 `pts_time` 与 `duration`，对照播放器时间；末帧的显示结束时间不能少算一帧。
-5. 检查 `timestamp_anomalies.jsonl`：缺失、重复、倒退、异常大间隔、
-   帧持续时间与下一个 PTS 不一致、解码帧数与容器声明不一致，都有明确记录。
-   单个末帧的 `inferred_duration` 可能只是正常回退，需要结合 `source` 判断。
-6. 若有 VFR 视频，再对照它的实际间隔检查 `VFR` 判定；不要只看 `average_fps`。
-7. 若报错或时间轴异常，反馈 `video_info.json`、`task_status.json`、
-   `timestamp_anomalies.jsonl`、`analysis.log`，必要时附前后相关 CSV 行即可。
+## 已知限制
 
-**仅 `completed` 不代表所有时间戳都正常**：成功解码但有异常的任务仍会保留原始数据，
-终端会输出提示计数，必须查看异常内容。
+- 检测是基于形态学的启发式，不是模型；换片源、换字体、换描边都可能需要重调 `--detection-threshold`。
+- 默认裁剪区是 1920×1080 日漫经验值，必须先用 `crop_preview.jpg` 确认字幕没被截断。
+- 中文演示片只能验证链路与时间轴；日文 OCR 模型（`japan`）尚未在真实日文字幕上验收。
+- 同一句 OCR 出错、文本不同的两条只有在相似度 ≥ `--merge-similarity` 时才会合并；差别太大仍会分裂。
+- 不做时间轴平滑、不做字幕翻译、不做硬字幕擦除。
 
-## 开发侧代码测试（不处理视频）
+## 测试
 
 ```bash
-uv run pytest tests/unit/test_subtitle_timeline.py tests/unit/test_subtitle_analysis.py
-uv run ruff check src/creator_agent/subtitle_extractor tests/unit/test_subtitle_timeline.py tests/unit/test_subtitle_analysis.py
+uv run pytest tests/unit/test_subtitle_timeline.py tests/unit/test_subtitle_analysis.py \
+  tests/unit/test_subtitle_crop.py tests/unit/test_subtitle_extraction.py
+uv run ruff check src/creator_agent/subtitle_extractor tests/unit/test_subtitle_*.py
 ```
 
-这些测试使用模拟解码器、帧和图片保存，不读取或生成真实视频，不需要安装 PyAV。
-覆盖 PTS / VFR / 末帧时间、数据来源、逐帧文件映射、CLI、输出保护、异常与中断处理。
-真实解码兼容性、画面正确性和处理性能仍需上述实际验证，反馈后再进入阶段 1。
+单测用模拟解码器与假 OCR 引擎，不读真实视频、不需要 PyAV / PaddleOCR。覆盖时间轴回退、裁剪区域与
+变体、检测打分、分组状态机、同文合并、噪声过滤、低置信度回退、OCR 异常降级、SRT 格式化与重叠裁剪、
+CLI 参数校验与输出保护。

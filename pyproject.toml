@@ -35,6 +35,12 @@ subtitle-extractor = [
     "av>=16,<18",
     "pillow>=10,<13",
 ]
+# 阶段 4 的日文/中文字幕 OCR。PaddlePaddle 体积大且只支持部分平台，单独一档，
+# 不装也能跑到 groups.json，只是拿不到文字和 SRT（用 --no-ocr 显式跳过）。
+subtitle-ocr = [
+    "paddlepaddle>=3.3,<4",
+    "paddleocr>=3.7,<4",
+]
 
 [project.scripts]
 creator-agent = "creator_agent.cli.main:app"

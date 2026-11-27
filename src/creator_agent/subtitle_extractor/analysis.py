@@ -4,6 +4,7 @@ import csv
 import importlib
 import json
 import logging
+import os
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -11,6 +12,9 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from creator_agent.subtitle_extractor.crop import CropConfig, CropProcessor
+from creator_agent.subtitle_extractor.extraction import ExtractionConfig, SubtitleExtractor
+from creator_agent.subtitle_extractor.ocr import OcrEngine
 from creator_agent.subtitle_extractor.timeline import FrameRecord, FrameTimeline, VideoAnalysisError
 
 
@@ -41,11 +45,18 @@ def analyze_video(
     fallback_fps: float | None = None,
     gap_warning_seconds: float = 1.0,
     cfr_tolerance: float | None = None,
+    crop_config: CropConfig | None = None,
+    extraction_config: ExtractionConfig | None = None,
+    ocr_engine: OcrEngine | None = None,
     on_progress: Callable[[int, int | None], None] | None = None,
 ) -> AnalysisResult:
     input_path = input_path.expanduser().resolve()
     if not input_path.is_file():
         raise VideoAnalysisError(f"Input video does not exist or is not a file: {input_path}")
+    if extraction_config is not None and crop_config is None:
+        raise VideoAnalysisError(
+            "Subtitle detection needs an active crop region; enable cropping or disable extraction"
+        )
     output_dir = (
         output_dir.expanduser().resolve() if output_dir is not None else (Path("output") / input_path.stem).resolve()
     )
@@ -109,6 +120,8 @@ def analyze_video(
                 "time_base": str(time_base),
                 "stream_start_time": float(stream_start) if stream_start is not None else None,
                 "save_frames": save_frames,
+                "crop_enabled": crop_config is not None,
+                "extraction_enabled": extraction_config is not None,
             }
             return _decode(
                 container,
@@ -118,6 +131,9 @@ def analyze_video(
                 output_dir,
                 info,
                 save_frames=save_frames,
+                crop_config=crop_config,
+                extraction_config=extraction_config,
+                ocr_engine=ocr_engine,
                 on_progress=on_progress,
             )
     except VideoAnalysisError:
@@ -135,12 +151,15 @@ def _decode(
     info: dict[str, Any],
     *,
     save_frames: bool,
+    crop_config: CropConfig | None,
+    extraction_config: ExtractionConfig | None,
+    ocr_engine: OcrEngine | None,
     on_progress: Callable[[int, int | None], None] | None,
 ) -> AnalysisResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     stat = input_path.stat()
     task = {
-        "stage": "stage0",
+        "stage": "stage0+stage1" if crop_config is not None else "stage0",
         "status": "running",
         "input_path": str(input_path),
         "input_size": stat.st_size,
@@ -150,6 +169,8 @@ def _decode(
             "fallback_fps": float(timeline.fallback_fps) if timeline.fallback_fps else None,
             "gap_warning_seconds": float(timeline.gap_warning_seconds),
             "cfr_tolerance": (float(timeline.cfr_tolerance) if timeline.cfr_tolerance is not None else None),
+            "crop": crop_config.as_dict() if crop_config is not None else None,
+            "extraction": extraction_config.as_dict() if extraction_config is not None else None,
         },
     }
     try:
@@ -163,6 +184,41 @@ def _decode(
         stack.callback(handler.close)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
+        if os.environ.get("SUBTITLE_CONSOLE_LOG") == "1":
+            # Optional mirror for launchers that tee the console: one line per
+            # subtitle group makes the long OCR phase visible while it runs.
+            # Stage summaries stay on the CLI's own timestamped lines.
+            class _GroupOnly(logging.Filter):
+                def filter(self, record: logging.LogRecord) -> bool:
+                    message = record.getMessage()
+                    return record.levelno >= logging.WARNING or message.startswith("Group ")
+
+            console = logging.StreamHandler()
+            console.setLevel(logging.INFO)
+            console.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", "%H:%M:%S"))
+            console.addFilter(_GroupOnly())
+            stack.callback(console.close)
+            logger.addHandler(console)
+        processor: CropProcessor | None = None
+        if crop_config is not None:
+            processor = CropProcessor(
+                output_dir,
+                crop_config,
+                frame_width=info["width"],
+                frame_height=info["height"],
+                logger=logger,
+            )
+        extractor: SubtitleExtractor | None = None
+        if extraction_config is not None:
+            extractor = SubtitleExtractor(
+                output_dir,
+                extraction_config,
+                frame_width=info["width"],
+                frame_height=info["height"],
+                logger=logger,
+                engine=ocr_engine,
+                input_path=input_path,
+            )
         anomalies_file = stack.enter_context(
             (output_dir / "timestamp_anomalies.jsonl").open("w", encoding="utf-8", buffering=1)
         )
@@ -186,6 +242,7 @@ def _decode(
         )
         decoded_frames = 0
         indexed_frames = 0
+        frame_times: list[tuple[float, float]] = []
 
         def anomaly(event: dict[str, Any]) -> None:
             line = json.dumps(event, ensure_ascii=False)
@@ -197,6 +254,9 @@ def _decode(
         def write_record(record: FrameRecord) -> None:
             nonlocal indexed_frames
             timing = record.timing
+            if timing.frame_index != len(frame_times):
+                raise VideoAnalysisError("Frame index and timing list diverged")
+            frame_times.append((float(timing.pts_time), float(record.duration)))
             writer.writerow(
                 [
                     timing.frame_index,
@@ -242,6 +302,17 @@ def _decode(
             )
             if error is not None:
                 task["error"] = error
+            if processor is not None:
+                info["crop"] = processor.summary()
+                task["crop"] = {
+                    "crop_count": processor.crop_count,
+                    "frame_size_mismatch_count": processor.frame_size_mismatch_count,
+                }
+            if "extraction" in info:
+                task["extraction"] = {
+                    key: info["extraction"][key]
+                    for key in ("groups", "groups_with_text", "detected_frames", "ocr_calls", "srt")
+                }
             index_file.flush()
             _write_json(output_dir / "video_info.json", info)
             _write_json(output_dir / "task_status.json", task)
@@ -250,6 +321,15 @@ def _decode(
         try:
             if save_frames:
                 (output_dir / "frames").mkdir()
+            if processor is not None:
+                logger.info(
+                    "Stage 1 started: %dx%d -> %dx%d, variants: %s",
+                    processor.box.width,
+                    processor.box.height,
+                    processor.output_width,
+                    processor.output_height,
+                    ", ".join(processor.config.variants) or "none",
+                )
             for frame_index, frame in enumerate(container.decode(stream)):
                 decoded_frames += 1
                 if frame.width != info["width"] or frame.height != info["height"]:
@@ -264,8 +344,13 @@ def _decode(
                     time_base=Fraction(frame.time_base) if frame.time_base is not None else None,
                     duration=getattr(frame, "duration", None),
                 )
-                if save_frames:
-                    frame.to_image().save(output_dir / "frames" / f"{frame_index:06d}.png")
+                image = frame.to_image() if save_frames or processor is not None else None
+                if save_frames and image is not None:
+                    image.save(output_dir / "frames" / f"{frame_index:06d}.png")
+                if processor is not None and image is not None:
+                    crop_image = processor.process(frame_index, image)
+                    if extractor is not None:
+                        extractor.observe(frame_index, crop_image)
                 if record is not None:
                     write_record(record)
                 if on_progress is not None:
@@ -284,6 +369,10 @@ def _decode(
                 )
             if indexed_frames != decoded_frames:
                 raise VideoAnalysisError("Decoded frame count does not match index record count")
+            if processor is not None:
+                processor.close("completed")
+            if extractor is not None:
+                info["extraction"] = extractor.finish(frame_times)
             persist("completed")
             logger.info(
                 "Stage 0 completed: %d frames, %s, %d anomalies",
@@ -291,9 +380,29 @@ def _decode(
                 timeline.frame_rate_mode,
                 sum(timeline.anomalies.values()),
             )
+            if processor is not None:
+                logger.info("Stage 1 completed: %d crops written under %s", processor.crop_count, processor.crops_dir)
+            if extractor is not None:
+                summary = info["extraction"]
+                logger.info(
+                    "Stages 2-5 completed: %d subtitle groups, %d with text, %d OCR calls",
+                    summary["groups"],
+                    summary["groups_with_text"],
+                    summary["ocr_calls"],
+                )
         except (Exception, KeyboardInterrupt) as exc:
             status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
             logger.exception("Stage 0 %s; completed data is preserved", status)
+            if processor is not None:
+                try:
+                    processor.close(status)
+                except Exception:
+                    logger.exception("Failed to write stage-1 crop artifacts")
+            if extractor is not None:
+                try:
+                    extractor.close(status)
+                except Exception:
+                    logger.exception("Failed to write partial subtitle artifacts")
             persist(status, str(exc) or type(exc).__name__)
             raise
     return AnalysisResult(output_dir=output_dir, video_info=info)

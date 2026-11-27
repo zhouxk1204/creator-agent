@@ -317,6 +317,7 @@ def test_cli_success_arguments_and_output(input_path, tmp_path, monkeypatch):
             "0.5",
             "--cfr-tolerance",
             "0",
+            "--no-ocr",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -334,7 +335,7 @@ def test_cli_domain_error_is_reported(input_path, monkeypatch):
         raise VideoAnalysisError("decode failed")
 
     monkeypatch.setattr(cli, "analyze_video", failed)
-    result = CliRunner().invoke(cli.app, ["--input", str(input_path), "--no-save-frames"])
+    result = CliRunner().invoke(cli.app, ["--input", str(input_path), "--no-save-frames", "--no-ocr"])
     assert result.exit_code == 1
     assert "Stage 0 failed: decode failed" in result.output
 

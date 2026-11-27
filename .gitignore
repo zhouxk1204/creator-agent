@@ -46,3 +46,8 @@ Thumbs.db
 /character_library/characters/*/*.jpg
 /character_library/characters/*/*.jpeg
 /character_library/characters/*/*.png
+/demo.mp4
+/_clip*.mp4
+/_*.py
+/_*.png
+/_*.json
