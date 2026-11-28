@@ -280,7 +280,7 @@ def main(
             )
             try:
                 engine = create_ocr_engine(ocr_engine, ocr_language, ocr_device)
-                echo(f"OCR device: {getattr(engine, 'device', 'n/a')}")
+                echo(f"OCR device: {getattr(engine, 'summary', getattr(engine, 'device', 'n/a'))}")
             except OcrError as exc:
                 typer.echo(f"OCR unavailable: {exc}", err=True)
                 raise typer.Exit(1) from exc

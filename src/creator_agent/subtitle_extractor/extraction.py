@@ -556,6 +556,7 @@ class SubtitleExtractor:
             "merged_groups": self._merged_count,
             "ocr_calls": self._ocr_calls,
             "ocr_failures": self._ocr_failures,
+            "ocr_device": getattr(self.engine, "summary", None) if self.engine else None,
             "confidence_threshold": self.config.confidence_threshold,
             "srt": "result.srt",
         }

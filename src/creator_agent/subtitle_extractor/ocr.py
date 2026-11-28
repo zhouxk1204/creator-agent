@@ -151,6 +151,7 @@ class PaddleOcrEngine:
         except Exception:  # pragma: no cover - flag support varies by build
             pass
         self.device = _resolve_device(device, paddle)
+        self.summary = _device_summary(self.device, paddle)
         options = dict(
             lang=self.language,
             use_doc_orientation_classify=False,
@@ -171,6 +172,26 @@ class PaddleOcrEngine:
         if hasattr(self._ocr, "predict"):
             return _parse_pipeline_results(self._ocr.predict(bgr), self.name)
         return _parse_legacy_results(self._ocr.ocr(bgr, cls=False), self.name)
+
+
+def _device_summary(device: str, paddle: object) -> str:
+    """One-line description for the startup log: build, device, GPU name."""
+    try:
+        version = str(paddle.__version__)  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - defensive
+        version = "?"
+    cuda_build = "unknown"
+    try:
+        cuda_build = "yes" if paddle.device.is_compiled_with_cuda() else "no"  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - defensive
+        pass
+    if device != "cpu":
+        try:
+            name = paddle.device.cuda.get_device_name(0)  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - defensive
+            name = "gpu"
+        return f"gpu:0 ({name}) | paddle {version} | cuda build: {cuda_build}"
+    return f"cpu | paddle {version} | cuda build: {cuda_build}"
 
 
 def _resolve_device(requested: str, paddle: object) -> str:
