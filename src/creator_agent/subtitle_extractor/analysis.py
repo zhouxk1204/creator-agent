@@ -179,6 +179,7 @@ def _decode(
     except FileExistsError as exc:
         raise VideoAnalysisError(f"Another task already owns the output directory: {output_dir}") from exc
     logger = logging.Logger("subtitle_extractor.stage0")
+    logger.setLevel(logging.INFO)
     with ExitStack() as stack:
         handler = logging.FileHandler(output_dir / "analysis.log", encoding="utf-8")
         stack.callback(handler.close)

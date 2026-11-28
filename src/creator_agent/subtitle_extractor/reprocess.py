@@ -104,6 +104,7 @@ def analyze_crops(
         raise VideoAnalysisError(f"Another task already owns the output directory: {output_dir}") from exc
 
     logger = logging.Logger("subtitle_extractor.crops")
+    logger.setLevel(logging.INFO)
     handler = logging.FileHandler(output_dir / "analysis.log", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
