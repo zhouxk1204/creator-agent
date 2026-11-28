@@ -15,6 +15,7 @@ from typing import Any
 from creator_agent.subtitle_extractor.crop import CropConfig, CropProcessor
 from creator_agent.subtitle_extractor.extraction import ExtractionConfig, SubtitleExtractor
 from creator_agent.subtitle_extractor.ocr import OcrEngine
+from creator_agent.subtitle_extractor.paths import default_task_dir
 from creator_agent.subtitle_extractor.timeline import FrameRecord, FrameTimeline, VideoAnalysisError
 
 
@@ -58,7 +59,9 @@ def analyze_video(
             "Subtitle detection needs an active crop region; enable cropping or disable extraction"
         )
     output_dir = (
-        output_dir.expanduser().resolve() if output_dir is not None else (Path("output") / input_path.stem).resolve()
+        output_dir.expanduser().resolve()
+        if output_dir is not None
+        else default_task_dir(input_path.stem, input_path.parent).resolve()
     )
     try:
         if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):

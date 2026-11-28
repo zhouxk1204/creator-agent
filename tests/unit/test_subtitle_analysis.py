@@ -218,7 +218,7 @@ def test_image_save_error_marks_failure(input_path, tmp_path, install_decoder):
 def test_default_output_and_existing_empty_directory(input_path, tmp_path, install_decoder, monkeypatch):
     install_decoder()
     monkeypatch.chdir(tmp_path)
-    output = tmp_path / "output" / "episode"
+    output = tmp_path / "output" / "episode_srt"
     output.mkdir(parents=True)
     result = analyze_video(input_path, save_frames=False)
     assert result.output_dir == output

@@ -209,6 +209,18 @@ OCR 参数后不必再花半小时解码：
   `crops\crop_config.json` 时，改为 `--from-crops`，并把结果写到 `output\<名称>_srt_ocr`，屏幕日志会打印
   `mode : Reuse crops ...`。同一个视频反复调参时省掉全部解码时间。
 
+## 输出位置
+
+默认输出根目录取 `logs/.last_doraemon_materials` 记录的素材目录（每次素材下载刷新），任务目录为
+`<素材目录>/<视频名>_srt`；记录为空或目录已不存在时回退到仓库 `output/<视频名>_srt`。
+`--output` 仍可显式指定，`--from-crops` 默认在 crops 同级新建 `<名字>_ocr`。
+
+## OCR 设备
+
+`--ocr-device auto|gpu|cpu`，默认 `auto`：PaddlePaddle 是 CUDA 版且有可用显卡时走 GPU，否则 CPU；
+显式 `gpu` 但当前是 CPU 版 Paddle 会直接报错提示，不会静默退回。
+启动时会打印实际设备（`OCR device: gpu|cpu`）。
+
 ## 输出文件
 
 ```text

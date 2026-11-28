@@ -10,12 +10,15 @@ rem to logs\ when the run ends.
 rem
 rem Usage:
 rem   run_subtitle_srt.bat                                  ^(demo.mp4, Chinese OCR^)
-rem   run_subtitle_srt.bat "D:\Anime\ep01.mp4"              ^(auto output\ep01_srt^)
+rem   run_subtitle_srt.bat "D:\Anime\ep01.mp4"              ^(auto <materials>\ep01_srt^)
 rem   run_subtitle_srt.bat "D:\Anime\ep01.mp4" japan        ^(Japanese OCR^)
 rem   run_subtitle_srt.bat "D:\Anime\ep01.mp4" japan  out\ep01
 rem
 rem Args: 1=input video, 2=OCR language ^(japan^|ch^|en^|korean, default ch^),
-rem       3=output dir ^(must not exist, default output\<name>_srt^).
+rem       3=output dir ^(must not exist, default <materials>\<name>_srt^).
+rem
+rem Output root = the folder recorded in logs\.last_doraemon_materials
+rem (the desktop doraemon batch folder); falls back to output\ when absent.
 rem Runtime: about 3-4x the video length ^(decode + OCR^); a 10 min episode
 rem takes roughly 35-45 min on a normal PC.
 rem ---------------------------------------------------------------------------
@@ -35,7 +38,14 @@ if not exist "%INPUT%" (
     goto :fail
 )
 for %%I in ("%INPUT%") do set "STEM=%%~nI"
-if "%OUTDIR%"=="" set "OUTDIR=output\%STEM%_srt"
+
+rem Default output: the doraemon materials folder from the launcher marker.
+set "MAT="
+if exist "%REPO_ROOT%\logs\.last_doraemon_materials" (
+    set /p MAT=<"%REPO_ROOT%\logs\.last_doraemon_materials"
+)
+if defined MAT if exist "%MAT%\." set "OUTDIR=%MAT%\%STEM%_srt"
+if "%OUTDIR%"=="" set "OUTDIR=%REPO_ROOT%\output\%STEM%_srt"
 
 set "EXE=%REPO_ROOT%\.venv\Scripts\anime-subtitle-extractor.exe"
 if not exist "%EXE%" (
@@ -104,11 +114,10 @@ echo       mode       : %MODE%
 echo.
 
 echo [3/4] Running stages 0-5.
-echo       Detection progress is live; one line per subtitle group appears while
-echo       OCR runs. Do not close this window.
+echo       One live progress line: frames / total, elapsed, percent.
+echo       Do not close this window.
 echo.
 
-set "SUBTITLE_CONSOLE_LOG=1"
 if defined REUSE (
     "%EXE%" --from-crops "%REUSE%" --output "%OUTDIR%" --ocr-language "%LANG%"
 ) else (
@@ -141,8 +150,7 @@ if errorlevel 1 goto :fail_rc
 echo.
 echo Done. SRT: %OUTDIR%\result.srt
 echo Log copy: %LOG%
-echo Audit: open groups\groups.json ^(field in_srt^) and
-echo        debug\groups_visualization.jpg for the sampled group frames.
+echo Audit: open groups\groups.json ^(in_srt + OCR readings per group^).
 echo.
 pause
 exit /b 0

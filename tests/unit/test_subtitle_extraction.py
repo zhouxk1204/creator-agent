@@ -555,7 +555,7 @@ def test_cli_runs_ocr_and_reports_srt(tmp_path, monkeypatch):
     calls = []
     engine_calls = []
 
-    def fake_engine(name, language):
+    def fake_engine(name, language, device="auto"):
         engine_calls.append((name, language))
         return FakeEngine([])
 
@@ -641,3 +641,47 @@ def test_cli_no_ocr_skips_extraction(tmp_path, monkeypatch):
     assert calls[0]["extraction_config"] is None
     assert calls[0]["ocr_engine"] is None
     assert "Stages 2-5" not in result.output
+
+
+def test_default_task_dir_follows_doraemon_materials(tmp_path):
+    from creator_agent.subtitle_extractor import paths
+
+    materials = tmp_path / "doraemon_943"
+    materials.mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / ".last_doraemon_materials").write_text(f"{materials}\n", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert paths.materials_root(work) == materials
+    assert paths.default_task_dir("demo", work) == materials / "demo_srt"
+    assert paths.default_output_root(work) == materials
+
+
+def test_missing_or_stale_marker_falls_back_to_repo_output(tmp_path):
+    from creator_agent.subtitle_extractor import paths
+
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "work").mkdir()
+    # Recorded folder no longer exists -> treat as no marker at all.
+    (tmp_path / "logs" / ".last_doraemon_materials").write_text(f"{tmp_path / 'gone'}\n", encoding="utf-8-sig")
+    assert paths.materials_root(tmp_path / "work") is None
+    assert paths.default_output_root(tmp_path / "work") == Path.cwd() / "output"
+
+
+class _CpuOnlyPaddle:
+    class device:  # noqa: N801 - mirrors the paddle API
+        @staticmethod
+        def is_compiled_with_cuda():
+            return False
+
+
+def test_resolve_device_prefers_cpu_without_cuda():
+    from creator_agent.subtitle_extractor.ocr import OcrError, _resolve_device
+
+    assert _resolve_device("auto", _CpuOnlyPaddle()) == "cpu"
+    assert _resolve_device("cpu", _CpuOnlyPaddle()) == "cpu"
+    with pytest.raises(OcrError, match="no CUDA device"):
+        _resolve_device("gpu", _CpuOnlyPaddle())
+    with pytest.raises(OcrError, match="Unknown OCR device"):
+        _resolve_device("tpu", _CpuOnlyPaddle())

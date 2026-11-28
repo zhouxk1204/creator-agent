@@ -135,7 +135,7 @@ def _parse_legacy_results(results: object, engine_name: str) -> OcrReading:
 class PaddleOcrEngine:
     name = "paddleocr"
 
-    def __init__(self, language: str = "japan") -> None:
+    def __init__(self, language: str = "japan", device: str = "auto") -> None:
         self.language = normalize_language(language)
         try:
             import paddle
@@ -150,6 +150,7 @@ class PaddleOcrEngine:
             paddle.set_flags({"FLAGS_use_mkldnn": False})
         except Exception:  # pragma: no cover - flag support varies by build
             pass
+        self.device = _resolve_device(device, paddle)
         options = dict(
             lang=self.language,
             use_doc_orientation_classify=False,
@@ -157,6 +158,8 @@ class PaddleOcrEngine:
             use_textline_orientation=False,
             enable_mkldnn=False,
         )
+        if self.device != "cpu":
+            options["device"] = self.device
         try:
             self._ocr = PaddleOCR(**options)
         except TypeError:
@@ -170,12 +173,34 @@ class PaddleOcrEngine:
         return _parse_legacy_results(self._ocr.ocr(bgr, cls=False), self.name)
 
 
-def create_ocr_engine(name: str, language: str) -> OcrEngine | None:
+def _resolve_device(requested: str, paddle: object) -> str:
+    """Pick the inference device, falling back to CPU when CUDA is unavailable."""
+    key = (requested or "auto").strip().lower()
+    if key not in {"auto", "cpu", "gpu"}:
+        raise OcrError(f"Unknown OCR device: {requested}. Supported: auto, cpu, gpu")
+    if key == "cpu":
+        return "cpu"
+    try:
+        has_cuda = bool(paddle.device.is_compiled_with_cuda())  # type: ignore[attr-defined]
+        count = int(paddle.device.cuda.device_count()) if has_cuda else 0  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - defensive
+        has_cuda, count = False, 0
+    if has_cuda and count > 0:
+        return "gpu"
+    if key == "gpu":
+        raise OcrError(
+            "OCR device 'gpu' requested but this PaddlePaddle build has no CUDA device; "
+            "install paddlepaddle-gpu or pass --ocr-device cpu"
+        )
+    return "cpu"
+
+
+def create_ocr_engine(name: str, language: str, device: str = "auto") -> OcrEngine | None:
     key = name.strip().lower()
     if key in {"none", "off", "disabled"}:
         return None
     if key in {"auto", "paddleocr"}:
-        return PaddleOcrEngine(language)
+        return PaddleOcrEngine(language, device)
     raise OcrError(f"Unknown OCR engine: {name}. Supported: auto, none, {', '.join(SUPPORTED_ENGINES)}")
 
 

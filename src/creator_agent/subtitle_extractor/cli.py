@@ -103,7 +103,12 @@ def main(
         ),
     ] = None,
     output_dir: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Empty task directory (default: output/<video stem>).")
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Empty task directory (default: <doraemon materials>/<video stem>_srt, else output/<stem>_srt).",
+        ),
     ] = None,
     save_frames: Annotated[
         bool,
@@ -159,6 +164,10 @@ def main(
     ocr_language: Annotated[
         str, typer.Option("--ocr-language", help="PaddleOCR language code: japan, ch, en, korean ...")
     ] = "japan",
+    ocr_device: Annotated[
+        str,
+        typer.Option("--ocr-device", help="Inference device: auto (GPU when CUDA is available), gpu or cpu."),
+    ] = "auto",
     ocr_confidence_threshold: Annotated[
         float, typer.Option("--ocr-confidence-threshold", help="Re-run OCR on a fallback frame below this score.")
     ] = 0.85,
@@ -265,9 +274,13 @@ def main(
         except (DetectionError, GroupingError, ExtractionError) as exc:
             raise typer.BadParameter(str(exc)) from exc
         if ocr_engine.strip().lower() not in {"none", "off", "disabled"}:
-            echo(f"Initialising OCR engine '{ocr_engine}' (language {ocr_language}); first run may download models.")
+            echo(
+                f"Initialising OCR engine '{ocr_engine}' (language {ocr_language}, device {ocr_device}); "
+                "first run may download models."
+            )
             try:
-                engine = create_ocr_engine(ocr_engine, ocr_language)
+                engine = create_ocr_engine(ocr_engine, ocr_language, ocr_device)
+                echo(f"OCR device: {getattr(engine, 'device', 'n/a')}")
             except OcrError as exc:
                 typer.echo(f"OCR unavailable: {exc}", err=True)
                 raise typer.Exit(1) from exc
