@@ -73,7 +73,7 @@ bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4" japan
 一次解码
   ├── 阶段 0：PTS / duration / 帧索引 → frame_index.csv、video_info.json
   ├── 阶段 1：固定区域裁剪 → crops/<frame>.png，可选四种变体
-  ├── 阶段 2：字幕打分 → detection/frame_detection.csv
+  ├── 阶段 2：字幕打分（结果只进 summary，不落 CSV）
   └── 阶段 3：遮罩 IoU 比较 → 连续分组（组内留 9 个均匀分布帧）
         ↓ 分组关闭时
         阶段 4：抽 3 帧 OCR 投票 → ocr/group_XXXX.json
@@ -136,7 +136,7 @@ score = 0.5 × min(1, 亮像素比例 / 0.45)
 - 从保留帧里**均匀抽 `1 + --ocr-fallback-frames`（默认 3）帧**（首、中、尾），全部识别，不早停。
 - **投票取字**：按归一化文本把几次识别聚成簇，票数最多的簇获胜，取簇内置信度最高那次的文本；
   同一句在三帧里读出 `走你` / `走你` / `走祢` 时，投票能消掉单帧的错字。
-- 单组失败不中断整个任务，记 `ocr_error` 并继续；每组的候选结果和票数写在 `ocr/group_XXXX.json`。
+- 单组失败不中断整个任务，记 `ocr_error` 并继续；每组候选读数写进 `groups.json` 的 `ocr` 字段。
 - 语言用 PaddleOCR 代码：`japan` / `ch` / `en` / `korean`，也接受 `ja`、`zh` 等别名。
 - **Windows 上必须关掉 oneDNN**：`paddle.set_flags({"FLAGS_use_mkldnn": False})` +
   `enable_mkldnn=False`，否则 PaddlePaddle 3.3 会抛
@@ -219,13 +219,8 @@ output/episode01/
 ├── crops/                           # 彩色裁剪；变体在 crops/<variant>/
 ├── crop_config.json                 # 实际区域、像素框、尺寸、变体参数
 ├── crop_preview.jpg                 # 抽 4 帧整帧红框 + 裁剪图
-├── detection/frame_detection.csv    # 每帧 has_subtitle / score / 特征 / 清晰度
-├── debug/similarity.csv             # 相邻检测帧的 IoU 与判定（same / new / start）
-├── debug/detection_visualization.jpg
-├── debug/groups_visualization.jpg   # 前 12 组的最佳帧、时间、文本
-├── groups/groups.json               # 每组帧范围、时间、文本、置信度、状态、in_srt
+├── groups/groups.json               # 每组帧范围、时间、文本、置信度、状态、in_srt、OCR 候选读数
 ├── groups/group_0001/frame_000123.png  # 组内保留帧（最多 9 张，时间上分布）
-├── ocr/group_0001.json              # 该组每次 OCR 调用的文本、置信度、box 数
 ├── ocr/frames.json                  # 逐帧文本：有字的帧才写，空的不写
 ├── result.srt                       # 最终字幕
 ├── result.json                      # 配置、摘要与完整分组列表
@@ -234,8 +229,14 @@ output/episode01/
 └── task_status.json                 # running / completed / failed / interrupted
 ```
 
+输出只保留上表这些文件：没有 `detection/`、没有 `debug/`、也没有每组一个的 `ocr/group_XXXX.json`，
+每次 OCR 调用的文本与置信度合并进 `groups.json` 的 `ocr` 字段。
+
 `result.json` 的 `summary`：`detected_frames`、`processed_frames`、`detection_rate`、`groups`、
 `groups_with_text`、`srt_cues`、`merged_groups`、`ocr_calls`、`ocr_failures`。
+
+控制台只有一个原地刷新的进度行（`817 / 18718  0:04:24  45%`），重定向到文件时每 4 秒写一行；
+每组的明细日志降为 DEBUG，只进 `analysis.log`，不刷屏。
 
 `ocr/frames.json` 是逐帧清单：每条 `{frame, time, text, confidence, group_id, in_srt}`，只收录识别到文字的帧，
 空帧不写；`text` 取该帧所在组的投票结果（同组各帧共享一句），所以文件同时能回答「哪一帧有哪一句」和

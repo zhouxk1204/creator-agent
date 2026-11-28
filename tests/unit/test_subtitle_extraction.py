@@ -1,6 +1,5 @@
 """Exercise subtitle detection, grouping, OCR orchestration and SRT generation."""
 
-import csv
 import json
 import logging
 from fractions import Fraction
@@ -281,14 +280,14 @@ def test_extraction_produces_groups_srt_and_debug_outputs(input_path, tmp_path, 
     assert [group["status"] for group in groups] == ["ok", "ok"]
     assert groups[0]["start_frame"] == 0 and groups[0]["end_frame"] == 2
     assert groups[1]["start_frame"] == 5 and groups[1]["end_frame"] == 6
-    detection_rows = list(csv.DictReader((output / "detection" / "frame_detection.csv").open(encoding="utf-8")))
-    assert len(detection_rows) == 8
-    assert sum(int(row["has_subtitle"]) for row in detection_rows) == 5
     result_json = json.loads((output / "result.json").read_text(encoding="utf-8"))
     assert result_json["summary"]["groups"] == 2 and result_json["ocr_engine"] == "fake"
-    assert (output / "debug" / "detection_visualization.jpg").is_file()
-    assert (output / "debug" / "groups_visualization.jpg").is_file()
-    assert (output / "ocr" / "group_0001.json").is_file()
+    assert result_json["summary"]["detected_frames"] == 5
+    # Slim output: no detection/, no debug/, no per-group OCR files.
+    assert not (output / "detection").exists()
+    assert not (output / "debug").exists()
+    assert not (output / "ocr" / "group_0001.json").exists()
+    assert [candidate["frame_index"] for candidate in groups[0]["ocr"]] == [0, 1, 2]
     assert (output / "groups" / "group_0001" / "frame_000000.png").is_file()
     assert read_json(output / "video_info.json")["extraction"]["groups"] == 2
     assert read_json(output / "task_status.json")["status"] == "completed"
@@ -321,8 +320,8 @@ def test_crops_reuse_reruns_stages_two_to_five_without_decoding(input_path, tmp_
     status = read_json(reused / "task_status.json")
     assert status["status"] == "completed" and status["decoded_frames"] == 6
     assert read_json(reused / "video_info.json")["crops_source"] == str(first.resolve())
-    detection_rows = list(csv.DictReader((reused / "detection" / "frame_detection.csv").open(encoding="utf-8")))
-    assert len(detection_rows) == 6
+    assert len(json.loads((reused / "groups" / "groups.json").read_text(encoding="utf-8"))) == 2
+    assert not (reused / "detection").exists()
 
 
 def read_json(path):

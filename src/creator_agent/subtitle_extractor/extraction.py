@@ -1,6 +1,5 @@
 """Stages 2-5 orchestration: detection, grouping, per-group OCR and SRT output."""
 
-import csv
 import difflib
 import json
 import logging
@@ -14,7 +13,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from creator_agent.subtitle_extractor.detection import (
     DetectionConfig,
@@ -25,9 +24,6 @@ from creator_agent.subtitle_extractor.detection import (
 from creator_agent.subtitle_extractor.grouping import GroupingConfig, GroupTracker, SubtitleGroup
 from creator_agent.subtitle_extractor.ocr import OcrEngine, OcrReading
 from creator_agent.subtitle_extractor.srt import SrtCue, build_srt
-
-DETECTION_SAMPLES = 6
-GROUP_SAMPLES = 12
 
 _TEXT_CHARACTER = re.compile("[0-9A-Za-z\u00c0-\u024f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 _CJK_TEXT = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
@@ -144,6 +140,7 @@ class ExtractedGroup:
     start_time: float = 0.0
     end_time: float = 0.0
     in_srt: bool = True
+    readings: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -166,6 +163,8 @@ class ExtractedGroup:
             "in_srt": self.in_srt,
             "ocr_engine": self.engine,
             "folder": self.folder,
+            # Per-candidate OCR results live here instead of a file per group.
+            "ocr": self.readings,
         }
 
 
@@ -313,30 +312,8 @@ class SubtitleExtractor:
         self.engine = engine
         self.input_path = input_path
 
-        (output_dir / "detection").mkdir(parents=True, exist_ok=True)
-        (output_dir / "debug").mkdir(exist_ok=True)
-        (output_dir / "groups").mkdir(exist_ok=True)
+        (output_dir / "groups").mkdir(parents=True, exist_ok=True)
         (output_dir / "ocr").mkdir(exist_ok=True)
-        self._detection_file = (output_dir / "detection" / "frame_detection.csv").open(
-            "w", encoding="utf-8", newline=""
-        )
-        self._detection_writer = csv.writer(self._detection_file)
-        self._detection_writer.writerow(
-            [
-                "frame_index",
-                "has_subtitle",
-                "score",
-                "components",
-                "coverage",
-                "density",
-                "bright_fraction",
-                "text_bbox",
-                "sharpness",
-            ]
-        )
-        self._similarity_file = (output_dir / "debug" / "similarity.csv").open("w", encoding="utf-8", newline="")
-        self._similarity_writer = csv.writer(self._similarity_file)
-        self._similarity_writer.writerow(["frame_index", "previous_frame", "iou", "threshold", "decision"])
         self._tracker = GroupTracker(config.grouping, self._close_group)
         self._groups: list[ExtractedGroup] = []
         self._next_group_id = 0
@@ -345,8 +322,6 @@ class SubtitleExtractor:
         self._ocr_calls = 0
         self._ocr_failures = 0
         self._merged_count = 0
-        self._detection_samples: list[tuple[int, Image.Image, np.ndarray | None, float]] = []
-        self._sample_random = np.random.default_rng(0)
         self._closed = False
 
     def observe(self, frame_index: int, image: Image.Image) -> None:
@@ -358,7 +333,7 @@ class SubtitleExtractor:
             if rescued is not None:
                 detection, reading = rescued
                 self._ocr_calls += 1
-                self.logger.info(
+                self.logger.debug(
                     "Rescued frame %d as %r (conf %.2f, score %.2f)",
                     frame_index,
                     reading.text,
@@ -366,51 +341,11 @@ class SubtitleExtractor:
                     detection.score,
                 )
         sharp = sharpness(bgr, detection.mask) if detection.has_subtitle else 0.0
-        row = detection.as_row()
-        self._detection_writer.writerow(
-            [
-                frame_index,
-                row["has_subtitle"],
-                row["score"],
-                row["components"],
-                row["coverage"],
-                row["density"],
-                row["bright_fraction"],
-                row["text_bbox"],
-                f"{sharp:.4f}",
-            ]
-        )
         if detection.has_subtitle:
             self._detected_frames += 1
-            previous = self._tracker.last_index
-            similarity = self._tracker.add(frame_index, detection.mask, image, sharp)
-            decision = (
-                "start"
-                if similarity is None
-                else ("same" if similarity >= self.config.grouping.similarity_threshold else "new")
-            )
-            self._similarity_writer.writerow(
-                [
-                    frame_index,
-                    previous if previous is not None else "",
-                    "" if similarity is None else f"{similarity:.4f}",
-                    f"{self.config.grouping.similarity_threshold:.4f}",
-                    decision,
-                ]
-            )
-            self._keep_detection_sample(frame_index, image, detection.mask, detection.score)
+            self._tracker.add(frame_index, detection.mask, image, sharp)
         else:
             self._tracker.skip(frame_index)
-
-    def _keep_detection_sample(
-        self, frame_index: int, image: Image.Image, mask: np.ndarray | None, score: float
-    ) -> None:
-        samples = self._detection_samples
-        if len(samples) < DETECTION_SAMPLES:
-            samples.append((frame_index, image.copy(), None if mask is None else mask.copy(), score))
-        elif self._sample_random.random() * self._detected_frames < DETECTION_SAMPLES:
-            position = int(self._sample_random.integers(0, DETECTION_SAMPLES))
-            samples[position] = (frame_index, image.copy(), None if mask is None else mask.copy(), score)
 
     def _close_group(self, group: SubtitleGroup) -> None:
         self._next_group_id += 1
@@ -448,19 +383,9 @@ class SubtitleExtractor:
                 status = "ocr_error" if failed and not votes else "no_text"
             else:
                 status = "ok" if confidence >= self.config.confidence_threshold else "low_confidence"
-            if readings and text:
-                (self.output_dir / "ocr" / f"{folder_name}.json").write_text(
-                    json.dumps(
-                        {"group_id": group_id, "candidates": readings, "status": status, "votes": len(votes)},
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
         if not text:
             # Empty groups stay in memory for merging bookkeeping but are not
-            # published: no frame folder, no OCR dump, no entry in groups.json.
+            # published: no frame folder, no OCR detail, no entry in groups.json.
             shutil.rmtree(folder, ignore_errors=True)
             folder_name = ""
         extracted = ExtractedGroup(
@@ -472,9 +397,10 @@ class SubtitleExtractor:
             status=status,
             folder=folder_name,
             ocr_calls=calls,
+            readings=readings,
         )
         self._groups.append(extracted)
-        self.logger.info(
+        self.logger.debug(
             "Group %04d frames %d-%d (%d), status %s, text %r",
             group_id,
             group.start_frame,
@@ -509,9 +435,7 @@ class SubtitleExtractor:
             json.dumps(groups_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         self._write_frame_text(times)
-        cues = [
-            SrtCue(item.start_time, item.end_time, item.text, item.group_id) for item in published if item.in_srt
-        ]
+        cues = [SrtCue(item.start_time, item.end_time, item.text, item.group_id) for item in published if item.in_srt]
         srt_text = build_srt(cues)
         (self.output_dir / "result.srt").write_text(srt_text, encoding="utf-8")
         summary = self.summary()
@@ -529,7 +453,6 @@ class SubtitleExtractor:
         (self.output_dir / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        self._write_visualizations()
         self._release()
         self._closed = True
         return summary
@@ -607,6 +530,7 @@ class SubtitleExtractor:
         )
         target.end_time = max(target.end_time, other.end_time)
         target.ocr_calls += other.ocr_calls
+        target.readings.extend(other.readings)
         if other.confidence > target.confidence:
             # Junk-prefixed OCR variants score lower than the clean reading, so
             # the highest-confidence text wins instead of the longest one.
@@ -642,69 +566,12 @@ class SubtitleExtractor:
             return
         self._release()
         self._closed = True
-        if self._groups:
-            groups_json = [item.as_dict() for item in self._groups]
+        published = [item.as_dict() for item in self._groups if item.text]
+        if published:
             (self.output_dir / "groups" / "groups.json").write_text(
-                json.dumps({"status": status, "groups": groups_json}, ensure_ascii=False, indent=2) + "\n",
+                json.dumps({"status": status, "groups": published}, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
 
     def _release(self) -> None:
-        self._detection_file.close()
-        self._similarity_file.close()
-
-    def _write_visualizations(self) -> None:
-        self._write_detection_visualization()
-        self._write_groups_visualization()
-
-    def _write_detection_visualization(self) -> None:
-        if not self._detection_samples:
-            return
-        panels: list[Image.Image] = []
-        for frame_index, image, mask, score in sorted(self._detection_samples, key=lambda item: item[0]):
-            rgb = np.asarray(image.convert("RGB"))
-            if mask is not None:
-                overlay = rgb.copy()
-                overlay[mask > 0] = (255, 48, 48)
-                rgb = cv2.addWeighted(rgb, 0.6, overlay, 0.4, 0)
-            display = Image.fromarray(rgb)
-            draw = ImageDraw.Draw(display)
-            draw.text((6, 4), f"frame {frame_index:06d}  score {score:.2f}", fill=(255, 255, 0))
-            panels.append(display)
-        self._stack_images(panels, self.output_dir / "debug" / "detection_visualization.jpg")
-
-    def _write_groups_visualization(self) -> None:
-        if not self._groups:
-            return
-        sampled = [item for item in self._groups if item.text][:GROUP_SAMPLES]
-        width = min(720, self.frame_width)
-        panels: list[Image.Image] = []
-        for item in sampled:
-            best = item.group.best_frames[0] if item.group.best_frames else None
-            if best is None:
-                continue
-            image = best[1]
-            ratio = width / image.width
-            display = image.resize((width, max(1, int(round(image.height * ratio)))))
-            draw = ImageDraw.Draw(display)
-            label = f"#{item.group_id:04d} {item.start_time:.2f}-{item.end_time:.2f}s {item.status} {item.text[:24]}"
-            draw.text((4, 2), label, fill=(255, 255, 0))
-            panels.append(display)
-        self._stack_images(panels, self.output_dir / "debug" / "groups_visualization.jpg")
-
-    @staticmethod
-    def _stack_images(panels: list[Image.Image], path: Path) -> None:
-        if not panels:
-            return
-        width = max(panel.width for panel in panels)
-        gap = 8
-        canvas = Image.new(
-            "RGB", (width, sum(panel.height for panel in panels) + gap * (len(panels) + 1)), (16, 16, 16)
-        )
-        offset = gap
-        for panel in panels:
-            canvas.paste(panel, (0, offset))
-            offset += panel.height + gap
-        canvas.save(path, "JPEG", quality=85)
-
-
+        """Nothing to flush: all per-frame detail is kept in groups.json."""

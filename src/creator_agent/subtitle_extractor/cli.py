@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from creator_agent.subtitle_extractor.analysis import analyze_video
 from creator_agent.subtitle_extractor.crop import (
@@ -32,6 +31,52 @@ app = typer.Typer(help="Anime hard-subtitle extractor — stage 0 frame index pl
 def echo(message: str) -> None:
     """Timestamped console line so redirected logs stay readable."""
     typer.echo(f"[{time.strftime('%H:%M:%S')}] {message}")
+
+
+class ProgressLine:
+    """Single updating line: ``817 / 18718  0:04:24  45%``.
+
+    Redraws in place on a terminal and prints one line every few seconds when
+    output is redirected, so a log file stays greppable.
+    """
+
+    def __init__(self, unit: str = "frames", interval: float = 4.0) -> None:
+        self.unit = unit
+        self.interval = interval
+        self.tty = sys.stdout.isatty()
+        self.started = time.monotonic()
+        self.last_draw = 0.0
+        self.total: int | None = None
+        self.text = ""
+
+    def _render(self, completed: int) -> str:
+        total = str(self.total) if self.total else "?"
+        elapsed = time.monotonic() - self.started
+        minutes, seconds = divmod(int(elapsed), 60)
+        percent = f"{completed / self.total * 100:3.0f}%" if self.total else "  ?%"
+        return f"{completed} / {total}  {minutes}:{seconds:02d}  {percent}"
+
+    def update(self, completed: int, expected: int | None = None) -> None:
+        if expected:
+            self.total = expected
+        line = self._render(completed)
+        now = time.monotonic()
+        if self.tty:
+            sys.stdout.write(f"\r{line}")
+            sys.stdout.flush()
+            self.last_draw = now
+            self.text = line
+        elif now - self.last_draw >= self.interval or completed == self.total:
+            self.last_draw = now
+            print(line, flush=True)
+
+    def done(self) -> None:
+        line = self._render(self.total or 0)
+        if self.tty and self.text:
+            sys.stdout.write(f"\r{line}\n")
+            sys.stdout.flush()
+        elif not self.tty:
+            print(line, flush=True)
 
 
 @app.command()
@@ -230,35 +275,22 @@ def main(
         if extraction_config is None:
             raise typer.BadParameter("--from-crops needs --ocr: it only re-runs detection, grouping and OCR")
         target = output_dir or (from_crops.expanduser().resolve().parent.with_name(from_crops.name + "_ocr"))
-        plain = not sys.stdout.isatty()
         started = time.monotonic()
         echo(f"Reusing crops in {from_crops}; decoding is skipped.")
-        if plain:
-            echo("Progress: heartbeat every 1000 crops (stdout is not a terminal).")
+        bar = ProgressLine()
         try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("{task.description}"),
-                BarColumn(),
-                TextColumn("{task.completed:.0f} crops"),
-                TimeElapsedColumn(),
-                disable=plain,
-            ) as progress:
-                task = progress.add_task("Detecting / OCR crops", total=None)
 
-                def crop_update(completed: int, expected: int | None) -> None:
-                    progress.update(task, completed=completed, total=expected)
-                    if plain and completed % 1000 == 0:
-                        percent = f"{completed / expected * 100:.1f}%" if expected else "pending total"
-                        echo(f"Processed {completed} crops ({percent}), elapsed {time.monotonic() - started:.0f}s")
+            def crop_update(completed: int, expected: int | None) -> None:
+                bar.update(completed, expected)
 
-                reused = analyze_crops(
-                    from_crops,
-                    output_dir=target,
-                    extraction_config=extraction_config,
-                    ocr_engine=engine,
-                    on_progress=crop_update,
-                )
+            reused = analyze_crops(
+                from_crops,
+                output_dir=target,
+                extraction_config=extraction_config,
+                ocr_engine=engine,
+                on_progress=crop_update,
+            )
+            bar.done()
         except VideoAnalysisError as exc:
             echo(f"Crops reuse failed: {exc}")
             raise typer.Exit(1) from exc
@@ -271,43 +303,26 @@ def main(
         echo(f"SRT: {reused / 'result.srt'} | Groups: groups/groups.json")
         return
     assert input_path is not None
+    started = time.monotonic()
+    bar = ProgressLine()
+
+    def update(completed: int, expected: int | None) -> None:
+        bar.update(completed, expected)
+
     try:
-        plain = not sys.stdout.isatty()
-        started = time.monotonic()
-        if plain:
-            echo("Progress: heartbeat every 1000 frames (stdout is not a terminal).")
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed:.0f} frames"),
-            TimeElapsedColumn(),
-            disable=plain,
-        ) as progress:
-            task = progress.add_task("Decoding video", total=None)
-
-            def update(completed: int, expected: int | None) -> None:
-                progress.update(task, completed=completed, total=expected)
-                if plain and completed % 1000 == 0:
-                    percent = f"{completed / expected * 100:.1f}%" if expected else "pending total"
-                    echo(f"Decoded {completed} frames ({percent}), elapsed {time.monotonic() - started:.0f}s")
-
-            result = analyze_video(
-                input_path,
-                output_dir=output_dir,
-                save_frames=save_frames,
-                fallback_fps=fallback_fps,
-                gap_warning_seconds=gap_warning_seconds,
-                cfr_tolerance=cfr_tolerance,
-                crop_config=crop_config,
-                extraction_config=extraction_config,
-                ocr_engine=engine,
-                on_progress=update,
-            )
-            count = result.video_info["frame_count"]
-            progress.update(task, completed=count, total=count)
-            if plain:
-                echo(f"Decode + detection + OCR done in {time.monotonic() - started:.0f}s")
+        result = analyze_video(
+            input_path,
+            output_dir=output_dir,
+            save_frames=save_frames,
+            fallback_fps=fallback_fps,
+            gap_warning_seconds=gap_warning_seconds,
+            cfr_tolerance=cfr_tolerance,
+            crop_config=crop_config,
+            extraction_config=extraction_config,
+            ocr_engine=engine,
+            on_progress=update,
+        )
+        bar.done()
     except VideoAnalysisError as exc:
         echo(f"Stage 0 failed: {exc}")
         raise typer.Exit(1) from exc
@@ -332,10 +347,7 @@ def main(
             f"{extraction['detected_frames']}/{extraction['processed_frames']} frames detected, "
             f"{extraction['ocr_calls']} OCR calls"
         )
-        echo(
-            f"SRT: {result.output_dir / 'result.srt'} | Groups: groups/groups.json | "
-            f"Detection: detection/frame_detection.csv"
-        )
+        echo(f"SRT: {result.output_dir / 'result.srt'} | Groups: groups/groups.json")
     anomalies = info["anomaly_counts"]
     if anomalies:
         echo(f"Timing/decode notices: {sum(anomalies.values())} ({anomalies})")

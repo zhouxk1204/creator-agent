@@ -54,7 +54,7 @@ def main() -> int:
         for block in cues[-3:]:
             print(_format(block))
     else:
-        print("[!] result.srt is empty - check groups/groups.json and debug/ images.")
+        print("[!] result.srt is empty - check groups/groups.json and the OCR candidates inside it.")
     return 0
 
 

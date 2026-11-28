@@ -7,6 +7,7 @@ decode or OCR is needed.
 
 Usage: python scripts/frame_ocr_json.py <task dir>
 """
+
 from __future__ import annotations
 
 import csv
