@@ -54,14 +54,14 @@ uv run --extra subtitle-extractor anime-subtitle-extractor --input episode01.mp4
 
 ```bat
 bat\subtitle\run_subtitle_srt.bat                        :: demo.mp4 + 中文 OCR
-bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4"    :: 自动输出到 output\ep01_srt
+bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4"    :: 自动输出到 <素材目录>\ep01_srt
 bat\subtitle\run_subtitle_srt.bat "D:\Anime\ep01.mp4" japan
 ```
 
-参数依次是输入视频、OCR 语言（默认 `ch`）、输出目录（默认 `output\<文件名>_srt`）。脚本会：
-检查 OCR 依赖 → 拒绝覆盖已存在的输出目录 → 实时打印解码进度条和每组字幕的识别结果 →
+参数依次是输入视频、OCR 语言（默认 `ch`）、输出目录（默认素材目录下的 `<文件名>_srt`，无记录时 `output\<文件名>_srt`）。脚本会：
+检查 OCR 依赖 → 拒绝覆盖已存在的输出目录 → 实时打印单行进度条（`817 / 18718  0:04:24  45%`）→
 结束后打印 `result.json` 摘要（分组数、SRT 条数、前 5 条字幕）→ 把 `analysis.log`
-复制到 `logs\subtitle_<文件名>.log`。10 分钟片段大约需要 35～45 分钟。
+复制到 `logs\subtitle_<文件名>.log`。GPU 版跑 10 分钟片段约 8 分钟，CPU 版约 30～45 分钟。
 
 如果默认输出目录里已经有 `crops\crop_config.json`（同一视频跑过一遍），脚本自动切换到**复用模式**：
 跳过解码，只跑阶段 2～5，结果写到 `output\<文件名>_srt_ocr`，配置行会显示
@@ -219,7 +219,19 @@ OCR 参数后不必再花半小时解码：
 
 `--ocr-device auto|gpu|cpu`，默认 `auto`：PaddlePaddle 是 CUDA 版且有可用显卡时走 GPU，否则 CPU；
 显式 `gpu` 但当前是 CPU 版 Paddle 会直接报错提示，不会静默退回。
-启动时会打印实际设备（`OCR device: gpu|cpu`）。
+启动时会打印实际设备（`OCR device: gpu:0 (NVIDIA GeForce RTX 5060 Ti) | paddle 3.3.1 | cuda build: yes`），
+同一串也会写进 `result.json` 的 `summary.ocr_device`。
+
+装 GPU 版时官方源目前对 curl/uv 都会返回 0 字节，可靠做法是拿 wheel 本地装：
+
+```bash
+uv pip install --python .venv/Scripts/python.exe paddlepaddle_gpu-3.3.1-cp312-cp312-win_amd64.whl
+.venv/Scripts/python.exe -c "import paddle; print(paddle.device.is_compiled_with_cuda())"   # 必须 True
+```
+
+实测（demo.mp4，4,271 次 OCR 调用）：GPU 全流程 7 分 47 秒，纯检测+OCR 复用 crops 5 分 42 秒；
+旧 CPU 版同样片子跑 1,732 次调用就用了 30 分。小裁剪图（768×120）下 GPU 占用率只有 ~18%，
+瓶颈在单帧调度而不是算力，批大小再往上抬收益有限。
 
 ## 输出文件
 
@@ -279,6 +291,15 @@ output/episode01/
   - `000366-000378` 识别为 `嗯？`，`00:00:12,200 --> 00:00:12,633`，旧结果整段漏检；
 - 噪声过滤后仍有极少数 OCR 瑕疵（如 `谁来救救我~CO` 尾部的 `CO`），属于单帧背景笔画被读进同一行，
   不影响时间轴。
+
+### 全片 GPU 版（`demo.mp4`，`--ocr-device gpu`，中文字幕）
+
+- 16:10:55 启动，16:18:42 完成，7 分 47 秒；18,718 帧全部裁剪，检测 13,701 帧（73.2%），
+  739 组、293 组有文字、4,271 次 OCR，196 条 SRT；
+- 与人工参考字幕（177 条）逐条按时间重叠比对：漏 1 条（4185 帧的「诶?」，Paddle 稳定只读出「？」），
+  多 11 条（其中 `喂`、`唉`、`嗯？` 属真实台词，`发`/`贝`/`品`/`江` 是 0.1 秒级单帧碎片噪声）；
+- 输出目录只剩 crops / groups / ocr 三个子目录加 9 个文件，无 `detection/`、无 `debug/`；
+  `groups/` 子目录数 293 与 `groups.json` 条数一致，`ocr/frames.json` 记录 10,757 个有字帧。
 
 ## 已知限制
 
