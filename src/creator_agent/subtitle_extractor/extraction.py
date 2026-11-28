@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import shutil
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -447,7 +448,7 @@ class SubtitleExtractor:
                 status = "ocr_error" if failed and not votes else "no_text"
             else:
                 status = "ok" if confidence >= self.config.confidence_threshold else "low_confidence"
-            if readings:
+            if readings and text:
                 (self.output_dir / "ocr" / f"{folder_name}.json").write_text(
                     json.dumps(
                         {"group_id": group_id, "candidates": readings, "status": status, "votes": len(votes)},
@@ -457,6 +458,11 @@ class SubtitleExtractor:
                     + "\n",
                     encoding="utf-8",
                 )
+        if not text:
+            # Empty groups stay in memory for merging bookkeeping but are not
+            # published: no frame folder, no OCR dump, no entry in groups.json.
+            shutil.rmtree(folder, ignore_errors=True)
+            folder_name = ""
         extracted = ExtractedGroup(
             group_id=group_id,
             group=group,
@@ -495,13 +501,16 @@ class SubtitleExtractor:
         for item in self._groups:
             item.in_srt = self._is_srt_worthy(item)
 
-        groups_json = [item.as_dict() for item in self._groups]
+        # Only groups that produced text are published; empty ones exist purely
+        # for the grouping/merging bookkeeping above.
+        published = [item for item in self._groups if item.text]
+        groups_json = [item.as_dict() for item in published]
         (self.output_dir / "groups" / "groups.json").write_text(
             json.dumps(groups_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         self._write_frame_text(times)
         cues = [
-            SrtCue(item.start_time, item.end_time, item.text, item.group_id) for item in self._groups if item.in_srt
+            SrtCue(item.start_time, item.end_time, item.text, item.group_id) for item in published if item.in_srt
         ]
         srt_text = build_srt(cues)
         (self.output_dir / "result.srt").write_text(srt_text, encoding="utf-8")
@@ -667,7 +676,7 @@ class SubtitleExtractor:
     def _write_groups_visualization(self) -> None:
         if not self._groups:
             return
-        sampled = self._groups[:GROUP_SAMPLES]
+        sampled = [item for item in self._groups if item.text][:GROUP_SAMPLES]
         width = min(720, self.frame_width)
         panels: list[Image.Image] = []
         for item in sampled:

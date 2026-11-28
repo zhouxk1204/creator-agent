@@ -360,10 +360,12 @@ def test_ocr_error_is_recorded_without_failing_the_task(input_path, tmp_path, in
         extraction_config=ExtractionConfig(fallback_frames=0),
         ocr_engine=engine,
     )
-    group = json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8"))[0]
-    assert group["status"] == "ocr_error" and group["text"] is None
+    groups = json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8"))
+    # Groups that OCR to nothing are not published at all.
+    assert groups == []
     assert (output / "result.srt").read_text(encoding="utf-8") == ""
     assert read_json(output / "task_status.json")["status"] == "completed"
+    assert read_json(output / "result.json")["summary"]["ocr_failures"] == 1
 
 
 def test_extraction_requires_an_active_crop(input_path, tmp_path, install_decoder):
@@ -371,7 +373,7 @@ def test_extraction_requires_an_active_crop(input_path, tmp_path, install_decode
         analyze_video(input_path, output_dir=tmp_path / "task", extraction_config=ExtractionConfig())
 
 
-def test_extraction_without_engine_keeps_groups_and_skips_ocr(input_path, tmp_path, install_decoder):
+def test_extraction_without_engine_publishes_no_groups(input_path, tmp_path, install_decoder):
     install_decoder(["AAAAA"] * 3)
     output = tmp_path / "task"
     analyze_video(
@@ -382,8 +384,8 @@ def test_extraction_without_engine_keeps_groups_and_skips_ocr(input_path, tmp_pa
         extraction_config=ExtractionConfig(),
         ocr_engine=None,
     )
-    group = json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8"))[0]
-    assert group["status"] == "ocr_disabled" and group["text"] is None
+    # No OCR means no text: nothing to publish, but the task still completes.
+    assert json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8")) == []
     assert (output / "result.srt").read_text(encoding="utf-8") == ""
 
 
@@ -543,8 +545,8 @@ def test_unreadable_ocr_text_is_not_written_to_srt(input_path, tmp_path, install
         extraction_config=ExtractionConfig(),
         ocr_engine=engine,
     )
-    group = json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8"))[0]
-    assert group["status"] == "no_text" and group["text"] is None
+    groups = json.loads((output / "groups" / "groups.json").read_text(encoding="utf-8"))
+    assert groups == []
     assert (output / "result.srt").read_text(encoding="utf-8") == ""
 
 
