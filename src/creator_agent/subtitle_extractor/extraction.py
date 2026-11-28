@@ -168,6 +168,29 @@ class ExtractedGroup:
         }
 
 
+def _remove_tree(path: Path) -> None:
+    """Delete a task subfolder, retrying because Windows keeps brief locks.
+
+    Antivirus and the image encoder can hold a handle for a moment right after a
+    PNG is written; a single ``rmtree`` then leaves an empty group folder behind.
+    """
+    for _ in range(3):
+        if not path.exists():
+            return
+        for child in path.iterdir():
+            try:
+                child.unlink()
+            except OSError:
+                pass
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+        if not path.exists():
+            return
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def rescue_detection(
     image: Image.Image,
     bgr: np.ndarray,
@@ -386,7 +409,7 @@ class SubtitleExtractor:
         if not text:
             # Empty groups stay in memory for merging bookkeeping but are not
             # published: no frame folder, no OCR detail, no entry in groups.json.
-            shutil.rmtree(folder, ignore_errors=True)
+            _remove_tree(folder)
             folder_name = ""
         extracted = ExtractedGroup(
             group_id=group_id,
@@ -453,9 +476,22 @@ class SubtitleExtractor:
         (self.output_dir / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        self._prune_empty_group_folders(published)
         self._release()
         self._closed = True
         return summary
+
+    def _prune_empty_group_folders(self, published: list[ExtractedGroup]) -> None:
+        """Drop frame folders of groups that produced no text.
+
+        The inline delete right after OCR can lose a race against a file handle;
+        sweeping once at the end guarantees the folder tree matches groups.json.
+        """
+        keep = {item.folder for item in published if item.folder}
+        groups_dir = self.output_dir / "groups"
+        for folder in groups_dir.iterdir():
+            if folder.is_dir() and folder.name.startswith("group_") and folder.name not in keep:
+                _remove_tree(folder)
 
     def _write_frame_text(self, times: list[tuple[float, float]]) -> None:
         """Dump every frame that carries recognised text, one record per frame.
