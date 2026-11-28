@@ -658,9 +658,10 @@ def test_default_task_dir_follows_doraemon_materials(tmp_path):
     assert paths.default_output_root(work) == materials
 
 
-def test_missing_or_stale_marker_falls_back_to_repo_output(tmp_path):
+def test_missing_or_stale_marker_falls_back_to_repo_output(tmp_path, monkeypatch):
     from creator_agent.subtitle_extractor import paths
 
+    monkeypatch.setattr(paths, "REPO_ROOT", tmp_path / "no_repo")
     (tmp_path / "logs").mkdir()
     (tmp_path / "work").mkdir()
     # Recorded folder no longer exists -> treat as no marker at all.
@@ -685,3 +686,18 @@ def test_resolve_device_prefers_cpu_without_cuda():
         _resolve_device("gpu", _CpuOnlyPaddle())
     with pytest.raises(OcrError, match="Unknown OCR device"):
         _resolve_device("tpu", _CpuOnlyPaddle())
+
+
+def test_default_task_dir_finds_the_repo_marker_for_inputs_outside_the_repo(tmp_path, monkeypatch):
+    """Video files sit on the Desktop, so the marker must be found from the repo too."""
+    from creator_agent.subtitle_extractor import paths
+
+    repo = tmp_path / "repo"
+    (repo / "logs").mkdir(parents=True)
+    materials = tmp_path / "Desktop" / "doraemon_944"
+    materials.mkdir(parents=True)
+    (repo / "logs" / ".last_doraemon_materials").write_text(str(materials), encoding="utf-8")
+    monkeypatch.setattr(paths, "REPO_ROOT", repo)
+
+    outside = tmp_path / "Desktop" / "doraemon_944"
+    assert paths.default_task_dir("944_1_ocr", outside) == materials / "944_1_ocr_srt"

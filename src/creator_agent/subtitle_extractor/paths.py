@@ -25,10 +25,16 @@ def _read_marker(path: Path) -> Path | None:
 
 
 def materials_root(start: Path | None = None) -> Path | None:
-    """Materials folder from the marker file, searched from ``start`` upwards."""
+    """Materials folder from the marker file.
+
+    Video files usually live outside the repo (Desktop materials batch), so
+    walking up from the video's folder never finds ``logs/``. The repo's own
+    marker is therefore checked as the final fallback.
+    """
     here = (start or Path.cwd()).resolve()
-    for base in [here, *here.parents]:
-        marker = base / MATERIALS_MARKER
+    candidates = [base / MATERIALS_MARKER for base in [here, *here.parents]]
+    candidates.append(REPO_ROOT / MATERIALS_MARKER)
+    for marker in candidates:
         if marker.is_file():
             folder = _read_marker(marker)
             if folder is not None:
