@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 
 from creator_agent.subtitle_extractor.detection import (
     DetectionConfig,
+    FrameDetection,
     detect_subtitle,
     sharpness,
 )
@@ -82,6 +83,16 @@ class ExtractionConfig:
     low_confidence_floor: float = 0.6
     low_confidence_min_duration: float = 0.2
     min_cue_duration: float = 0.2
+    short_cue_max_chars: int = 2
+    short_cue_min_duration: float = 0.05
+    rescue_enabled: bool = True
+    rescue_min_score: float = 0.15
+    rescue_min_confidence: float = 0.85
+    rescue_max_chars: int = 8
+    rescue_min_height_ratio: float = 0.12
+    rescue_padding: int = 6
+    rescue_stroke_difference: int = 45
+    rescue_score: float = 0.45
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.confidence_threshold) or not 0.0 <= self.confidence_threshold <= 1.0:
@@ -157,11 +168,85 @@ class ExtractedGroup:
         }
 
 
+def rescue_detection(
+    image: Image.Image,
+    bgr: np.ndarray,
+    detection: FrameDetection,
+    engine: OcrEngine,
+    config: ExtractionConfig,
+) -> tuple[FrameDetection, OcrReading] | None:
+    """Second chance for a borderline frame: read the candidate box with OCR.
+
+    Coloured captions over a similarly bright background score too low for the
+    brightness detector, yet the recogniser still reads them cleanly. Rather
+    than lowering the detection threshold (which lets background texture in),
+    OCR the candidate box and promote the frame only when the read is short,
+    confident and looks like caption glyphs.
+    """
+    if not config.rescue_enabled or detection.has_subtitle or detection.bbox is None:
+        return None
+    if detection.score < config.rescue_min_score:
+        return None
+    left, top, box_width, box_height = detection.bbox
+    height, width = bgr.shape[:2]
+    if box_height / height < config.rescue_min_height_ratio:
+        return None
+    try:
+        # Read the whole band, not the candidate box: the brightness detector
+        # often boxes one stroke of a coloured glyph, while the recogniser needs
+        # the full line to return anything.
+        reading = engine.read(image)
+    except Exception:  # a rescue attempt must never abort the run
+        return None
+    text = clean_caption(reading.text)
+    flattened = normalize_caption(text)
+    if (
+        not text
+        or not is_meaningful_text(text)
+        or len(text) > config.rescue_max_chars
+        or reading.confidence < config.rescue_min_confidence
+        or not _TEXT_CHARACTER.search(text)
+        # "儿儿": a background shape read twice as the same glyph.
+        or (len(flattened) > 1 and len(set(flattened)) <= 1)
+    ):
+        return None
+
+    background = cv2.medianBlur(bgr, 31)
+    difference = np.max(np.abs(bgr.astype(np.int16) - background.astype(np.int16)), axis=2)
+    strokes = (difference >= config.rescue_stroke_difference).astype(np.uint8) * 255
+    strokes = cv2.morphologyEx(strokes, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    # Keep only the vertical band the detector pointed at, so background
+    # elsewhere in the crop cannot shift the grouping similarity.
+    mask = np.zeros((height, width), dtype=np.uint8)
+    band_top = max(0, top - config.rescue_padding)
+    band_bottom = min(height, top + box_height + config.rescue_padding)
+    mask[band_top:band_bottom] = strokes[band_top:band_bottom]
+    if np.count_nonzero(mask) < 30:
+        return None
+
+    promoted = FrameDetection(
+        score=round(max(detection.score, config.rescue_score), 4),
+        has_subtitle=True,
+        components=detection.components,
+        coverage=detection.coverage,
+        density=detection.density,
+        bright_fraction=detection.bright_fraction,
+        bbox=detection.bbox,
+        mask=mask,
+    )
+    return promoted, reading
+
+
 def is_srt_worthy(text: str, status: str, confidence: float, duration: float, config: ExtractionConfig) -> bool:
     """Decide whether one recognised group belongs in the SRT."""
     if not text or status not in {"ok", "low_confidence"}:
         return False
-    if duration < config.min_cue_duration:
+    minimum = config.min_cue_duration
+    if len(normalize_caption(text)) <= config.short_cue_max_chars:
+        # "嗯" / "哦?" only live for a handful of frames; a blob of background
+        # text does not survive the vote, so a short hold is still a caption.
+        minimum = min(minimum, config.short_cue_min_duration)
+    if duration < minimum:
         return False
     if not _CJK_TEXT.search(text) and len(normalize_caption(text)) < 3:
         # "0", "Y", "CLe": one or two latin/digit glyphs are almost always a
@@ -267,6 +352,18 @@ class SubtitleExtractor:
         self._processed_frames += 1
         bgr = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
         detection = detect_subtitle(bgr, self.config.detection)
+        if not detection.has_subtitle and self.engine is not None:
+            rescued = rescue_detection(image, bgr, detection, self.engine, self.config)
+            if rescued is not None:
+                detection, reading = rescued
+                self._ocr_calls += 1
+                self.logger.info(
+                    "Rescued frame %d as %r (conf %.2f, score %.2f)",
+                    frame_index,
+                    reading.text,
+                    reading.confidence,
+                    detection.score,
+                )
         sharp = sharpness(bgr, detection.mask) if detection.has_subtitle else 0.0
         row = detection.as_row()
         self._detection_writer.writerow(
@@ -402,6 +499,7 @@ class SubtitleExtractor:
         (self.output_dir / "groups" / "groups.json").write_text(
             json.dumps(groups_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        self._write_frame_text(times)
         cues = [
             SrtCue(item.start_time, item.end_time, item.text, item.group_id) for item in self._groups if item.in_srt
         ]
@@ -426,6 +524,34 @@ class SubtitleExtractor:
         self._release()
         self._closed = True
         return summary
+
+    def _write_frame_text(self, times: list[tuple[float, float]]) -> None:
+        """Dump every frame that carries recognised text, one record per frame.
+
+        Frames without text are omitted, so the file is a direct answer to
+        "which frame holds which line" and can be diffed against another run.
+        """
+        records: list[dict[str, Any]] = []
+        for item in self._groups:
+            if not item.text or item.status not in {"ok", "low_confidence"}:
+                continue
+            missing = int(item.group.missing_frames or 0)
+            last_frame = item.group.end_frame - missing
+            for frame in range(item.group.start_frame, last_frame + 1):
+                start = times[frame][0] if 0 <= frame < len(times) else 0.0
+                records.append(
+                    {
+                        "frame": frame,
+                        "time": round(start, 3),
+                        "text": item.text,
+                        "confidence": round(item.confidence, 4),
+                        "group_id": item.group_id,
+                        "in_srt": item.in_srt,
+                    }
+                )
+        path = self.output_dir / "ocr" / "frames.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def _is_srt_worthy(self, item: ExtractedGroup) -> bool:
         """Confident text always ships; weak or unreadably short fragments are dropped."""
@@ -571,3 +697,5 @@ class SubtitleExtractor:
             canvas.paste(panel, (0, offset))
             offset += panel.height + gap
         canvas.save(path, "JPEG", quality=85)
+
+

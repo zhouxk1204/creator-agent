@@ -48,6 +48,15 @@ class DetectionConfig:
     small_coverage_gate: float = 0.035
     small_run_min_height_ratio: float = 0.20
     small_run_min_aspect: float = 0.9
+    contrast_enabled: bool = False
+    contrast_kernel: int = 31
+    contrast_percentile: float = 90.0
+    contrast_min_value: int = 12
+    contrast_strength_gate: float = 65.0
+    contrast_strength_reference: float = 90.0
+    contrast_coverage_gate: float = 0.03
+    contrast_min_height_ratio: float = 0.15
+    contrast_max_height_ratio: float = 0.55
     bright_level: int = 230
     bright_reference: float = 0.45
     density_reference: float = 0.30
@@ -184,6 +193,81 @@ def _score_run(
     return score, detection
 
 
+def _contrast_detection(image: np.ndarray, gray: np.ndarray, config: DetectionConfig) -> FrameDetection | None:
+    """Find caption-like lines that differ from their surroundings by colour.
+
+    Bright-only top-hat misses coloured subtitles on coloured backgrounds (blue
+    glyphs over a red mouth, cyan over a pink shirt). A median-filtered
+    background subtraction catches both polarities; the mean difference must be
+    strong, which keeps ordinary texture out.
+    """
+    background = cv2.medianBlur(image, config.contrast_kernel)
+    difference = np.max(np.abs(image.astype(np.int16) - background.astype(np.int16)), axis=2).astype(np.uint8)
+    threshold = max(config.contrast_min_value, int(np.percentile(difference, config.contrast_percentile)))
+    mask = (difference >= threshold).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    height, width = gray.shape
+    total, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+    components: list[Component] = []
+    for index in range(1, total):
+        left, top, box_width, box_height, area = stats[index]
+        if not (
+            config.contrast_min_height_ratio * height <= box_height <= config.contrast_max_height_ratio * height
+            and config.min_width <= box_width <= config.max_width_ratio * width
+            and area >= 25
+            and config.min_fill <= area / (box_width * box_height) <= config.max_fill
+            and box_width / box_height <= config.max_aspect
+        ):
+            continue
+        components.append(
+            (int(left), int(top), int(box_width), int(box_height), float(centroids[index][1]), int(index))
+        )
+    if not components:
+        return None
+
+    clusters = _band_clusters(components, tolerance=max(6.0, config.band_tolerance_ratio * height))
+    best: FrameDetection | None = None
+    best_score = 0.0
+    for cluster in clusters:
+        for run in _horizontal_runs(cluster, config.horizontal_gap_ratio):
+            left = min(item[0] for item in run)
+            top = min(item[1] for item in run)
+            right = max(item[0] + item[2] for item in run)
+            bottom = max(item[1] + item[3] for item in run)
+            if right <= left or bottom <= top:
+                continue
+            coverage = (right - left) / width
+            height_ratio = (bottom - top) / height
+            if coverage < config.contrast_coverage_gate or height_ratio < config.contrast_min_height_ratio:
+                continue
+            strength = float(difference[top:bottom, left:right].mean())
+            if strength < config.contrast_strength_gate:
+                continue
+            run_mask = np.zeros(gray.shape, dtype=np.uint8)
+            for component in run:
+                run_mask[labels == component[5]] = 255
+            density = float((run_mask[top:bottom, left:right] > 0).mean())
+            score = (
+                0.45 * min(1.0, strength / config.contrast_strength_reference)
+                + 0.30 * min(1.0, density / config.density_reference)
+                + 0.25 * min(1.0, len(run) / 4.0)
+            )
+            if best_score < score:
+                best_score = score
+                best = FrameDetection(
+                    score=round(score, 4),
+                    has_subtitle=score >= config.threshold,
+                    components=len(run),
+                    coverage=round(coverage, 4),
+                    density=round(density, 4),
+                    bright_fraction=round(strength / 255.0, 4),
+                    bbox=(left, top, right - left, bottom - top),
+                    mask=run_mask if score >= config.threshold else None,
+                )
+    return best
+
+
 def detect_subtitle(image: np.ndarray, config: DetectionConfig = DetectionConfig()) -> FrameDetection:
     """Return the subtitle score and the text mask for one crop.
 
@@ -217,21 +301,25 @@ def detect_subtitle(image: np.ndarray, config: DetectionConfig = DetectionConfig
         )
 
     if not components:
-        return FrameDetection(0.0, False, 0, 0.0, 0.0, 0.0, None, None)
+        bright_best: FrameDetection | None = None
+    else:
+        clusters = _band_clusters(components, tolerance=max(6.0, config.band_tolerance_ratio * height))
+        bright_best = None
+        best_score = 0.0
+        for cluster in clusters:
+            for run in _horizontal_runs(cluster, config.horizontal_gap_ratio):
+                scored = _score_run(run, labels=labels, gray=gray, width=width, config=config)
+                if scored is None:
+                    continue
+                score, candidate = scored
+                if bright_best is None or score > best_score:
+                    bright_best, best_score = candidate, score
 
-    clusters = _band_clusters(components, tolerance=max(6.0, config.band_tolerance_ratio * height))
-    best: FrameDetection | None = None
-    best_score = 0.0
-    for cluster in clusters:
-        for run in _horizontal_runs(cluster, config.horizontal_gap_ratio):
-            scored = _score_run(run, labels=labels, gray=gray, width=width, config=config)
-            if scored is None:
-                continue
-            score, candidate = scored
-            if best is None or score > best_score:
-                best, best_score = candidate, score
-    if best is None:
+    contrasted = _contrast_detection(image, gray, config) if config.contrast_enabled else None
+    candidates = [item for item in (bright_best, contrasted) if item is not None]
+    if not candidates:
         return FrameDetection(0.0, False, 0, 0.0, 0.0, 0.0, None, None)
+    best = max(candidates, key=lambda item: item.score)
     if not best.has_subtitle:
         # Keep the geometric evidence for diagnostics but drop the mask so the
         # grouper never sees a candidate that failed the threshold.

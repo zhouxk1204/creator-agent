@@ -502,8 +502,10 @@ def test_cues_shorter_than_the_floor_are_dropped(tmp_path):
         engine=None,
         input_path=tmp_path / "episode.mp4",
     )
-    assert not extractor._is_srt_worthy(make_extracted(1, "好痛", 1.0, 1.1, confidence=0.99))
-    assert extractor._is_srt_worthy(make_extracted(2, "好痛", 1.0, 1.4, confidence=0.99))
+    # A one- or two-glyph line may flash for a couple of frames, so the floor
+    # only guards longer lines.
+    assert not extractor._is_srt_worthy(make_extracted(1, "好痛啊", 1.0, 1.1, confidence=0.99))
+    assert extractor._is_srt_worthy(make_extracted(2, "好痛啊", 1.0, 1.4, confidence=0.99))
     extractor._release()
 
 
